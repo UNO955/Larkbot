@@ -11,8 +11,12 @@ export function createTraexAdapter(): CliAdapter {
     id: 'traex',
 
     spawnSpec(cwd: string): SpawnSpec {
+      // 远程开发机的登录 shell PATH 常不含 ~/.local/bin，裸 'traex' 会 spawn 失败。
+      // 允许用 TRAEX_BIN 指定可执行文件的绝对路径（如
+      // /home/you/.local/share/traex/current/traex），缺省回落到 PATH 里的 'traex'。
+      const bin = process.env.TRAEX_BIN?.trim() || 'traex';
       return {
-        command: 'traex',
+        command: bin,
         args: [],
         cwd,
         env: {

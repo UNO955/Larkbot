@@ -18,9 +18,22 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret });
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
+  // threadId(omt_) -> 话题内锚点 messageId。回贴时 reply 到锚点并 reply_in_thread，
+  // 消息即落进该话题（message.create 不支持 receive_id_type='thread_id'）。
+  const threadAnchors = new Map<string, string>();
 
   async function reply(threadId: string, content: string, _format: MsgFormat): Promise<string> {
-    // 阶段一：threadId 语境下用 message.create 往 chat 发；replyInThread 走下面专用方法。
+    // 有话题锚点：reply 到锚点消息并 reply_in_thread，回复落进该话题。
+    const anchor = threadAnchors.get(threadId);
+    if (anchor) {
+      const res: any = await client.im.v1.message.reply({
+        path: { message_id: anchor },
+        data: { msg_type: 'text', content: JSON.stringify({ text: content }), reply_in_thread: true },
+      });
+      if (res.code !== 0) throw new Error(`回贴失败: ${res.msg} (code ${res.code})`);
+      return res.data?.message_id ?? '';
+    }
+    // 无锚点回落：把 threadId 当 chat_id 直发（群/单聊场景）。
     const res: any = await client.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: { receive_id: threadId, msg_type: 'text', content: JSON.stringify({ text: content }) },
@@ -39,7 +52,11 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       },
     });
     if (res.code !== 0) throw new Error(`建话题失败: ${res.msg} (code ${res.code})`);
-    return { threadId: res.data?.thread_id ?? '', messageId: res.data?.message_id ?? '' };
+    const threadId = res.data?.thread_id ?? '';
+    const messageId = res.data?.message_id ?? '';
+    // 记住话题锚点，后续 reply() 回贴走 reply_in_thread 落进本话题。
+    if (threadId && messageId) threadAnchors.set(threadId, messageId);
+    return { threadId, messageId };
   }
 
   async function sendCard(threadId: string, card: ImCard): Promise<string> {
