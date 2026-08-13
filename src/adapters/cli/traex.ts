@@ -60,11 +60,9 @@ export function createTraexAdapter(): CliAdapter {
       };
     },
 
-    // traex 用 `❯` 或 `›` 作为输入提示符。启动的 trust/选择器界面用
-    // `❯ 1.` 作为菜单光标，必须排除带数字的选择行，否则会把首条消息误投
-    // 进选择界面。不匹配状态栏的 "Context 100% left"——它在欢迎屏就出现，
-    // 会导致 readySeen 提前置 true、idle 在命令出结果前就误判。
-    readyPattern: /(?:^|[\n\r])\s*[›❯](?!\s*\d+\.)/,
+    // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
+// 只能匹配 ❯/› 本身，用负向前瞻排除 trust 菜单的 `❯ 1.` 行。
+readyPattern: /[›❯](?!\s*\d+\.)/,
 
     // traex 无显式完成标记。
     completionPattern: undefined,
