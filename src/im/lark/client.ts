@@ -60,6 +60,18 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   }
 
   async function sendCard(threadId: string, card: ImCard): Promise<string> {
+    // 与 reply 同理：卡片也必须 reply 到话题锚点并 reply_in_thread 才能落进话题；
+    // message.create 不支持 thread_id，直发会报 invalid receive_id(230001)。
+    const anchor = threadAnchors.get(threadId);
+    if (anchor) {
+      const res: any = await client.im.v1.message.reply({
+        path: { message_id: anchor },
+        data: { msg_type: 'interactive', content: JSON.stringify(card.payload), reply_in_thread: true },
+      });
+      if (res.code !== 0) throw new Error(`发卡失败: ${res.msg} (code ${res.code})`);
+      return res.data?.message_id ?? '';
+    }
+    // 无锚点回落：把 threadId 当 chat_id 直发（群/单聊场景）。
     const res: any = await client.im.v1.message.create({
       params: { receive_id_type: 'chat_id' },
       data: { receive_id: threadId, msg_type: 'interactive', content: JSON.stringify(card.payload) },

@@ -16,6 +16,7 @@ import { logger } from './utils/logger.js';
 import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { SessionManager } from './core/session-manager.js';
+import { buildTerminalCard } from './im/lark/card-builder.js';
 import type { ImMessage, ImReaction } from './im/types.js';
 
 async function main(): Promise<void> {
@@ -31,9 +32,13 @@ async function main(): Promise<void> {
   const sessions = new SessionManager({
     cli: createTraexAdapter(),
     cwd: cfg.traexCwd,
-    emit: async (threadId, text) => {
-      // 阶段一：纯文本回贴（阶段三换成流式卡片 patch）
-      await im.reply(threadId, text, 'text');
+    // 首帧：在话题里发一张「运行中」终端卡片，返回 message_id
+    post: async (threadId, text) => {
+      return im.sendCard(threadId, buildTerminalCard({ title: 'traex · 运行中', body: text, template: 'blue' }));
+    },
+    // 后续帧：patch 同一张卡片，原地刷新（不再新发消息，杜绝刷屏）
+    patch: async (messageId, text) => {
+      await im.updateCard(messageId, buildTerminalCard({ title: 'traex · 运行中', body: text, template: 'blue' }));
     },
   });
 
