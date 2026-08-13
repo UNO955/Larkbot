@@ -94,4 +94,37 @@ describe('traex adapter spawnSpec', () => {
       model: 'gpt-5.5',
     });
   });
+
+  it('从 traex rollout task_complete 读取最终回复', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), [
+      JSON.stringify({
+        timestamp: '2026-08-13T13:00:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-old',
+          last_agent_message: '旧回复',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-08-13T13:01:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-new',
+          completed_at: '2026-08-13T13:01:01.000Z',
+          last_agent_message: '你好，我在。',
+        },
+      }),
+    ].join('\n') + '\n');
+
+    expect(createTraexAdapter().getSessionFinal?.('trae-1')).toEqual({
+      key: 'turn-new:2026-08-13T13:01:01.000Z',
+      text: '你好，我在。',
+    });
+  });
 });

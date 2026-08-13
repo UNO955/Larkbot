@@ -321,4 +321,60 @@ describe('ConversationManager', () => {
     ), { timeout: 1500 });
     manager.shutdownAll();
   });
+
+  it('完成回复优先使用 traex rollout 的 task_complete final', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionFinal: vi.fn(() => ({
+        key: 'turn-1:done',
+        text: '你好，我在。需要我帮你看什么？',
+      })),
+      readyPattern: /❯/,
+      completionPattern: /TURN_DONE/,
+    };
+    const child = fakePty();
+    const post = vi.fn(async () => 'card-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post,
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => true,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    child.emitData('\r\nworktree setup on supported filesystems.\r\n\r\n你好，我在。');
+    child.emitData('\r\nTURN_DONE');
+    await vi.waitFor(() => expect(post).toHaveBeenCalledWith(
+      'omt-1',
+      '你好，我在。需要我帮你看什么？',
+      'completed',
+      'om-current-user',
+      undefined,
+    ), { timeout: 1500 });
+    manager.shutdownAll();
+  });
 });

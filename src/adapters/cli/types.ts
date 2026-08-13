@@ -32,6 +32,11 @@ export interface SessionTokenUsage {
   model: string;
 }
 
+export interface SessionFinalMessage {
+  key: string;
+  text: string;
+}
+
 export interface CliAdapter {
   id: CliId;
 
@@ -46,6 +51,9 @@ export interface CliAdapter {
 
   /** 读取 CLI 原生会话的累计 token 用量。 */
   getSessionUsage?(cliSessionId: string): SessionTokenUsage | undefined;
+
+  /** 读取 CLI 原生会话最新完成 turn 的最终回复。 */
+  getSessionFinal?(cliSessionId: string): SessionFinalMessage | undefined;
 
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：

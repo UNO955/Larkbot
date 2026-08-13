@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { CliAdapter, SessionTokenUsage, SpawnSpec } from './types.js';
+import type { CliAdapter, SessionFinalMessage, SessionTokenUsage, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
   return {
@@ -119,6 +119,11 @@ export function createTraexAdapter(): CliAdapter {
     getSessionUsage(cliSessionId: string): SessionTokenUsage | undefined {
       const rolloutPath = findTraexRolloutPath(cliSessionId);
       return rolloutPath ? readTraexSessionUsage(rolloutPath) : undefined;
+    },
+
+    getSessionFinal(cliSessionId: string): SessionFinalMessage | undefined {
+      const rolloutPath = findTraexRolloutPath(cliSessionId);
+      return rolloutPath ? readTraexSessionFinal(rolloutPath) : undefined;
     },
 
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
@@ -236,6 +241,44 @@ function readTraexSessionUsage(path: string): SessionTokenUsage | undefined {
   } catch {
     return undefined;
   }
+}
+
+function readTraexSessionFinal(path: string): SessionFinalMessage | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const content = readFileSync(path, 'utf8');
+    let latest: SessionFinalMessage | undefined;
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const final = extractTaskCompleteFinal(entry);
+      if (final) latest = final;
+    }
+    return latest;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractTaskCompleteFinal(entry: any): SessionFinalMessage | undefined {
+  if (entry?.type !== 'event_msg' || entry?.payload?.type !== 'task_complete') return undefined;
+  const turnId = entry.payload?.turn_id;
+  if (typeof turnId !== 'string' || !turnId.trim()) return undefined;
+  const text = typeof entry.payload?.last_agent_message === 'string'
+    ? entry.payload.last_agent_message.trim()
+    : '';
+  if (!text) return undefined;
+  const completedAt = typeof entry.payload?.completed_at === 'string' ? entry.payload.completed_at : '';
+  const timestamp = typeof entry?.timestamp === 'string' ? entry.timestamp : '';
+  return {
+    key: `${turnId}:${completedAt || timestamp}`,
+    text,
+  };
 }
 
 function extractModel(entry: any): string {

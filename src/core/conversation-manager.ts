@@ -10,6 +10,8 @@ import type { Session } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
+const FINAL_MESSAGE_WAIT_MS = 1_500;
+const FINAL_MESSAGE_POLL_MS = 150;
 const PTY_COLS = 100;
 const PTY_ROWS = 30;
 
@@ -39,6 +41,7 @@ interface Runtime {
   receivedReactionId?: string;
   doneReactionSent: boolean;
   lastCardStatus?: CardStatus;
+  turnFinalBaselineKey?: string;
   pendingFlushStatus?: CardStatus;
   firstPromptTimer: ReturnType<typeof setTimeout> | null;
   flushTimer: ReturnType<typeof setTimeout> | null;
@@ -251,6 +254,9 @@ export class ConversationManager {
     runtime.receivedReactionId = undefined;
     runtime.doneReactionSent = false;
     runtime.lastCardStatus = undefined;
+    runtime.turnFinalBaselineKey = runtime.route.cliSessionId
+      ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
+      : undefined;
     runtime.pendingFlushStatus = undefined;
     runtime.renderer.markNewTurn();
     runtime.detector.reset();
@@ -356,7 +362,9 @@ export class ConversationManager {
     const { answer, trace, changed } = runtime.renderer.snapshotParts();
     if (!answer && !trace && (!changed && runtime.lastCardStatus === status)) return;
     runtime.posting = true;
-    const answerBody = answer.length > 3800 ? answer.slice(-3800) : answer;
+    const final = status === 'working' ? undefined : await this.waitForSessionFinal(runtime);
+    const sourceAnswer = final?.text || answer;
+    const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
@@ -419,6 +427,18 @@ export class ConversationManager {
     }
   }
 
+  private async waitForSessionFinal(runtime: Runtime): Promise<{ key: string; text: string } | undefined> {
+    const cliSessionId = runtime.route.cliSessionId;
+    if (!cliSessionId || !this.deps.cli.getSessionFinal) return undefined;
+    const deadline = Date.now() + FINAL_MESSAGE_WAIT_MS;
+    do {
+      const final = this.deps.cli.getSessionFinal(cliSessionId);
+      if (final && final.key !== runtime.turnFinalBaselineKey) return final;
+      await delay(FINAL_MESSAGE_POLL_MS);
+    } while (Date.now() < deadline);
+    return undefined;
+  }
+
   private teardown(runtime: Runtime): void {
     if (runtime.flushTimer) clearTimeout(runtime.flushTimer);
     this.clearFirstPromptFallback(runtime);
@@ -430,6 +450,10 @@ export class ConversationManager {
   private persist(): Promise<void> {
     return this.deps.store.saveSessions([...this.sessions.values()]);
   }
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function strongerStatus(current: CardStatus | undefined, next: CardStatus): CardStatus {
