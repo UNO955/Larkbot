@@ -7,33 +7,53 @@
  */
 import type { ImCard } from '../types.js';
 
+export type StreamCardStatus = 'working' | 'completed' | 'failed';
+
 export interface TerminalCardOpts {
-  /** 卡片标题，如 "traex · 运行中" / "traex · 已完成"。 */
-  title: string;
-  /** 终端快照文本（已渲染、去噪）。 */
+  /** 当前模型输出（已渲染、去噪）。 */
   body: string;
-  /** 标题栏主题色。 */
-  template?: 'blue' | 'green' | 'grey' | 'red';
+  status: StreamCardStatus;
+  title?: string;
 }
 
-/** 飞书 markdown 里的代码块用三反引号；转义 body 里可能出现的连续反引号。 */
-function fence(body: string): string {
-  const safe = body.replace(/```/g, '` ` `');
-  return '```\n' + safe + '\n```';
-}
+const STATUS_META = {
+  working: { label: '正在处理', template: 'blue' },
+  completed: { label: '已完成', template: 'green' },
+  failed: { label: '处理失败', template: 'red' },
+} as const;
 
 export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
-  const { title, body, template = 'blue' } = opts;
+  const meta = STATUS_META[opts.status];
+  const body = opts.body.trim();
+  const elements: unknown[] = [];
+  if (body) {
+    elements.push({ tag: 'markdown', content: body });
+  } else {
+    elements.push({
+      tag: 'markdown',
+      content: opts.status === 'working'
+        ? "<font color='grey'>traex 正在生成回复…</font>"
+        : "<font color='grey'>本轮没有可展示的文本输出。</font>",
+    });
+  }
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'markdown',
+    text_size: 'notation_small_v2',
+    content: `<font color='grey'>TraeCode CLI · ${meta.label}</font>`,
+  });
+
   return {
     payload: {
       config: { wide_screen_mode: true },
       header: {
-        template,
-        title: { tag: 'plain_text', content: title },
+        template: meta.template,
+        title: {
+          tag: 'plain_text',
+          content: `TraeCode · ${opts.title?.trim() || meta.label}`,
+        },
       },
-      elements: [
-        { tag: 'markdown', content: body.trim() ? fence(body) : '_（暂无输出）_' },
-      ],
+      elements,
     },
   };
 }

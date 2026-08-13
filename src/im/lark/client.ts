@@ -4,8 +4,11 @@
  * 长连接（WSClient）模式：开发机主动连出去订阅事件，无需公网 IP / webhook 回调。
  */
 import * as lark from '@larksuiteoapi/node-sdk';
+import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ImAdapter, ImEventHandler, ImCard, MsgFormat } from '../types.js';
-import { parseMessageEvent } from './message-parser.js';
+import { parseMessageEvent, type ParsedMessage } from './message-parser.js';
 import { logger } from '../../utils/logger.js';
 
 export interface LarkClientOpts {
@@ -22,9 +25,9 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   // 消息即落进该话题（message.create 不支持 receive_id_type='thread_id'）。
   const threadAnchors = new Map<string, string>();
 
-  async function reply(threadId: string, content: string, _format: MsgFormat): Promise<string> {
+  async function reply(threadId: string, content: string, _format: MsgFormat, replyAnchorMessageId?: string): Promise<string> {
     // 有话题锚点：reply 到锚点消息并 reply_in_thread，回复落进该话题。
-    const anchor = threadAnchors.get(threadId);
+    const anchor = replyAnchorMessageId || threadAnchors.get(threadId);
     if (anchor) {
       const res: any = await client.im.v1.message.reply({
         path: { message_id: anchor },
@@ -59,10 +62,26 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     return { threadId, messageId };
   }
 
-  async function sendCard(threadId: string, card: ImCard): Promise<string> {
+  async function replyCardInThread(rootMessageId: string, card: ImCard): Promise<{ threadId: string; messageId: string }> {
+    const res: any = await client.im.v1.message.reply({
+      path: { message_id: rootMessageId },
+      data: {
+        msg_type: 'interactive',
+        content: JSON.stringify(card.payload),
+        reply_in_thread: true,
+      },
+    });
+    if (res.code !== 0) throw new Error(`建话题卡片失败: ${res.msg} (code ${res.code})`);
+    const threadId = res.data?.thread_id ?? '';
+    const messageId = res.data?.message_id ?? '';
+    if (threadId && messageId) threadAnchors.set(threadId, messageId);
+    return { threadId, messageId };
+  }
+
+  async function sendCard(threadId: string, card: ImCard, replyAnchorMessageId?: string): Promise<string> {
     // 与 reply 同理：卡片也必须 reply 到话题锚点并 reply_in_thread 才能落进话题；
     // message.create 不支持 thread_id，直发会报 invalid receive_id(230001)。
-    const anchor = threadAnchors.get(threadId);
+    const anchor = replyAnchorMessageId || threadAnchors.get(threadId);
     if (anchor) {
       const res: any = await client.im.v1.message.reply({
         path: { message_id: anchor },
@@ -131,14 +150,15 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
           // 已在话题内 → 视为会话内回复
           if (msg.threadId) {
-            await handler.onThreadReply(toImMessage(msg));
+            threadAnchors.set(msg.threadId, msg.messageId);
+            await handler.onThreadReply(await toImMessage(msg));
             return;
           }
 
           // 不在话题内：仅当 @ 到本 bot 才建会话
           const atBot = botOpenId ? msg.mentionedOpenIds.includes(botOpenId) : msg.mentionedOpenIds.length > 0;
           if (atBot) {
-            await handler.onMention(toImMessage(msg));
+            await handler.onMention(await toImMessage(msg));
           }
         },
 
@@ -169,6 +189,10 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
     reply,
     replyInThread,
+    replyCardInThread,
+    registerThreadAnchor(threadId: string, messageId: string): void {
+      if (threadId && messageId) threadAnchors.set(threadId, messageId);
+    },
     sendCard,
     updateCard,
     addReaction,
@@ -176,15 +200,44 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     getBotOpenId: () => botOpenId,
   };
 
-  function toImMessage(m: NonNullable<ReturnType<typeof parseMessageEvent>>) {
+  async function toImMessage(m: ParsedMessage) {
     return {
       id: m.messageId,
       threadId: m.threadId ?? m.messageId,   // 建话题前用 messageId 占位
+      rootMessageId: m.rootId ?? m.messageId,
       chatId: m.chatId,
       senderId: m.senderOpenId,
       senderType: 'user' as const,
       content: m.text,
+      attachments: await downloadAttachments(m),
+      quotedMessageId: m.replyToMessageId,
       createTime: String(Date.now()),
     };
+  }
+
+  async function downloadAttachments(message: ParsedMessage) {
+    if (message.resources.length === 0) return undefined;
+    const dir = join(homedir(), '.larkmux', 'attachments', safeName(message.messageId));
+    await mkdir(dir, { recursive: true });
+    const attachments = [];
+    for (const resource of message.resources) {
+      const fallback = resource.type === 'image' ? `${resource.key}.png` : resource.key;
+      const path = join(dir, safeName(resource.name || fallback));
+      try {
+        const download = await client.im.v1.messageResource.get({
+          params: { type: resource.type },
+          path: { message_id: message.messageId, file_key: resource.key },
+        });
+        await download.writeFile(path);
+        attachments.push({ type: resource.type, path, name: resource.name });
+      } catch (error: any) {
+        logger.warn(`下载消息附件失败 message=${message.messageId}: ${error?.message ?? error}`);
+      }
+    }
+    return attachments.length > 0 ? attachments : undefined;
+  }
+
+  function safeName(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 160) || 'attachment';
   }
 }

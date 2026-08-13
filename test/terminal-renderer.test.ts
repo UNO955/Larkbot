@@ -90,4 +90,54 @@ describe('TerminalRenderer', () => {
     expect(r.rawSnapshot()).toContain('FLUSHED');
     r.dispose();
   });
+
+  it('过滤 traex 启动信息、XML 输入回显和状态栏', async () => {
+    const r = new TerminalRenderer(100, 20);
+    r.markNewTurn();
+    await r.writeAndFlush([
+      ' directory: /repo',
+      ' permissions: YOLO mode',
+      ' Tip: hello',
+      'background.',
+      '▍ <larkmux_routing>',
+      '▍ routing text',
+      '▍ </larkmux_routing>',
+      '▍ <user_message>',
+      '▍ 你好',
+      '▍ </user_message>',
+      '◆ 你好，我在。',
+      ' GPT-5.5 (MAX) xhigh · Context 100% left · /repo · Full Access',
+    ].join('\r\n'));
+    expect(r.snapshot().content).toBe('你好，我在。');
+    r.dispose();
+  });
+
+  it('markNewTurn 后不展示上一轮已经滚出起点的内容', async () => {
+    const r = new TerminalRenderer(30, 4);
+    await r.writeAndFlush('old-1\r\nold-2\r\nold-3\r\n');
+    r.markNewTurn();
+    await r.writeAndFlush('◆ new answer');
+    const content = r.snapshot().content;
+    expect(content).toContain('new answer');
+    expect(content).not.toContain('old-1');
+    expect(content).not.toContain('old-2');
+    r.dispose();
+  });
+
+  it('过滤 traex 暴露出的英文自述思考段，只保留最终回复', async () => {
+    const r = new TerminalRenderer(100, 20);
+    r.markNewTurn();
+    await r.writeAndFlush([
+      "I see the user greeted me with \"你好,\" which means \"hello\" in Chinese. Since I'm",
+      'responding as a',
+      "coding agent, there's no need for tools here, just a simple and direct reply in Chinese.",
+      'I want to',
+      "make sure my response feels friendly and welcoming. Let's go ahead and reply in",
+      'Chinese!',
+      '',
+      '你好，我在。有什么需要我处理的？',
+    ].join('\r\n'));
+    expect(r.snapshot().content).toBe('你好，我在。有什么需要我处理的？');
+    r.dispose();
+  });
 });

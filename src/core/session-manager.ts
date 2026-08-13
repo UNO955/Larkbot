@@ -14,7 +14,7 @@
  *     patch 更新它；快照内容没变化就不发，避免无意义刷屏。
  */
 import * as pty from 'node-pty';
-import type { Session } from './types.js';
+import type { IPty } from 'node-pty';
 import type { CliAdapter } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
@@ -34,11 +34,26 @@ export interface SessionManagerDeps {
 }
 
 interface SessionRuntime {
-  session: Session;
+  session: RuntimeSession;
   detector: IdleDetector;
   renderer: TerminalRenderer;
+  ready: boolean;          // traex composer 已出现，可以安全写入首条消息
   flushTimer: ReturnType<typeof setTimeout> | null;
   posting: boolean;        // 正在发/patch，避免并发重入
+}
+
+interface RuntimeSession {
+  threadId: string;
+  chatId: string;
+  botId: string;
+  pty: IPty;
+  status: 'idle' | 'busy' | 'closed';
+  queue: string[];
+  screenBuffer: string;
+  cardMessageId?: string;
+  currentTurnText?: string;
+  lastDataAt: number;
+  spawnedAt: number;
 }
 
 export class SessionManager {
@@ -51,7 +66,7 @@ export class SessionManager {
   }
 
   /** 建会话：spawn traex PTY，接好输出流 + idle 检测 + xterm 渲染。 */
-  create(threadId: string, chatId: string, botId: string): Session {
+  create(threadId: string, chatId: string, botId: string): RuntimeSession {
     const spec = this.deps.cli.spawnSpec(this.deps.cwd);
     const p = pty.spawn(spec.command, spec.args, {
       name: 'xterm-256color',
@@ -61,7 +76,7 @@ export class SessionManager {
       env: spec.env ?? (process.env as Record<string, string>),
     });
 
-    const session: Session = {
+    const session: RuntimeSession = {
       threadId, chatId, botId,
       pty: p,
       status: 'idle',
@@ -74,7 +89,7 @@ export class SessionManager {
     const detector = new IdleDetector(this.deps.cli);
     const renderer = new TerminalRenderer(PTY_COLS, PTY_ROWS);
     const rt: SessionRuntime = {
-      session, detector, renderer, flushTimer: null, posting: false,
+      session, detector, renderer, ready: false, flushTimer: null, posting: false,
     };
     this.runtimes.set(threadId, rt);
 
@@ -83,9 +98,6 @@ export class SessionManager {
       if (session.status !== 'busy') return;
       session.status = 'idle';
       logger.info(`一轮结束（${source}）thread=${threadId.slice(0, 10)}`);
-      // DEBUG: dump raw viewport
-      const raw = rt.renderer.rawSnapshot();
-      logger.info(`[snapshot] len=${raw.length} preview=${JSON.stringify(raw.slice(0, 200))}`);
       this.flushNow(rt);   // 收尾贴一次最终快照
       this.drain(rt);
     });
@@ -105,7 +117,7 @@ export class SessionManager {
     const rt = this.runtimes.get(threadId);
     if (!rt) return;
     rt.session.queue.push(text);
-    if (rt.session.status === 'idle') this.drain(rt);
+    if (rt.ready && rt.session.status === 'idle') this.drain(rt);
   }
 
   close(threadId: string): void {
@@ -141,13 +153,21 @@ export class SessionManager {
     s.screenBuffer += chunk;      // idle 判定仍看累积流
     s.lastDataAt = Date.now();
     rt.renderer.write(chunk);     // 屏幕快照渲染
-    rt.detector.feed(chunk);      // 驱动 idle 判定
-    // DEBUG: 看 raw PTY 流里到底有没有 ❯
-    const stripped = chunk.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]|\x1b\[[?]?[0-9;]*[hlmsuJ]/g, '');
-    if (stripped.trim().length > 0) {
-      logger.info(`[PTY] ${JSON.stringify(stripped.trim().slice(0, 200))}`);
+
+    // 首条消息必须等 traex composer 真正出现后再写入，否则会被启动 TUI 吞掉。
+    if (!rt.ready) {
+      rt.detector.feed(chunk);
+      if (rt.detector.ready) {
+        rt.ready = true;
+        rt.detector.reset();
+        logger.info(`traex 已就绪 thread=${s.threadId.slice(0, 10)}`);
+        this.drain(rt);
+      }
+      return;
     }
-    this.armFlush(rt);
+
+    rt.detector.feed(chunk);      // 驱动本轮 idle 判定
+    if (s.status === 'busy') this.armFlush(rt);
   }
 
   /** 节流：到点回贴一次当前屏幕快照。 */
@@ -163,7 +183,6 @@ export class SessionManager {
   private async flushNow(rt: SessionRuntime): Promise<void> {
     if (rt.posting) return;                              // 避免并发重入
     const { content, changed } = rt.renderer.snapshot();
-    logger.info(`[flush] contentLen=${content.length} changed=${changed} skip=${!content || !changed}`);
     if (!content || !changed) return;                    // 空或没变，不发
     rt.posting = true;
     const body = content.length > 3800 ? content.slice(-3800) : content;  // 飞书文本上限保护

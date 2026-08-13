@@ -4,14 +4,24 @@
  * traex 屏幕层没有 completionPattern，一轮结束完全靠 IdleDetector 的
  * quiescence（静默）+ spinner guard + readyPattern gate 三重启发式判定。
  */
-import { realpathSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { CliAdapter, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
   return {
     id: 'traex',
 
-    spawnSpec(cwd: string): SpawnSpec {
+    spawnSpec(cwd: string, options): SpawnSpec {
       // 远程开发机的登录 shell PATH 常不含 ~/.local/bin，裸 'traex' 会 spawn 失败。
       // 允许用 TRAEX_BIN 指定可执行文件的绝对路径（如
       // /home/you/.local/share/traex/current/traex），缺省回落到 PATH 里的 'traex'。
@@ -38,6 +48,7 @@ export function createTraexAdapter(): CliAdapter {
       // TRAEX_SANDBOX=1 时保守回退：既不注入 trust 也不 bypass，交由人工过 trust。
       const bypass = process.env.TRAEX_SANDBOX?.trim() !== '1';
       const args = [
+        ...(options?.resumeSessionId ? ['resume'] : []),
         ...(bypass
           ? [
               '-c',
@@ -47,6 +58,7 @@ export function createTraexAdapter(): CliAdapter {
           : []),
         // 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
         '--no-alt-screen',
+        ...(options?.resumeSessionId ? [options.resumeSessionId] : []),
       ];
 
       return {
@@ -60,11 +72,108 @@ export function createTraexAdapter(): CliAdapter {
       };
     },
 
+    async writeInput(pty, content) {
+      const historyPath = traeHistoryPath();
+      const baseByte = fileSize(historyPath);
+      try {
+        pty.write(`\x1b[200~${content}\x1b[201~`);
+        await delay(200);
+        pty.write('\r');
+      } catch {
+        return { submitted: false };
+      }
+
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await delay(500);
+        const cliSessionId = findHistoryMatch(historyPath, baseByte, content);
+        if (cliSessionId) return { submitted: true, cliSessionId };
+      }
+      return { submitted: false };
+    },
+
+    findSessionId(sessionId: string): string | undefined {
+      const path = traeHistoryPath();
+      if (!existsSync(path)) return undefined;
+      try {
+        const content = readFileSync(path, 'utf8');
+        const marker = `<session_id>${sessionId}</session_id>`;
+        for (const line of content.trimEnd().split('\n').reverse()) {
+          try {
+            const entry = JSON.parse(line);
+            if (typeof entry?.text === 'string'
+              && entry.text.includes(marker)
+              && typeof entry?.session_id === 'string') {
+              return entry.session_id;
+            }
+          } catch {
+            // 忽略并发写入留下的半行或旧格式行。
+          }
+        }
+      } catch {
+        return undefined;
+      }
+      return undefined;
+    },
+
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
-// 只能匹配 ❯/› 本身，用负向前瞻排除 trust 菜单的 `❯ 1.` 行。
-readyPattern: /[›❯](?!\s*\d+\.)/,
+    // 只匹配 ❯/› 本身，用负向前瞻排除 trust 菜单的 `❯ 1.` 行。
+    readyPattern: /[›❯](?!\s*\d+\.)/,
 
     // traex 无显式完成标记。
     completionPattern: undefined,
   };
+}
+
+function traeHistoryPath(): string {
+  const home = process.env.TRAE_HOME?.trim() || join(homedir(), '.trae');
+  return join(home, 'cli', 'history.jsonl');
+}
+
+function fileSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+function findHistoryMatch(path: string, fromByte: number, expectedText: string): string | undefined {
+  const size = fileSize(path);
+  if (size <= fromByte) return undefined;
+  const buffer = Buffer.alloc(size - fromByte);
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    readSync(fd, buffer, 0, buffer.length, fromByte);
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+
+  const delta = buffer.toString('utf8');
+  const lines = delta.endsWith('\n') ? delta.split('\n') : delta.split('\n').slice(0, -1);
+  const expected = normalizeText(expectedText);
+  for (const line of lines) {
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (typeof entry?.text === 'string'
+        && normalizeText(entry.text) === expected
+        && typeof entry?.session_id === 'string') {
+        return entry.session_id;
+      }
+    } catch {
+      // 忽略不完整行。
+    }
+  }
+  return undefined;
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

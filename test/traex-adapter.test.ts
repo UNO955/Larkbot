@@ -36,4 +36,11 @@ describe('traex adapter spawnSpec', () => {
     process.env.TRAEX_BIN = '/opt/traex/bin/traex';
     expect(createTraexAdapter().spawnSpec(dir).command).toBe('/opt/traex/bin/traex');
   });
+
+  it('resume 时把原生 session id 放在通用参数之后', () => {
+    const spec = createTraexAdapter().spawnSpec(dir, { resumeSessionId: 'trae-session-1' });
+    expect(spec.args[0]).toBe('resume');
+    expect(spec.args.at(-1)).toBe('trae-session-1');
+    expect(spec.args).toContain('--no-alt-screen');
+  });
 });

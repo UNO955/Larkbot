@@ -1,5 +1,4 @@
 /** 核心类型。所有模块从此导入，保持 IM/CLI 无关。 */
-import type { IPty } from 'node-pty';
 
 export interface Bot {
   id: string;
@@ -12,21 +11,26 @@ export interface Bot {
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
 }
 
-export type SessionStatus = 'idle' | 'busy' | 'closed';
+export type SessionStatus = 'active' | 'closed';
 
 export interface Session {
-  threadId: string;         // 飞书话题 id —— 会话身份
+  sessionId: string;        // larkmux 自己的会话 id
   chatId: string;
-  botId: string;
-  pty: IPty;
+  rootMessageId: string;    // 飞书话题根消息
+  threadId?: string;
+  anchorMessageId?: string; // 话题内用于 reply_in_thread 的锚点消息
+  initialCardMessageId?: string; // 建话题时发出的首张运行中卡片，首轮输出直接 patch 它
+  scope: 'thread';
+  title: string;
   status: SessionStatus;
-  queue: string[];          // FIFO，未处理的用户消息（不打断当前 turn）
-  screenBuffer: string;     // 累积 PTY 输出（渲染 / idle 判定）
-  cardMessageId?: string;   // 当前流式卡片 message_id
-  currentTurnText?: string;
-  lastDataAt: number;       // 最近 pty.onData 时间戳（idle 判定）
-  spawnedAt: number;
-  // 表情进度指示（仅 disableStreamingCard 时使用）：收到活儿加「进行中」表情并记录，
-  // 一轮结束时删掉它再加「完成」表情。阶段三实现。
-  pendingAckReactions?: Array<{ messageId: string; reactionId?: string }>;
+
+  workingDir: string;
+  cliId: 'traex';
+  cliSessionId?: string;
+  hasHistory: boolean;
+
+  ownerOpenId?: string;
+  lastCallerOpenId?: string;
+  lastMessageAt: string;
+  createdAt: string;
 }

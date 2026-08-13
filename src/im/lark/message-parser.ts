@@ -5,22 +5,26 @@ export interface ParsedMessage {
   chatId: string;
   threadId?: string;
   rootId?: string;
+  replyToMessageId?: string;
   senderOpenId: string;
   text: string;
   mentionedOpenIds: string[];
+  resources: Array<{ type: 'image' | 'file'; key: string; name?: string }>;
 }
 
 /**
  * 从 im.message.receive_v1 的事件 data 解析出结构化消息。
- * 只处理 text 类型；非 text 返回 null（阶段一不支持富文本/文件）。
+ * 处理 text/image/file；资源下载由 client 层完成。
  */
 export function parseMessageEvent(data: any): ParsedMessage | null {
   const msg = data?.message;
-  if (!msg || msg.message_type !== 'text') return null;
+  if (!msg || !['text', 'image', 'file'].includes(msg.message_type)) return null;
 
   let text = '';
+  let content: any;
   try {
-    text = (JSON.parse(msg.content ?? '{}').text ?? '').trim();
+    content = JSON.parse(msg.content ?? '{}');
+    text = typeof content.text === 'string' ? content.text.trim() : '';
   } catch {
     return null;
   }
@@ -36,14 +40,27 @@ export function parseMessageEvent(data: any): ParsedMessage | null {
     if (m?.key) cleanText = cleanText.split(m.key).join('');
   }
   cleanText = cleanText.replace(/\s+/g, ' ').trim();
+  const resources: ParsedMessage['resources'] = [];
+  if (msg.message_type === 'image' && typeof content.image_key === 'string') {
+    resources.push({ type: 'image', key: content.image_key });
+  }
+  if (msg.message_type === 'file' && typeof content.file_key === 'string') {
+    resources.push({
+      type: 'file',
+      key: content.file_key,
+      name: typeof content.file_name === 'string' ? content.file_name : undefined,
+    });
+  }
 
   return {
     messageId: msg.message_id,
     chatId: msg.chat_id,
     threadId: msg.thread_id || undefined,
     rootId: msg.root_id || undefined,
+    replyToMessageId: msg.parent_id || undefined,
     senderOpenId: data?.sender?.sender_id?.open_id ?? '',
     text: cleanText,
     mentionedOpenIds,
+    resources,
   };
 }

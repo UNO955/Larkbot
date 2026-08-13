@@ -1,0 +1,369 @@
+import * as pty from 'node-pty';
+import type { IPty } from 'node-pty';
+import type { CliAdapter } from '../adapters/cli/types.js';
+import { IdleDetector } from '../utils/idle-detector.js';
+import { logger } from '../utils/logger.js';
+import { TerminalRenderer } from '../utils/terminal-renderer.js';
+import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
+import type { SessionStore } from './store.js';
+import type { Session } from './types.js';
+
+const FLUSH_INTERVAL_MS = 800;
+const FIRST_PROMPT_FALLBACK_MS = 15_000;
+const PTY_COLS = 100;
+const PTY_ROWS = 30;
+
+interface QueuedTurn {
+  content: string;
+  fallbackOpening: string;
+  replyAnchorMessageId?: string;
+}
+
+interface Runtime {
+  route: Session;
+  pty: IPty;
+  detector: IdleDetector;
+  renderer: TerminalRenderer;
+  queue: QueuedTurn[];
+  status: 'idle' | 'busy';
+  ready: boolean;
+  resumeAttempt: boolean;
+  draining: boolean;
+  intentionalClose: boolean;
+  cardMessageId?: string;
+  currentReplyAnchorMessageId?: string;
+  receivedReactionId?: string;
+  doneReactionSent: boolean;
+  lastCardStatus?: CardStatus;
+  pendingFlushStatus?: CardStatus;
+  firstPromptTimer: ReturnType<typeof setTimeout> | null;
+  flushTimer: ReturnType<typeof setTimeout> | null;
+  posting: boolean;
+}
+
+type CardStatus = 'working' | 'completed' | 'failed';
+
+export interface ConversationManagerDeps {
+  cli: CliAdapter;
+  store: SessionStore;
+  spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus): Promise<void>;
+  notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
+  addReaction(messageId: string, emojiType: string): Promise<string>;
+  removeReaction(messageId: string, reactionId: string): Promise<void>;
+}
+
+export class ConversationManager {
+  private sessions = new Map<string, Session>();
+  private runtimes = new Map<string, Runtime>();
+
+  constructor(private deps: ConversationManagerDeps) {}
+
+  async restore(): Promise<Session[]> {
+    const sessions = await this.deps.store.loadSessions();
+    for (const session of sessions) this.sessions.set(session.sessionId, session);
+    logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`);
+    return sessions;
+  }
+
+  find(chatId: string, rootMessageId: string, threadId?: string): Session | undefined {
+    return [...this.sessions.values()].find((session) =>
+      session.status === 'active'
+      && session.chatId === chatId
+      && (session.rootMessageId === rootMessageId
+        || (!!threadId && session.threadId === threadId)));
+  }
+
+  async add(session: Session): Promise<void> {
+    this.sessions.set(session.sessionId, session);
+    await this.persist();
+  }
+
+  async touch(session: Session, callerOpenId: string): Promise<void> {
+    session.lastCallerOpenId = callerOpenId;
+    session.lastMessageAt = new Date().toISOString();
+    await this.persist();
+  }
+
+  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string): Promise<void> {
+    let runtime = this.runtimes.get(session.sessionId);
+    if (!runtime) {
+      const resume = await this.resolveResume(session);
+      runtime = this.spawn(session, resume);
+    }
+    runtime.queue.push({
+      content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
+      fallbackOpening: opening,
+      replyAnchorMessageId,
+    });
+    if (!runtime.ready) this.armFirstPromptFallback(runtime);
+    if (runtime.ready && runtime.status === 'idle') void this.drain(runtime);
+  }
+
+  shutdownAll(): void {
+    for (const runtime of [...this.runtimes.values()]) {
+      runtime.intentionalClose = true;
+      try { runtime.pty.kill(); } catch { /* already exited */ }
+      this.teardown(runtime);
+    }
+  }
+
+  private async resolveResume(session: Session): Promise<string | undefined> {
+    if (!session.hasHistory) return undefined;
+    const cliSessionId = session.cliSessionId ?? this.deps.cli.findSessionId(session.sessionId);
+    if (cliSessionId) {
+      if (session.cliSessionId !== cliSessionId) {
+        session.cliSessionId = cliSessionId;
+        await this.persist();
+      }
+      return cliSessionId;
+    }
+
+    session.hasHistory = false;
+    await this.persist();
+    if (session.threadId) {
+      await this.deps.notify(session.threadId, '旧的 traex 上下文无法恢复，本条消息将开启新上下文。');
+    }
+    return undefined;
+  }
+
+  private spawn(session: Session, resumeSessionId?: string): Runtime {
+    if (!session.threadId) throw new Error(`会话 ${session.sessionId} 缺少 threadId`);
+    const spec = this.deps.cli.spawnSpec(session.workingDir, { resumeSessionId });
+    const child = (this.deps.spawnPty ?? pty.spawn)(spec.command, spec.args, {
+      name: 'xterm-256color',
+      cols: PTY_COLS,
+      rows: PTY_ROWS,
+      cwd: spec.cwd,
+      env: spec.env ?? (process.env as Record<string, string>),
+    });
+    const runtime: Runtime = {
+      route: session,
+      pty: child,
+      detector: new IdleDetector(this.deps.cli),
+      renderer: new TerminalRenderer(PTY_COLS, PTY_ROWS),
+      queue: [],
+      status: 'idle',
+      ready: false,
+      resumeAttempt: !!resumeSessionId,
+      draining: false,
+      intentionalClose: false,
+      doneReactionSent: false,
+      flushTimer: null,
+      firstPromptTimer: null,
+      posting: false,
+    };
+    this.runtimes.set(session.sessionId, runtime);
+
+    runtime.detector.onIdle((source) => {
+      if (runtime.status !== 'busy') return;
+      runtime.status = 'idle';
+      logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`);
+      void this.finishTurn(runtime);
+    });
+    child.onData((chunk) => this.onData(runtime, chunk));
+    child.onExit(({ exitCode }) => void this.onExit(runtime, exitCode));
+    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} pid=${child.pid}`);
+    return runtime;
+  }
+
+  private onData(runtime: Runtime, chunk: string): void {
+    runtime.renderer.write(chunk);
+    if (!runtime.ready) {
+      runtime.detector.feed(chunk);
+      if (runtime.detector.ready) {
+        runtime.ready = true;
+        this.clearFirstPromptFallback(runtime);
+        runtime.detector.reset();
+        logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`);
+        void this.drain(runtime);
+      }
+      return;
+    }
+    runtime.detector.feed(chunk);
+    if (runtime.status === 'busy') this.armFlush(runtime);
+  }
+
+  private async drain(runtime: Runtime): Promise<void> {
+    if (runtime.draining || !runtime.ready || runtime.status !== 'idle') return;
+    const turn = runtime.queue.shift();
+    if (!turn) return;
+    runtime.draining = true;
+    runtime.status = 'busy';
+    this.clearFirstPromptFallback(runtime);
+    runtime.cardMessageId = undefined;
+    if (runtime.route.initialCardMessageId) {
+      runtime.cardMessageId = runtime.route.initialCardMessageId;
+      runtime.route.initialCardMessageId = undefined;
+    }
+    runtime.currentReplyAnchorMessageId = turn.replyAnchorMessageId;
+    runtime.receivedReactionId = undefined;
+    runtime.doneReactionSent = false;
+    runtime.lastCardStatus = undefined;
+    runtime.pendingFlushStatus = undefined;
+    runtime.renderer.markNewTurn();
+    runtime.detector.reset();
+    try {
+      runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
+      const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
+      if (!result.submitted) throw new Error('traex 未确认接收输入');
+      runtime.route.hasHistory = true;
+      if (result.cliSessionId) runtime.route.cliSessionId = result.cliSessionId;
+      await this.persist();
+      logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`);
+    } catch (error: any) {
+      runtime.status = 'idle';
+      await this.removeReceivedReaction(runtime);
+      if (runtime.route.threadId) {
+        await this.deps.notify(
+          runtime.route.threadId,
+          `消息投递失败：${error?.message ?? error}`,
+          runtime.currentReplyAnchorMessageId,
+        );
+      }
+    } finally {
+      runtime.draining = false;
+      if (runtime.status === 'idle') void this.drain(runtime);
+    }
+  }
+
+  private async finishTurn(runtime: Runtime): Promise<void> {
+    await this.flushNow(runtime, 'completed');
+    if (!runtime.doneReactionSent) {
+      runtime.doneReactionSent = true;
+      await this.removeReceivedReaction(runtime);
+      await this.addReaction(runtime.currentReplyAnchorMessageId, DONE_REACTION);
+    }
+    void this.drain(runtime);
+  }
+
+  private async onExit(runtime: Runtime, exitCode: number): Promise<void> {
+    if (this.runtimes.get(runtime.route.sessionId) !== runtime) return;
+    const recover = runtime.resumeAttempt && !runtime.ready && !runtime.intentionalClose;
+    const queued = [...runtime.queue];
+    if (!runtime.intentionalClose && runtime.ready && runtime.status === 'busy') {
+      await this.flushNow(runtime, 'failed');
+      await this.removeReceivedReaction(runtime);
+    }
+    this.teardown(runtime);
+    logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`);
+    if (!recover) {
+      if (!runtime.intentionalClose && !runtime.ready && runtime.route.threadId) {
+        await this.deps.notify(runtime.route.threadId, `traex 启动失败（退出码 ${exitCode}），消息未被处理。`);
+      }
+      return;
+    }
+
+    runtime.route.cliSessionId = undefined;
+    runtime.route.hasHistory = false;
+    await this.persist();
+    if (runtime.route.threadId) {
+      await this.deps.notify(runtime.route.threadId, 'traex 原生会话恢复失败，已降级为新上下文继续处理。');
+    }
+    const fresh = this.spawn(runtime.route);
+    fresh.queue.push(...queued.map((turn) => ({
+      content: turn.fallbackOpening,
+      fallbackOpening: turn.fallbackOpening,
+      replyAnchorMessageId: turn.replyAnchorMessageId,
+    })));
+  }
+
+  private armFlush(runtime: Runtime): void {
+    if (runtime.flushTimer) return;
+    runtime.flushTimer = setTimeout(() => {
+      runtime.flushTimer = null;
+      void this.flushNow(runtime, 'working');
+    }, FLUSH_INTERVAL_MS);
+  }
+
+  private armFirstPromptFallback(runtime: Runtime): void {
+    if (runtime.ready || runtime.firstPromptTimer) return;
+    runtime.firstPromptTimer = setTimeout(() => {
+      runtime.firstPromptTimer = null;
+      if (runtime.ready || runtime.status !== 'idle' || runtime.queue.length === 0) return;
+      runtime.ready = true;
+      runtime.detector.reset();
+      logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`);
+      void this.drain(runtime);
+    }, FIRST_PROMPT_FALLBACK_MS);
+    runtime.firstPromptTimer.unref?.();
+  }
+
+  private clearFirstPromptFallback(runtime: Runtime): void {
+    if (!runtime.firstPromptTimer) return;
+    clearTimeout(runtime.firstPromptTimer);
+    runtime.firstPromptTimer = null;
+  }
+
+  private async flushNow(runtime: Runtime, status: CardStatus): Promise<void> {
+    if (!runtime.route.threadId) return;
+    if (runtime.posting) {
+      runtime.pendingFlushStatus = strongerStatus(runtime.pendingFlushStatus, status);
+      return;
+    }
+    const { content, changed } = runtime.renderer.snapshot();
+    if (!content || (!changed && runtime.lastCardStatus === status)) return;
+    runtime.posting = true;
+    const body = content.length > 3800 ? content.slice(-3800) : content;
+    try {
+      if (!runtime.cardMessageId) {
+        runtime.cardMessageId = await this.deps.post(
+          runtime.route.threadId,
+          body,
+          status,
+          runtime.currentReplyAnchorMessageId,
+        );
+      } else {
+        await this.deps.patch(runtime.cardMessageId, body, status);
+      }
+      runtime.lastCardStatus = status;
+    } catch (error: any) {
+      logger.error(`回贴失败: ${error?.message ?? error}`);
+    } finally {
+      runtime.posting = false;
+      const pending = runtime.pendingFlushStatus;
+      runtime.pendingFlushStatus = undefined;
+      if (pending) void this.flushNow(runtime, pending);
+    }
+  }
+
+  private async addReaction(messageId: string | undefined, emojiType: string): Promise<string | undefined> {
+    if (!messageId) return undefined;
+    try {
+      return await this.deps.addReaction(messageId, emojiType);
+    } catch (error: any) {
+      logger.warn(`加表情失败 message=${messageId.slice(0, 12)} emoji=${emojiType}: ${error?.message ?? error}`);
+      return undefined;
+    }
+  }
+
+  private async removeReceivedReaction(runtime: Runtime): Promise<void> {
+    const messageId = runtime.currentReplyAnchorMessageId;
+    const reactionId = runtime.receivedReactionId;
+    if (!messageId || !reactionId) return;
+    runtime.receivedReactionId = undefined;
+    try {
+      await this.deps.removeReaction(messageId, reactionId);
+    } catch (error: any) {
+      logger.warn(`删 Get 表情失败 message=${messageId.slice(0, 12)} reaction=${reactionId}: ${error?.message ?? error}`);
+    }
+  }
+
+  private teardown(runtime: Runtime): void {
+    if (runtime.flushTimer) clearTimeout(runtime.flushTimer);
+    this.clearFirstPromptFallback(runtime);
+    runtime.detector.dispose();
+    runtime.renderer.dispose();
+    this.runtimes.delete(runtime.route.sessionId);
+  }
+
+  private persist(): Promise<void> {
+    return this.deps.store.saveSessions([...this.sessions.values()]);
+  }
+}
+
+function strongerStatus(current: CardStatus | undefined, next: CardStatus): CardStatus {
+  const rank: Record<CardStatus, number> = { working: 0, completed: 1, failed: 2 };
+  return !current || rank[next] > rank[current] ? next : current;
+}

@@ -12,6 +12,8 @@ function evt(over: Record<string, any> = {}): any {
       content: over.content ?? JSON.stringify({ text: 'hello' }),
       mentions: over.mentions,
       thread_id: over.threadId,
+      root_id: over.rootId,
+      parent_id: over.parentId,
     },
   };
 }
@@ -25,8 +27,18 @@ describe('parseMessageEvent', () => {
     expect(r!.chatId).toBe('oc_1');
   });
 
-  it('非 text 类型返回 null', () => {
-    expect(parseMessageEvent(evt({ messageType: 'image' }))).toBeNull();
+  it('不支持的消息类型返回 null', () => {
+    expect(parseMessageEvent(evt({ messageType: 'audio' }))).toBeNull();
+  });
+
+  it('解析图片资源和引用消息', () => {
+    const r = parseMessageEvent(evt({
+      messageType: 'image',
+      content: JSON.stringify({ image_key: 'img_1' }),
+      parentId: 'om_parent',
+    }));
+    expect(r!.resources).toEqual([{ type: 'image', key: 'img_1' }]);
+    expect(r!.replyToMessageId).toBe('om_parent');
   });
 
   it('剥离 @ 占位符得到干净正文', () => {
@@ -39,8 +51,9 @@ describe('parseMessageEvent', () => {
   });
 
   it('携带 thread_id 时解析出话题', () => {
-    const r = parseMessageEvent(evt({ threadId: 'omt_9' }));
+    const r = parseMessageEvent(evt({ threadId: 'omt_9', rootId: 'om_root' }));
     expect(r!.threadId).toBe('omt_9');
+    expect(r!.rootId).toBe('om_root');
   });
 
   it('content 非法 JSON 返回 null', () => {

@@ -27,10 +27,25 @@ const BARE_PROMPT_RE = /^[›❯]\s*$/;
 const INPUT_ECHO_RE = /^[›❯]\s+\S/;
 /** 纯空白行 */
 const BLANK_RE = /^\s*$/;
+const ENVELOPE_ECHO_RE = /^\s*▍/;
+const XML_ENVELOPE_RE = /^\s*<\/?(?:larkmux_routing|larkmux_reminder|session_id|user_message|sender|attachments|quoted_message)\b/i;
+const TRAEX_NOISE_RES = [
+  /TraeCode CLI/i,
+  /^\s*Good (?:morning|afternoon|evening)/i,
+  /^\s*(?:model|directory|permissions):\s/i,
+  /^\s*Tip:\s/i,
+  /^\s*(?:the\s+)?background\.\s*$/i,
+  /Context \d+% left/i,
+  /Full Access(?:\s|\(|$)/i,
+  /Working…|esc to interrupt/i,
+  /^\s*[▄▀█]+\s*$/,
+  /^\s*█\s*◆\s*◆\s*█\s*$/,
+];
 
 export class TerminalRenderer {
   private term: InstanceType<typeof Terminal>;
   private lastHash = '';
+  private turnStartY: number | undefined;
 
   constructor(cols = 100, rows = 30) {
     this.term = new Terminal({
@@ -60,9 +75,11 @@ export class TerminalRenderer {
     });
   }
 
-  /** 新一轮开始：重置变化检测 hash，确保下一帧快照被识别为 changed。 */
+  /** 新一轮开始：记录当前终端行，只展示本轮之后产生的内容。 */
   markNewTurn(): void {
     this.lastHash = '';
+    const buf = this.term.buffer.active;
+    this.turnStartY = buf.baseY + buf.cursorY;
   }
 
   /**
@@ -70,7 +87,7 @@ export class TerminalRenderer {
    * 返回 content 和 changed 标记（与上次快照对比）。
    */
   snapshot(): { content: string; changed: boolean } {
-    const content = this.readViewport(true);
+    const content = this.readViewport(true, this.turnStartY);
     const hash = createHash('md5').update(content).digest('hex');
     const changed = hash !== this.lastHash;
     this.lastHash = hash;
@@ -85,28 +102,32 @@ export class TerminalRenderer {
     return this.readViewport(false);
   }
 
-  private readViewport(filter: boolean): string {
+  private readViewport(filter: boolean, requestedStartY?: number): string {
     const buf = this.term.buffer.active;
     const baseY = buf.baseY;
     const rows = this.term.rows;
     const endY = baseY + rows;
+    const startY = Math.max(baseY, requestedStartY ?? baseY);
 
     const lines: string[] = [];
-    for (let y = baseY; y < endY; y++) {
+    for (let y = startY; y < endY; y++) {
       const line = buf.getLine(y);
       if (!line) continue;
       const s = cleanBoxDrawing(line.translateToString(true));
-      if (filter && (BARE_PROMPT_RE.test(s) || INPUT_ECHO_RE.test(s))) continue;
+      if (filter && isDisplayNoise(s)) continue;
       lines.push(s);
     }
 
     // 去掉首尾空行
     if (filter) {
+      for (let i = 0; i < lines.length; i++) {
+        lines[i] = lines[i].replace(/^\s*[◆◇✦✧◈❖⋄]\s+/, '');
+      }
       while (lines.length > 0 && BLANK_RE.test(lines[0])) lines.shift();
     }
     while (lines.length > 0 && BLANK_RE.test(lines[lines.length - 1])) lines.pop();
 
-    return lines.join('\n');
+    return extractFinalAnswer(lines.join('\n'));
   }
 
   resize(cols: number, rows: number): void {
@@ -119,4 +140,33 @@ export class TerminalRenderer {
   dispose(): void {
     this.term.dispose();
   }
+}
+
+function isDisplayNoise(line: string): boolean {
+  return BARE_PROMPT_RE.test(line)
+    || INPUT_ECHO_RE.test(line)
+    || ENVELOPE_ECHO_RE.test(line)
+    || XML_ENVELOPE_RE.test(line)
+    || TRAEX_NOISE_RES.some((pattern) => pattern.test(line));
+}
+
+function extractFinalAnswer(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return '';
+
+  const paragraphs = trimmed.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length <= 1) return trimmed;
+
+  const first = paragraphs[0];
+  if (
+    /\bI see the user\b/i.test(first)
+    || /\bSince I'm\b/i.test(first)
+    || /\bI want to\b/i.test(first)
+    || /\bLet's go ahead\b/i.test(first)
+    || /\bthere's no need for tools\b/i.test(first)
+  ) {
+    return paragraphs[paragraphs.length - 1];
+  }
+
+  return trimmed;
 }

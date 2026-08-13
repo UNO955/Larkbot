@@ -11,7 +11,6 @@
  * 后续可接 traex rollout 的 task_complete 事件作为确定性的一轮结束信号。
  */
 import type { CliAdapter } from '../adapters/cli/types.js';
-import { logger } from './logger.js';
 
 export type IdleEvidenceSource = 'screen' | 'external';
 
@@ -41,6 +40,11 @@ export class IdleDetector {
     this.idleCallback = cb;
   }
 
+  /** 当前轮是否已经看到可输入提示符。启动门控也使用这个信号。 */
+  get ready(): boolean {
+    return this.readySeen;
+  }
+
   /** 喂入一段原始 PTY 输出。 */
   feed(data: string): void {
     // 已 idle 后再来数据 = 新一轮（本地输入等也能重新走 idle）
@@ -56,9 +60,6 @@ export class IdleDetector {
 
     // 提示符出现 → 记 readySeen（当前 chunk 和 tail 都查，避免被状态栏挤出窗口）
     if (this.readyPattern && (this.readyPattern.test(stripped) || this.readyPattern.test(this.outputTail))) {
-      if (!this.readySeen) {
-        logger.info(`[idle] readySeen ← true (stripped=${JSON.stringify(stripped.slice(0, 80))})`);
-      }
       this.readySeen = true;
     }
 

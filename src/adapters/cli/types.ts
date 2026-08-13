@@ -4,6 +4,7 @@
  * v1 只有 traex 实现，但把「怎么启动这个 CLI」「如何判定它一轮结束（idle）」
  * 收进接口 —— 后续可接 codex / claude 而不改会话调度逻辑。
  */
+import type { IPty } from 'node-pty';
 
 export type CliId = 'traex';
 
@@ -14,11 +15,26 @@ export interface SpawnSpec {
   env?: Record<string, string>;
 }
 
+export interface SpawnOptions {
+  resumeSessionId?: string;
+}
+
+export interface SubmitResult {
+  submitted: boolean;
+  cliSessionId?: string;
+}
+
 export interface CliAdapter {
   id: CliId;
 
   /** 返回拉起该 CLI 的 PTY spawn 规格。 */
-  spawnSpec(cwd: string): SpawnSpec;
+  spawnSpec(cwd: string, options?: SpawnOptions): SpawnSpec;
+
+  /** 原子提交一轮输入；多行内容不能被拆成多个 turn。 */
+  writeInput(pty: IPty, content: string): Promise<SubmitResult>;
+
+  /** 用 larkmux session id 从 CLI 原生记录反查会话 id。 */
+  findSessionId(sessionId: string): string | undefined;
 
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：
