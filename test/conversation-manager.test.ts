@@ -87,9 +87,15 @@ describe('ConversationManager', () => {
       spawnPty: () => child,
       post: async () => 'card-1',
       patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
       notify: async () => undefined,
       addReaction: async () => 'reaction-1',
       removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
     });
 
     await manager.restore();
@@ -136,9 +142,15 @@ describe('ConversationManager', () => {
       spawnPty: () => processes.shift()!,
       post: async () => 'card-1',
       patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
       notify,
       addReaction: async () => 'reaction-1',
       removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
     });
     await manager.restore();
     await manager.submit(session, 'OPENING', 'FOLLOW_UP');
@@ -177,9 +189,15 @@ describe('ConversationManager', () => {
       spawnPty: () => child,
       post: async () => 'card-1',
       patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
       notify,
       addReaction: async () => 'reaction-1',
       removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
     });
 
     await manager.add(session);
@@ -221,9 +239,15 @@ describe('ConversationManager', () => {
       spawnPty: () => child,
       post: async () => 'card-1',
       patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
       notify: async () => undefined,
       addReaction,
       removeReaction,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
     });
 
     await manager.add(session);
@@ -235,6 +259,66 @@ describe('ConversationManager', () => {
     await vi.waitFor(() => expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1'), { timeout: 1500 });
     await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'DONE'), { timeout: 1500 });
     expect(removeReaction.mock.invocationCallOrder[0]).toBeLessThan(addReaction.mock.invocationCallOrder[1]);
+    manager.shutdownAll();
+  });
+
+  it('完成回复卡 footer 展示当前 traex 会话累计 token', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionUsage: vi.fn(() => ({
+        inputTokens: 12000,
+        outputTokens: 3456,
+        cacheReadTokens: 3000,
+        cacheCreateTokens: 0,
+        model: 'gpt-5.5',
+      })),
+      readyPattern: /❯/,
+      completionPattern: /❯/,
+    };
+    const child = fakePty();
+    const post = vi.fn(async () => 'card-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post,
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => true,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    child.emitData('\r\n最终回复');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    child.emitData('\r\n❯ ');
+    await vi.waitFor(() => expect(post).toHaveBeenCalledWith(
+      'omt-1',
+      expect.any(String),
+      'completed',
+      'om-current-user',
+      '🪙 累计 Token ↑15K ↓3.5K · gpt-5.5',
+    ), { timeout: 1500 });
     manager.shutdownAll();
   });
 });

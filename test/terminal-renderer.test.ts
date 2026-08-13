@@ -140,4 +140,31 @@ describe('TerminalRenderer', () => {
     expect(r.snapshot().content).toBe('你好，我在。有什么需要我处理的？');
     r.dispose();
   });
+
+  it('把工具轨迹和思考拆到 trace，最终回复单独作为 answer', async () => {
+    const r = new TerminalRenderer(120, 30);
+    r.markNewTurn();
+    await r.writeAndFlush([
+      "Ran find ~/.larkmux -maxdepth 4 -type f 2>/dev/null | sed -n '1,200p'",
+      ' /home/mengning.uno/.larkmux/sessions.json',
+      '',
+      'Read src/im/lark/client.ts (ctrl+o to expand)',
+      '',
+      '我找到了本机的 .larkmux 状态文件和飞书 app 凭证入口。现在会用飞书 API 直接拉取这条引用消息。',
+      '',
+      'Searched for "message.get|im.v1.message.get|/op…" in node-sdk, read 3 files (ctrl+o to expand)',
+      '',
+      "I want to make sure we're getting this right. The user mentioned a vague request, so I should ask for specifics.",
+      '',
+      '可以。你这条引用的是刚才的“你好”，里面没有具体问题内容。',
+      '',
+      '把要解决的事情直接发我就行。',
+    ].join('\r\n'));
+    const parts = r.snapshotParts();
+    expect(parts.answer).toBe('可以。你这条引用的是刚才的“你好”，里面没有具体问题内容。\n\n把要解决的事情直接发我就行。');
+    expect(parts.trace).toContain('Ran find');
+    expect(parts.trace).toContain('I want to make sure');
+    expect(r.snapshot().content).toBe('可以。你这条引用的是刚才的“你好”，里面没有具体问题内容。\n\n把要解决的事情直接发我就行。');
+    r.dispose();
+  });
 });

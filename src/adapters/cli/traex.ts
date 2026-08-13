@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { CliAdapter, SpawnSpec } from './types.js';
+import type { CliAdapter, SessionTokenUsage, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
   return {
@@ -115,6 +115,10 @@ export function createTraexAdapter(): CliAdapter {
       return undefined;
     },
 
+    getSessionUsage(cliSessionId: string): SessionTokenUsage | undefined {
+      return readTraexSessionUsage(traeHistoryPath(), cliSessionId);
+    },
+
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
     // 只匹配 ❯/› 本身，用负向前瞻排除 trust 菜单的 `❯ 1.` 行。
     readyPattern: /[›❯](?!\s*\d+\.)/,
@@ -168,6 +172,81 @@ function findHistoryMatch(path: string, fromByte: number, expectedText: string):
     }
   }
   return undefined;
+}
+
+function readTraexSessionUsage(path: string, cliSessionId: string): SessionTokenUsage | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const content = readFileSync(path, 'utf8');
+    let latest: SessionTokenUsage | undefined;
+    let model = '';
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!belongsToSession(entry, cliSessionId)) continue;
+      const nextModel = extractModel(entry);
+      if (nextModel) model = nextModel;
+      const usage = extractTokenCountUsage(entry);
+      if (usage) latest = { ...usage, model: model || usage.model };
+    }
+    return latest;
+  } catch {
+    return undefined;
+  }
+}
+
+function belongsToSession(entry: any, cliSessionId: string): boolean {
+  return entry?.session_id === cliSessionId
+    || entry?.sessionId === cliSessionId
+    || entry?.payload?.session_id === cliSessionId
+    || entry?.payload?.sessionId === cliSessionId;
+}
+
+function extractModel(entry: any): string {
+  const candidates = [
+    entry?.model,
+    entry?.payload?.model,
+    entry?.payload?.collaboration_mode?.settings?.model,
+    entry?.message?.model,
+    entry?.response?.model,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function extractTokenCountUsage(entry: any): SessionTokenUsage | undefined {
+  if (entry?.type !== 'event_msg' || entry?.payload?.type !== 'token_count') return undefined;
+  const usage = entry.payload?.info?.total_token_usage;
+  if (!usage || typeof usage !== 'object') return undefined;
+
+  const inputTokens = pickNum(usage, ['input_tokens', 'inputTokens']);
+  const outputTokens = pickNum(usage, ['output_tokens', 'outputTokens']);
+  const cacheReadTokens = pickNum(usage, ['cached_input_tokens', 'cachedInputTokens', 'cache_read_input_tokens', 'cacheReadInputTokens']);
+  const cacheCreateTokens = pickNum(usage, ['cache_creation_input_tokens', 'cacheCreationInputTokens', 'cache_write_input_tokens', 'cacheWriteInputTokens']);
+  if (inputTokens <= 0 && outputTokens <= 0 && cacheReadTokens <= 0 && cacheCreateTokens <= 0) return undefined;
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreateTokens,
+    model: extractModel(entry),
+  };
+}
+
+function pickNum(obj: any, keys: string[]): number {
+  if (!obj || typeof obj !== 'object') return 0;
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, value);
+  }
+  return 0;
 }
 
 function normalizeText(value: string): string {

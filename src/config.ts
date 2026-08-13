@@ -6,7 +6,9 @@ export interface Config {
   larkAppSecret: string;
   ownerOpenId: string;   // 白名单：只响应这个 open_id
   traexCwd: string;      // traex 执行工作目录
+  consoleHost: string;
   consolePort: number;
+  consolePublicUrl: string;
 }
 
 function required(name: string): string {
@@ -21,6 +23,8 @@ export function loadConfig(): Config {
     larkAppSecret: required('LARK_APP_SECRET'),
     ownerOpenId: required('OWNER_OPEN_ID'),
     traexCwd: process.env.TRAEX_CWD?.trim() || process.cwd(),
+    consoleHost: process.env.CONSOLE_HOST?.trim() || '127.0.0.1',
     consolePort: Number(process.env.CONSOLE_PORT) || 8787,
+    consolePublicUrl: process.env.CONSOLE_PUBLIC_URL?.trim() || `http://127.0.0.1:${Number(process.env.CONSOLE_PORT) || 8787}`,
   };
 }

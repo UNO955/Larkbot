@@ -24,6 +24,14 @@ export interface SubmitResult {
   cliSessionId?: string;
 }
 
+export interface SessionTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  model: string;
+}
+
 export interface CliAdapter {
   id: CliId;
 
@@ -35,6 +43,9 @@ export interface CliAdapter {
 
   /** 用 larkmux session id 从 CLI 原生记录反查会话 id。 */
   findSessionId(sessionId: string): string | undefined;
+
+  /** 读取 CLI 原生会话的累计 token 用量。 */
+  getSessionUsage?(cliSessionId: string): SessionTokenUsage | undefined;
 
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：

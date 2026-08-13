@@ -17,8 +17,10 @@ describe('buildTerminalCard', () => {
     const card: any = buildTerminalCard({
       body: '处理完成',
       status: 'completed',
+      footer: '🪙 累计 Token ↑15K ↓3.5K',
     }).payload;
     expect(card.header.template).toBe('green');
     expect(card.header.title.content).toContain('已完成');
+    expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
 });

@@ -19,30 +19,40 @@ import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt } from './core/prompt.js';
-import { buildTerminalCard } from './im/lark/card-builder.js';
+import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
+import { startConsoleServer, TurnTraceStore } from './console/server.js';
 import type { ImMessage, ImReaction } from './im/types.js';
-import type { Session } from './core/types.js';
+import type { Bot, Session } from './core/types.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   logger.info(`larkmux 启动，traex cwd=${cfg.traexCwd}`);
+  const store = new JsonSessionStore();
+  const traceStore = new TurnTraceStore();
+  let activeBot = await loadActiveBot(store, cfg);
 
   const im = createLarkAdapter({
-    appId: cfg.larkAppId,
-    appSecret: cfg.larkAppSecret,
-    ownerOpenId: cfg.ownerOpenId,
+    appId: activeBot.appId,
+    appSecret: activeBot.appSecret,
+    ownerOpenId: activeBot.ownerOpenId,
   });
 
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
-    store: new JsonSessionStore(),
+    store,
     // 首帧：在话题里发一张「运行中」终端卡片，返回 message_id
-    post: async (threadId, text, status, replyAnchorMessageId) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId, footer) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, footer }), replyAnchorMessageId);
     },
     // 后续帧：patch 同一张卡片，原地刷新（不再新发消息，杜绝刷屏）
-    patch: async (messageId, text, status) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status }));
+    patch: async (messageId, text, status, footer) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, footer }));
+    },
+    postTrace: async (threadId, traceUrl, status, replyAnchorMessageId) => {
+      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, status }), replyAnchorMessageId);
+    },
+    patchTrace: async (messageId, traceUrl, status) => {
+      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, status }));
     },
     notify: async (threadId, text, replyAnchorMessageId) => {
       await im.reply(threadId, text, 'text', replyAnchorMessageId);
@@ -52,6 +62,26 @@ async function main(): Promise<void> {
     },
     removeReaction: async (messageId, reactionId) => {
       await im.removeReaction(messageId, reactionId);
+    },
+    createTrace: (input) => {
+      traceStore.create(input);
+    },
+    updateTrace: (id, trace, status) => {
+      traceStore.update(id, { content: trace, status });
+    },
+    traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/trace/${encodeURIComponent(id)}`,
+    isStreamingCardDisabled: () => activeBot.disableStreamingCard === true,
+  });
+  const consoleServer = await startConsoleServer({
+    host: cfg.consoleHost,
+    port: cfg.consolePort,
+    store,
+    botId: activeBot.id,
+    traceStore,
+    sessionManager: sessions,
+    onBotUpdated(bot) {
+      activeBot = bot;
+      logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`);
     },
   });
   const restored = await sessions.restore();
@@ -72,10 +102,7 @@ async function main(): Promise<void> {
           return;
         }
 
-        const { threadId, messageId } = await im.replyCardInThread(
-          msg.id,
-          buildTerminalCard({ body: '', status: 'working' }),
-        );
+        const { threadId } = await im.replyInThread(msg.id, '🧵 会话已创建，启动中…');
         im.registerThreadAnchor(threadId, msg.id);
         const now = new Date().toISOString();
         const session: Session = {
@@ -84,14 +111,13 @@ async function main(): Promise<void> {
           rootMessageId: msg.id,
           threadId,
           anchorMessageId: msg.id,
-          initialCardMessageId: messageId,
           scope: 'thread',
           title: msg.content.slice(0, 80) || '飞书会话',
           status: 'active',
-          workingDir: cfg.traexCwd,
+          workingDir: activeBot.cwd,
           cliId: 'traex',
           hasHistory: false,
-          ownerOpenId: cfg.ownerOpenId,
+          ownerOpenId: activeBot.ownerOpenId,
           lastCallerOpenId: msg.senderId,
           lastMessageAt: now,
           createdAt: now,
@@ -132,6 +158,7 @@ async function main(): Promise<void> {
   const shutdown = () => {
     logger.info('收到退出信号，关闭所有会话…');
     sessions.shutdownAll();
+    consoleServer.close();
     im.stop().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
@@ -144,3 +171,22 @@ main().catch((err) => {
   logger.error(`启动失败: ${err?.message ?? err}`);
   process.exit(1);
 });
+
+async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loadConfig>): Promise<Bot> {
+  const bots = await store.loadBots();
+  const existing = bots.find((bot) => bot.enabled) ?? bots[0];
+  if (existing) return existing;
+
+  const bot: Bot = {
+    id: 'default',
+    name: process.env.BOT_NAME?.trim() || 'larkmux-dev',
+    appId: cfg.larkAppId,
+    appSecret: cfg.larkAppSecret,
+    cwd: cfg.traexCwd,
+    ownerOpenId: cfg.ownerOpenId,
+    enabled: true,
+    disableStreamingCard: false,
+  };
+  await store.saveBots([bot]);
+  return bot;
+}

@@ -1,6 +1,7 @@
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import type { CliAdapter } from '../adapters/cli/types.js';
+import { randomUUID } from 'node:crypto';
+import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
 import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
@@ -30,7 +31,11 @@ interface Runtime {
   resumeAttempt: boolean;
   draining: boolean;
   intentionalClose: boolean;
-  cardMessageId?: string;
+  answerCardMessageId?: string;
+  traceCardMessageId?: string;
+  traceTurnId?: string;
+  traceUrl?: string;
+  streamingCardDisabled: boolean;
   currentReplyAnchorMessageId?: string;
   receivedReactionId?: string;
   doneReactionSent: boolean;
@@ -47,11 +52,17 @@ export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus, footer?: string): Promise<void>;
+  postTrace(threadId: string, traceUrl: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
+  patchTrace(messageId: string, traceUrl: string, status: CardStatus): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
   addReaction(messageId: string, emojiType: string): Promise<string>;
   removeReaction(messageId: string, reactionId: string): Promise<void>;
+  createTrace(input: { id: string; sessionId: string; title: string }): void;
+  updateTrace(id: string, trace: string, status: CardStatus): void;
+  traceUrl(id: string): string;
+  isStreamingCardDisabled(): boolean;
 }
 
 export class ConversationManager {
@@ -84,6 +95,38 @@ export class ConversationManager {
     session.lastCallerOpenId = callerOpenId;
     session.lastMessageAt = new Date().toISOString();
     await this.persist();
+  }
+
+  listSessions(): Session[] {
+    return [...this.sessions.values()].sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+  }
+
+  async closeSession(sessionId: string): Promise<Session | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    session.status = 'closed';
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime) {
+      runtime.intentionalClose = true;
+      try { runtime.pty.kill(); } catch { /* already exited */ }
+      this.teardown(runtime);
+    }
+    await this.persist();
+    return session;
+  }
+
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime) {
+      runtime.intentionalClose = true;
+      try { runtime.pty.kill(); } catch { /* already exited */ }
+      this.teardown(runtime);
+    }
+    this.sessions.delete(sessionId);
+    await this.persist();
+    return true;
   }
 
   async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string): Promise<void> {
@@ -149,6 +192,7 @@ export class ConversationManager {
       resumeAttempt: !!resumeSessionId,
       draining: false,
       intentionalClose: false,
+      streamingCardDisabled: false,
       doneReactionSent: false,
       flushTimer: null,
       firstPromptTimer: null,
@@ -192,11 +236,20 @@ export class ConversationManager {
     runtime.draining = true;
     runtime.status = 'busy';
     this.clearFirstPromptFallback(runtime);
-    runtime.cardMessageId = undefined;
-    if (runtime.route.initialCardMessageId) {
-      runtime.cardMessageId = runtime.route.initialCardMessageId;
+    runtime.answerCardMessageId = undefined;
+    runtime.traceCardMessageId = undefined;
+    runtime.streamingCardDisabled = this.deps.isStreamingCardDisabled();
+    if (!runtime.streamingCardDisabled && runtime.route.initialCardMessageId) {
+      runtime.traceCardMessageId = runtime.route.initialCardMessageId;
       runtime.route.initialCardMessageId = undefined;
     }
+    runtime.traceTurnId = randomUUID();
+    runtime.traceUrl = this.deps.traceUrl(runtime.traceTurnId);
+    this.deps.createTrace({
+      id: runtime.traceTurnId,
+      sessionId: runtime.route.sessionId,
+      title: runtime.route.title,
+    });
     runtime.currentReplyAnchorMessageId = turn.replyAnchorMessageId;
     runtime.receivedReactionId = undefined;
     runtime.doneReactionSent = false;
@@ -302,20 +355,41 @@ export class ConversationManager {
       runtime.pendingFlushStatus = strongerStatus(runtime.pendingFlushStatus, status);
       return;
     }
-    const { content, changed } = runtime.renderer.snapshot();
-    if (!content || (!changed && runtime.lastCardStatus === status)) return;
+    const { answer, trace, changed } = runtime.renderer.snapshotParts();
+    if (!answer && !trace && (!changed && runtime.lastCardStatus === status)) return;
     runtime.posting = true;
-    const body = content.length > 3800 ? content.slice(-3800) : content;
+    const answerBody = answer.length > 3800 ? answer.slice(-3800) : answer;
+    const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
+    const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
+    const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
-      if (!runtime.cardMessageId) {
-        runtime.cardMessageId = await this.deps.post(
-          runtime.route.threadId,
-          body,
-          status,
-          runtime.currentReplyAnchorMessageId,
-        );
-      } else {
-        await this.deps.patch(runtime.cardMessageId, body, status);
+      if (runtime.traceTurnId) {
+        this.deps.updateTrace(runtime.traceTurnId, traceBody, status);
+      }
+      if (!runtime.streamingCardDisabled && runtime.traceUrl && (runtime.traceCardMessageId || traceBody || status === 'working')) {
+        if (!runtime.traceCardMessageId) {
+          runtime.traceCardMessageId = await this.deps.postTrace(
+            runtime.route.threadId,
+            runtime.traceUrl,
+            status,
+            runtime.currentReplyAnchorMessageId,
+          );
+        } else {
+          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, status);
+        }
+      }
+      if (status !== 'working' && answerBody) {
+        if (!runtime.answerCardMessageId) {
+          runtime.answerCardMessageId = await this.deps.post(
+            runtime.route.threadId,
+            answerBody,
+            status,
+            runtime.currentReplyAnchorMessageId,
+            footer,
+          );
+        } else {
+          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, footer);
+        }
       }
       runtime.lastCardStatus = status;
     } catch (error: any) {
@@ -366,4 +440,24 @@ export class ConversationManager {
 function strongerStatus(current: CardStatus | undefined, next: CardStatus): CardStatus {
   const rank: Record<CardStatus, number> = { working: 0, completed: 1, failed: 2 };
   return !current || rank[next] > rank[current] ? next : current;
+}
+
+function sessionUsageFooter(usage: SessionTokenUsage | undefined): string | undefined {
+  if (!usage) return undefined;
+  const input = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreateTokens;
+  const output = usage.outputTokens;
+  if (input <= 0 && output <= 0) return undefined;
+  const model = usage.model ? ` · ${usage.model}` : '';
+  return `🪙 累计 Token ↑${formatTokenCount(input)} ↓${formatTokenCount(output)}${model}`;
+}
+
+function formatTokenCount(value: number): string {
+  const n = Math.max(0, Math.round(value));
+  if (n >= 1_000_000) return `${trimNumber(n / 1_000_000)}M`;
+  if (n >= 1_000) return `${trimNumber(n / 1_000)}K`;
+  return String(n);
+}
+
+function trimNumber(value: number): string {
+  return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '');
 }

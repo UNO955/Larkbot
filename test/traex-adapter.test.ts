@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ describe('traex adapter spawnSpec', () => {
     rmSync(dir, { recursive: true, force: true });
     delete process.env.TRAEX_SANDBOX;
     delete process.env.TRAEX_BIN;
+    delete process.env.TRAE_HOME;
   });
 
   it('默认注入 realpath 归一化的 trust_level 并跳过 trust', () => {
@@ -42,5 +43,56 @@ describe('traex adapter spawnSpec', () => {
     expect(spec.args[0]).toBe('resume');
     expect(spec.args.at(-1)).toBe('trae-session-1');
     expect(spec.args).toContain('--no-alt-screen');
+  });
+
+  it('从 traex history token_count 读取会话累计 token', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    mkdirSync(join(home, 'cli'), { recursive: true });
+    writeFileSync(join(home, 'cli', 'history.jsonl'), [
+      JSON.stringify({
+        session_id: 'trae-1',
+        type: 'event_msg',
+        payload: {
+          type: 'session_meta',
+          model: 'gpt-5.5',
+        },
+      }),
+      JSON.stringify({
+        session_id: 'trae-1',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 12345,
+              output_tokens: 678,
+              cached_input_tokens: 1000,
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        session_id: 'trae-2',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 1,
+              output_tokens: 2,
+            },
+          },
+        },
+      }),
+    ].join('\n') + '\n');
+
+    expect(createTraexAdapter().getSessionUsage?.('trae-1')).toEqual({
+      inputTokens: 12345,
+      outputTokens: 678,
+      cacheReadTokens: 1000,
+      cacheCreateTokens: 0,
+      model: 'gpt-5.5',
+    });
   });
 });

@@ -13,18 +13,29 @@ export interface SessionStore {
 
 export class JsonSessionStore implements SessionStore {
   readonly sessionsPath: string;
-  private pendingWrite: Promise<void> = Promise.resolve();
+  readonly botsPath: string;
+  private pendingSessionWrite: Promise<void> = Promise.resolve();
+  private pendingBotWrite: Promise<void> = Promise.resolve();
 
-  constructor(path = defaultSessionsPath()) {
-    this.sessionsPath = path;
+  constructor(sessionsPath = defaultSessionsPath(), botsPath = defaultBotsPath()) {
+    this.sessionsPath = sessionsPath;
+    this.botsPath = botsPath;
   }
 
   async loadBots(): Promise<Bot[]> {
-    return [];
+    try {
+      const parsed = JSON.parse(await readFile(this.botsPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isBot);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
   }
 
-  async saveBots(_bots: Bot[]): Promise<void> {
-    // Bot 配置仍由环境变量提供。
+  async saveBots(bots: Bot[]): Promise<void> {
+    this.pendingBotWrite = this.pendingBotWrite.catch(() => undefined).then(() => writeJsonAtomic(this.botsPath, bots));
+    await this.pendingBotWrite;
   }
 
   async loadSessions(): Promise<Session[]> {
@@ -39,20 +50,39 @@ export class JsonSessionStore implements SessionStore {
   }
 
   async saveSessions(sessions: Session[]): Promise<void> {
-    const snapshot = JSON.stringify(sessions, null, 2);
-    this.pendingWrite = this.pendingWrite.catch(() => undefined).then(async () => {
-      await mkdir(dirname(this.sessionsPath), { recursive: true });
-      const tmp = `${this.sessionsPath}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(tmp, `${snapshot}\n`, 'utf8');
-      await rename(tmp, this.sessionsPath);
-    });
-    await this.pendingWrite;
+    this.pendingSessionWrite = this.pendingSessionWrite.catch(() => undefined).then(() => writeJsonAtomic(this.sessionsPath, sessions));
+    await this.pendingSessionWrite;
   }
 }
 
 function defaultSessionsPath(): string {
   const stateDir = process.env.LARKMUX_STATE_DIR?.trim() || join(homedir(), '.larkmux');
   return join(stateDir, 'sessions.json');
+}
+
+function defaultBotsPath(): string {
+  const stateDir = process.env.LARKMUX_STATE_DIR?.trim() || join(homedir(), '.larkmux');
+  return join(stateDir, 'bots.json');
+}
+
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  const snapshot = JSON.stringify(value, null, 2);
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tmp, `${snapshot}\n`, 'utf8');
+  await rename(tmp, path);
+}
+
+function isBot(value: unknown): value is Bot {
+  if (!value || typeof value !== 'object') return false;
+  const bot = value as Partial<Bot>;
+  return typeof bot.id === 'string'
+    && typeof bot.name === 'string'
+    && typeof bot.appId === 'string'
+    && typeof bot.appSecret === 'string'
+    && typeof bot.cwd === 'string'
+    && typeof bot.ownerOpenId === 'string'
+    && typeof bot.enabled === 'boolean';
 }
 
 function isSession(value: unknown): value is Session {

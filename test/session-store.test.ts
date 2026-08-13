@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JsonSessionStore } from '../src/core/store.js';
-import type { Session } from '../src/core/types.js';
+import type { Bot, Session } from '../src/core/types.js';
 
 const dirs: string[] = [];
 
@@ -23,6 +23,19 @@ function session(): Session {
     hasHistory: true,
     lastMessageAt: '2026-01-01T00:00:00.000Z',
     createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function bot(): Bot {
+  return {
+    id: 'default',
+    name: 'larkmux-dev',
+    appId: 'cli_xxx',
+    appSecret: 'secret',
+    cwd: '/repo',
+    ownerOpenId: 'ou_xxx',
+    enabled: true,
+    disableStreamingCard: false,
   };
 }
 
@@ -46,5 +59,15 @@ describe('JsonSessionStore', () => {
     const dir = await mkdtemp(join(tmpdir(), 'larkmux-store-'));
     dirs.push(dir);
     expect(await new JsonSessionStore(join(dir, 'missing.json')).loadSessions()).toEqual([]);
+  });
+
+  it('保存并恢复 bot 配置', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkmux-store-'));
+    dirs.push(dir);
+    const store = new JsonSessionStore(join(dir, 'sessions.json'), join(dir, 'bots.json'));
+    await store.saveBots([bot()]);
+
+    expect(await store.loadBots()).toEqual([bot()]);
+    expect(JSON.parse(await readFile(join(dir, 'bots.json'), 'utf8'))).toHaveLength(1);
   });
 });

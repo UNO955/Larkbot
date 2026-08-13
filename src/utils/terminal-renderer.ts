@@ -41,10 +41,14 @@ const TRAEX_NOISE_RES = [
   /^\s*[▄▀█]+\s*$/,
   /^\s*█\s*◆\s*◆\s*█\s*$/,
 ];
+const TOOL_TRACE_RE = /^(?:Ran|Read|Searched for|Edited|Wrote|Opened|Listed|Globbed|Grep|Fetched|Called|Running)\b/i;
+const TOOL_TRACE_CONTINUATION_RE = /^\s+(?:\/|[A-Za-z0-9_.-]+\/|[A-Za-z]:\\|~\/)/;
+const THINKING_RE = /\b(?:I see the user|I want to|I think|I should|I shouldn't|I need to|I'll|Let's|we're getting this right|The user mentioned|it’s best to|it's best to)\b/i;
 
 export class TerminalRenderer {
   private term: InstanceType<typeof Terminal>;
   private lastHash = '';
+  private lastPartsHash = '';
   private turnStartY: number | undefined;
 
   constructor(cols = 100, rows = 30) {
@@ -78,6 +82,7 @@ export class TerminalRenderer {
   /** 新一轮开始：记录当前终端行，只展示本轮之后产生的内容。 */
   markNewTurn(): void {
     this.lastHash = '';
+    this.lastPartsHash = '';
     const buf = this.term.buffer.active;
     this.turnStartY = buf.baseY + buf.cursorY;
   }
@@ -87,11 +92,19 @@ export class TerminalRenderer {
    * 返回 content 和 changed 标记（与上次快照对比）。
    */
   snapshot(): { content: string; changed: boolean } {
-    const content = this.readViewport(true, this.turnStartY);
+    const content = this.snapshotParts().answer;
     const hash = createHash('md5').update(content).digest('hex');
     const changed = hash !== this.lastHash;
     this.lastHash = hash;
     return { content, changed };
+  }
+
+  snapshotParts(): { answer: string; trace: string; changed: boolean } {
+    const projected = projectVisibleContent(this.readViewport(true, this.turnStartY));
+    const hash = createHash('md5').update(`${projected.answer}\0${projected.trace}`).digest('hex');
+    const changed = hash !== this.lastPartsHash;
+    this.lastPartsHash = hash;
+    return { ...projected, changed };
   }
 
   /**
@@ -127,7 +140,7 @@ export class TerminalRenderer {
     }
     while (lines.length > 0 && BLANK_RE.test(lines[lines.length - 1])) lines.pop();
 
-    return extractFinalAnswer(lines.join('\n'));
+    return lines.join('\n').trim();
   }
 
   resize(cols: number, rows: number): void {
@@ -150,23 +163,40 @@ function isDisplayNoise(line: string): boolean {
     || TRAEX_NOISE_RES.some((pattern) => pattern.test(line));
 }
 
-function extractFinalAnswer(content: string): string {
+function projectVisibleContent(content: string): { answer: string; trace: string } {
   const trimmed = content.trim();
-  if (!trimmed) return '';
+  if (!trimmed) return { answer: '', trace: '' };
 
   const paragraphs = trimmed.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (paragraphs.length <= 1) return trimmed;
+  if (paragraphs.length === 0) return { answer: '', trace: '' };
 
-  const first = paragraphs[0];
-  if (
-    /\bI see the user\b/i.test(first)
-    || /\bSince I'm\b/i.test(first)
-    || /\bI want to\b/i.test(first)
-    || /\bLet's go ahead\b/i.test(first)
-    || /\bthere's no need for tools\b/i.test(first)
-  ) {
-    return paragraphs[paragraphs.length - 1];
+  const internal = paragraphs.map(isInternalTraceParagraph);
+  const hasInternal = internal.some(Boolean);
+  if (!hasInternal) return { answer: trimmed, trace: '' };
+
+  let lastInternalIndex = -1;
+  for (let i = paragraphs.length - 1; i >= 0; i--) {
+    if (internal[i]) {
+      lastInternalIndex = i;
+      break;
+    }
   }
+  const answerParagraphs = paragraphs.slice(lastInternalIndex + 1).filter((paragraph) => !isInternalTraceParagraph(paragraph));
+  if (answerParagraphs.length === 0) return { answer: '', trace: trimmed };
 
-  return trimmed;
+  return {
+    answer: answerParagraphs.join('\n\n').trim(),
+    trace: paragraphs.slice(0, lastInternalIndex + 1).join('\n\n').trim(),
+  };
+}
+
+function isInternalTraceParagraph(paragraph: string): boolean {
+  const rawLines = paragraph.split('\n');
+  const lines = rawLines.map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return true;
+  const text = lines.join(' ');
+  return THINKING_RE.test(text)
+    || lines.some((line) => TOOL_TRACE_RE.test(line))
+    || rawLines.every((line) => TOOL_TRACE_CONTINUATION_RE.test(line))
+    || lines.every((line) => /^\(?ctrl\+o to expand\)?$/i.test(line));
 }

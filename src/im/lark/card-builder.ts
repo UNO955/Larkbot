@@ -14,12 +14,18 @@ export interface TerminalCardOpts {
   body: string;
   status: StreamCardStatus;
   title?: string;
+  footer?: string;
+}
+
+export interface ThinkingCardOpts {
+  url: string;
+  status: StreamCardStatus;
 }
 
 const STATUS_META = {
-  working: { label: '正在处理', template: 'blue' },
-  completed: { label: '已完成', template: 'green' },
-  failed: { label: '处理失败', template: 'red' },
+  working: { icon: '⏳', label: '正在处理', template: 'blue' },
+  completed: { icon: '✅', label: '已完成', template: 'green' },
+  failed: { icon: '⚠️', label: '处理失败', template: 'red' },
 } as const;
 
 export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
@@ -40,7 +46,7 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
   elements.push({
     tag: 'markdown',
     text_size: 'notation_small_v2',
-    content: `<font color='grey'>TraeCode CLI · ${meta.label}</font>`,
+    content: `<font color='grey'>${opts.footer?.trim() || `${meta.icon} ${meta.label}`}</font>`,
   });
 
   return {
@@ -50,10 +56,54 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
         template: meta.template,
         title: {
           tag: 'plain_text',
-          content: `TraeCode · ${opts.title?.trim() || meta.label}`,
+          content: `${meta.icon} ${opts.title?.trim() || meta.label}`,
         },
       },
       elements,
+    },
+  };
+}
+
+export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
+  const meta = STATUS_META[opts.status];
+  return {
+    payload: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: meta.template,
+        title: {
+          tag: 'plain_text',
+          content: `${opts.status === 'completed' ? '✅ 思考完成' : opts.status === 'failed' ? '⚠️ 思考失败' : '🧠 思考中'}`,
+        },
+      },
+      elements: [
+        {
+          tag: 'markdown',
+          content: opts.status === 'working'
+            ? "<font color='grey'>正在思考和调用工具，过程已写入只读控制台。</font>"
+            : "<font color='grey'>思考过程已归档到只读控制台。</font>",
+        },
+        {
+          tag: 'action',
+          actions: [{
+            tag: 'button',
+            text: { tag: 'plain_text', content: '打开思考过程' },
+            type: 'default',
+            multi_url: {
+              url: opts.url,
+              pc_url: opts.url,
+              android_url: opts.url,
+              ios_url: opts.url,
+            },
+          }],
+        },
+        { tag: 'hr' },
+        {
+          tag: 'markdown',
+          text_size: 'notation_small_v2',
+          content: `<font color='grey'>${meta.icon} ${meta.label}</font>`,
+        },
+      ],
     },
   };
 }

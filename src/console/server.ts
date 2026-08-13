@@ -1,0 +1,548 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import type { SessionStore } from '../core/store.js';
+import type { Bot, Session } from '../core/types.js';
+import { logger } from '../utils/logger.js';
+
+export interface ConsoleServerOpts {
+  host: string;
+  port: number;
+  store: SessionStore;
+  botId: string;
+  traceStore?: TurnTraceStore;
+  sessionManager?: {
+    listSessions(): Session[];
+    closeSession(sessionId: string): Promise<Session | undefined>;
+    deleteSession(sessionId: string): Promise<boolean>;
+  };
+  onBotUpdated?(bot: Bot): void;
+}
+
+type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
+export type TurnTraceStatus = 'working' | 'completed' | 'failed';
+
+export interface TurnTrace {
+  id: string;
+  sessionId: string;
+  title: string;
+  status: TurnTraceStatus;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export class TurnTraceStore {
+  private traces = new Map<string, TurnTrace>();
+
+  create(input: { id: string; sessionId: string; title: string }): TurnTrace {
+    const now = new Date().toISOString();
+    const trace: TurnTrace = {
+      id: input.id,
+      sessionId: input.sessionId,
+      title: input.title,
+      status: 'working',
+      content: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.traces.set(trace.id, trace);
+    return trace;
+  }
+
+  update(id: string, patch: { content?: string; status?: TurnTraceStatus }): TurnTrace | undefined {
+    const trace = this.traces.get(id);
+    if (!trace) return undefined;
+    if (patch.content !== undefined) trace.content = patch.content;
+    if (patch.status) trace.status = patch.status;
+    trace.updatedAt = new Date().toISOString();
+    return trace;
+  }
+
+  get(id: string): TurnTrace | undefined {
+    return this.traces.get(id);
+  }
+}
+
+export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Server> {
+  const server = createServer((req, res) => {
+    void handleRequest(opts, req, res);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(opts.port, opts.host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  logger.info(`控制台已启动 http://${address.address}:${address.port}`);
+  return server;
+}
+
+async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const url = new URL(req.url || '/', 'http://larkmux.local');
+    if (req.method === 'GET' && url.pathname === '/') {
+      sendHtml(res, renderConsoleHtml());
+      return;
+    }
+    const traceMatch = url.pathname.match(/^\/trace\/([^/]+)$/);
+    if (req.method === 'GET' && traceMatch) {
+      const trace = opts.traceStore?.get(decodeURIComponent(traceMatch[1]));
+      if (!trace) throw httpError(404, 'trace_not_found');
+      sendHtml(res, renderTraceHtml(trace));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      sendJson(res, { ok: true });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/bot') {
+      const bot = await requireBot(opts);
+      sendJson(res, { bot: toPublicBot(bot) });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/sessions') {
+      sendJson(res, { sessions: await listSessions(opts) });
+      return;
+    }
+    const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+    if (sessionMatch && req.method === 'PATCH') {
+      const sessionId = decodeURIComponent(sessionMatch[1]);
+      const patch = await readJsonBody(req);
+      sendJson(res, { session: await updateSession(opts, sessionId, patch) });
+      return;
+    }
+    if (sessionMatch && req.method === 'DELETE') {
+      const sessionId = decodeURIComponent(sessionMatch[1]);
+      await deleteSession(opts, sessionId);
+      sendJson(res, { ok: true });
+      return;
+    }
+    if (req.method === 'PATCH' && url.pathname === '/api/bot') {
+      const patch = await readJsonBody(req);
+      const bot = await updateBot(opts, patch);
+      opts.onBotUpdated?.(bot);
+      sendJson(res, { bot: toPublicBot(bot) });
+      return;
+    }
+    sendJson(res, { error: 'not_found' }, 404);
+  } catch (error: any) {
+    const status = error?.statusCode || 500;
+    sendJson(res, { error: error?.message || 'internal_error' }, status);
+  }
+}
+
+async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
+  const bot = (await opts.store.loadBots()).find((item) => item.id === opts.botId);
+  if (!bot) throw httpError(404, 'bot_not_found');
+  return bot;
+}
+
+async function listSessions(opts: ConsoleServerOpts): Promise<Session[]> {
+  if (opts.sessionManager) return opts.sessionManager.listSessions();
+  return (await opts.store.loadSessions())
+    .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+}
+
+async function updateSession(opts: ConsoleServerOpts, sessionId: string, patch: unknown): Promise<Session> {
+  if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
+  const status = (patch as Record<string, unknown>).status;
+  if (status !== 'closed') throw httpError(400, 'unsupported_session_update');
+  const session = opts.sessionManager
+    ? await opts.sessionManager.closeSession(sessionId)
+    : await closeStoredSession(opts.store, sessionId);
+  if (!session) throw httpError(404, 'session_not_found');
+  return session;
+}
+
+async function deleteSession(opts: ConsoleServerOpts, sessionId: string): Promise<void> {
+  const deleted = opts.sessionManager
+    ? await opts.sessionManager.deleteSession(sessionId)
+    : await deleteStoredSession(opts.store, sessionId);
+  if (!deleted) throw httpError(404, 'session_not_found');
+}
+
+async function closeStoredSession(store: SessionStore, sessionId: string): Promise<Session | undefined> {
+  const sessions = await store.loadSessions();
+  const session = sessions.find((item) => item.sessionId === sessionId);
+  if (!session) return undefined;
+  session.status = 'closed';
+  await store.saveSessions(sessions);
+  return session;
+}
+
+async function deleteStoredSession(store: SessionStore, sessionId: string): Promise<boolean> {
+  const sessions = await store.loadSessions();
+  const next = sessions.filter((item) => item.sessionId !== sessionId);
+  if (next.length === sessions.length) return false;
+  await store.saveSessions(next);
+  return true;
+}
+
+async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> {
+  if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
+  const bots = await opts.store.loadBots();
+  const index = bots.findIndex((item) => item.id === opts.botId);
+  if (index < 0) throw httpError(404, 'bot_not_found');
+  const next = { ...bots[index] };
+  const input = patch as Record<string, unknown>;
+
+  if (typeof input.name === 'string') next.name = clean(input.name, 80);
+  if (typeof input.appId === 'string') next.appId = clean(input.appId, 128);
+  if (typeof input.appSecret === 'string' && input.appSecret.trim()) next.appSecret = input.appSecret.trim();
+  if (typeof input.cwd === 'string') next.cwd = clean(input.cwd, 500);
+  if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
+  if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
+  if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
+
+  if (!next.name) throw httpError(400, 'name_required');
+  if (!next.appId) throw httpError(400, 'app_id_required');
+  if (!next.appSecret) throw httpError(400, 'app_secret_required');
+  if (!next.cwd) throw httpError(400, 'cwd_required');
+  if (!next.ownerOpenId) throw httpError(400, 'owner_open_id_required');
+
+  bots[index] = next;
+  await opts.store.saveBots(bots);
+  return next;
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 1024 * 1024) throw httpError(413, 'body_too_large');
+    chunks.push(buffer);
+  }
+  const body = Buffer.concat(chunks).toString('utf8').trim();
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw httpError(400, 'invalid_json');
+  }
+}
+
+function toPublicBot(bot: Bot): PublicBot {
+  const { appSecret: _appSecret, ...rest } = bot;
+  return { ...rest, appSecretSet: !!bot.appSecret };
+}
+
+function clean(value: string, max: number): string {
+  return value.trim().slice(0, max);
+}
+
+function httpError(statusCode: number, message: string): Error & { statusCode: number } {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
+}
+
+function sendJson(res: ServerResponse, data: unknown, status = 200): void {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end(JSON.stringify(data));
+}
+
+function sendHtml(res: ServerResponse, html: string): void {
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end(html);
+}
+
+function renderConsoleHtml(): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>larkmux 控制台</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7fb; color: #1f2329; }
+    main { max-width: 1100px; margin: 40px auto; padding: 0 20px; display: grid; gap: 20px; }
+    .card { background: #fff; border: 1px solid #dee0e3; border-radius: 16px; box-shadow: 0 10px 30px rgba(31,35,41,.06); overflow: hidden; }
+    header { padding: 24px 28px; border-bottom: 1px solid #eff0f1; }
+    h1 { margin: 0; font-size: 24px; }
+    .sub { margin-top: 8px; color: #646a73; font-size: 14px; }
+    form { padding: 24px 28px 28px; display: grid; gap: 18px; }
+    label { display: grid; gap: 8px; font-weight: 600; font-size: 14px; }
+    input[type="text"], input[type="password"] { height: 42px; border: 1px solid #bbbfc4; border-radius: 10px; padding: 0 12px; font: inherit; }
+    input:focus { outline: 2px solid #3370ff33; border-color: #3370ff; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .check { display: flex; align-items: center; gap: 10px; font-weight: 500; color: #343840; }
+    .hint { color: #8f959e; font-size: 12px; font-weight: 400; }
+    footer { display: flex; align-items: center; gap: 12px; padding-top: 6px; }
+    button { height: 40px; border: 0; border-radius: 10px; background: #3370ff; color: white; padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    #status { color: #646a73; font-size: 14px; }
+    .warn { background: #fff7e6; color: #8f5a00; border: 1px solid #ffd591; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 28px; border-bottom: 1px solid #eff0f1; }
+    .toolbar h2 { margin: 0; font-size: 18px; }
+    .ghost { background: #f2f3f5; color: #1f2329; }
+    .danger { background: #f54a45; }
+    .sessions { padding: 0 28px 24px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; border-bottom: 1px solid #eff0f1; padding: 12px 8px; vertical-align: top; }
+    th { color: #646a73; font-weight: 700; }
+    code { background: #f2f3f5; border-radius: 6px; padding: 2px 5px; }
+    .muted { color: #8f959e; }
+    .status { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 12px; }
+    .status.active { background: #e8f7ee; color: #178b3a; }
+    .status.closed { background: #eff0f1; color: #646a73; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions button { height: 32px; padding: 0 10px; font-size: 13px; }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } main { margin: 20px auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <header>
+        <h1>larkmux 控制台</h1>
+        <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
+      </header>
+      <form id="bot-form">
+        <div class="row">
+          <label>名称
+            <input name="name" type="text" autocomplete="off">
+          </label>
+          <label>工作目录
+            <input name="cwd" type="text" autocomplete="off">
+          </label>
+        </div>
+        <div class="row">
+          <label>Lark App ID
+            <input name="appId" type="text" autocomplete="off">
+          </label>
+          <label>Lark App Secret
+            <input name="appSecret" type="password" autocomplete="new-password" placeholder="留空表示不修改">
+          </label>
+        </div>
+        <label>Owner Open ID
+          <input name="ownerOpenId" type="text" autocomplete="off">
+        </label>
+        <label class="check">
+          <input name="enabled" type="checkbox"> 启用 bot
+        </label>
+        <label class="check">
+          <input name="disableStreamingCard" type="checkbox"> 关闭流式卡片，只使用表情进度
+        </label>
+        <div class="warn">当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</div>
+        <footer>
+          <button id="save" type="submit">保存设置</button>
+          <span id="status"></span>
+        </footer>
+      </form>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
+          <h2>会话管理</h2>
+          <div class="sub">查看飞书话题到 traex 原生会话的路由。关闭会杀掉正在运行的 runtime，删除会移除路由记录。</div>
+        </div>
+        <button id="refresh-sessions" type="button" class="ghost">刷新</button>
+      </div>
+      <div class="sessions">
+        <table>
+          <thead>
+            <tr>
+              <th>会话</th>
+              <th>状态</th>
+              <th>CLI</th>
+              <th>位置</th>
+              <th>时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="sessions-body">
+            <tr><td colspan="6" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector('#bot-form');
+    const status = document.querySelector('#status');
+    const save = document.querySelector('#save');
+    const sessionsBody = document.querySelector('#sessions-body');
+    const refreshSessions = document.querySelector('#refresh-sessions');
+
+    function setStatus(text, failed = false) {
+      status.textContent = text;
+      status.style.color = failed ? '#d93026' : '#646a73';
+    }
+
+    async function loadBot() {
+      const res = await fetch('/api/bot');
+      if (!res.ok) throw new Error(await res.text());
+      const { bot } = await res.json();
+      form.name.value = bot.name || '';
+      form.cwd.value = bot.cwd || '';
+      form.appId.value = bot.appId || '';
+      form.appSecret.value = '';
+      form.ownerOpenId.value = bot.ownerOpenId || '';
+      form.enabled.checked = !!bot.enabled;
+      form.disableStreamingCard.checked = !!bot.disableStreamingCard;
+      form.appSecret.placeholder = bot.appSecretSet ? '已设置，留空表示不修改' : '尚未设置';
+      setStatus('已加载');
+    }
+
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    function compact(value, len = 32) {
+      const text = String(value ?? '').trim();
+      return text.length > len ? text.slice(0, len - 1) + '…' : text;
+    }
+
+    function formatTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+    }
+
+    async function loadSessions() {
+      const res = await fetch('/api/sessions');
+      if (!res.ok) throw new Error(await res.text());
+      const { sessions } = await res.json();
+      if (!sessions.length) {
+        sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">暂无会话</td></tr>';
+        return;
+      }
+      sessionsBody.innerHTML = sessions.map((s) => {
+        const closed = s.status === 'closed';
+        return '<tr>' +
+          '<td><strong>' + esc(compact(s.title || s.sessionId, 48)) + '</strong><br><span class="muted"><code>' + esc(compact(s.sessionId, 18)) + '</code></span></td>' +
+          '<td><span class="status ' + esc(s.status) + '">' + esc(s.status) + '</span></td>' +
+          '<td>' + esc(s.cliId || '-') + '<br><span class="muted">' + esc(compact(s.cliSessionId || 'no cli session', 22)) + '</span></td>' +
+          '<td><span class="muted">' + esc(compact(s.workingDir || '-', 42)) + '</span><br><span class="muted">' + esc(compact(s.threadId || s.rootMessageId || '-', 24)) + '</span></td>' +
+          '<td><span class="muted">创建 ' + esc(formatTime(s.createdAt)) + '</span><br><span class="muted">最后 ' + esc(formatTime(s.lastMessageAt)) + '</span></td>' +
+          '<td><div class="actions">' +
+            '<button type="button" class="ghost" data-action="close" data-session="' + esc(s.sessionId) + '"' + (closed ? ' disabled' : '') + '>关闭</button>' +
+            '<button type="button" class="danger" data-action="delete" data-session="' + esc(s.sessionId) + '">删除</button>' +
+          '</div></td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    sessionsBody.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const id = button.dataset.session;
+      const action = button.dataset.action;
+      if (action === 'delete' && !confirm('删除这个会话路由？这不会删除 traex 原生日志，但会让 larkmux 忘记这条飞书话题映射。')) return;
+      button.disabled = true;
+      try {
+        const res = await fetch('/api/sessions/' + encodeURIComponent(id), {
+          method: action === 'close' ? 'PATCH' : 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: action === 'close' ? JSON.stringify({ status: 'closed' }) : undefined,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await loadSessions();
+      } catch (error) {
+        alert('操作失败：' + error.message);
+        button.disabled = false;
+      }
+    });
+
+    refreshSessions.addEventListener('click', () => {
+      loadSessions().catch((error) => alert('刷新失败：' + error.message));
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      setStatus('保存中…');
+      const payload = {
+        name: form.name.value,
+        cwd: form.cwd.value,
+        appId: form.appId.value,
+        appSecret: form.appSecret.value,
+        ownerOpenId: form.ownerOpenId.value,
+        enabled: form.enabled.checked,
+        disableStreamingCard: form.disableStreamingCard.checked,
+      };
+      try {
+        const res = await fetch('/api/bot', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        form.appSecret.value = '';
+        await loadBot();
+        setStatus('已保存');
+      } catch (error) {
+        setStatus('保存失败：' + error.message, true);
+      } finally {
+        save.disabled = false;
+      }
+    });
+
+    loadBot().catch((error) => setStatus('加载失败：' + error.message, true));
+    loadSessions().catch((error) => {
+      sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function renderTraceHtml(trace: TurnTrace): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(trace.title)} · 思考过程</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f6f7fb; color: #1f2329; }
+    main { max-width: 1080px; margin: 32px auto; padding: 0 20px; }
+    .card { background: #fff; border: 1px solid #dee0e3; border-radius: 16px; box-shadow: 0 10px 30px rgba(31,35,41,.06); overflow: hidden; }
+    header { padding: 22px 26px; border-bottom: 1px solid #eff0f1; }
+    h1 { margin: 0; font-size: 22px; }
+    .meta { margin-top: 8px; color: #646a73; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
+    pre { margin: 0; padding: 24px 26px; white-space: pre-wrap; word-break: break-word; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .empty { color: #8f959e; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <header>
+        <h1>${escapeHtml(trace.title || '思考过程')}</h1>
+        <div class="meta">
+          <span>状态：${escapeHtml(trace.status)}</span>
+          <span>创建：${escapeHtml(trace.createdAt)}</span>
+          <span>更新：${escapeHtml(trace.updatedAt)}</span>
+          <span>Turn：${escapeHtml(trace.id)}</span>
+        </div>
+      </header>
+      <pre class="${trace.content.trim() ? '' : 'empty'}">${escapeHtml(trace.content.trim() || '暂无思考过程。')}</pre>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
