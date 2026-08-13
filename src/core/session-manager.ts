@@ -140,8 +140,17 @@ export class SessionManager {
   }
 }
 
-/** 去除 ANSI 转义序列（阶段一纯文本回贴用；阶段三换 headless xterm 渲染）。 */
-function stripAnsi(input: string): string {
-  // eslint-disable-next-line no-control-regex
-  return input.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+/** 去除 ANSI 转义序列（阶段一纯文本回贴用；阶段三换 headless xterm 渲染）。导出仅供单测。 */
+export function stripAnsi(input: string): string {
+  return (
+    input
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '') // CSI（含私有模式）
+      // OSC：traex 会发色彩查询 OSC 10/11，可能以 BEL(\x07) 或 ST(\x1b\\) 结尾；
+      // 早先只匹配 BEL 结尾导致 `]10;?\]11;?\` 残留到回贴文本。两种终止符都要处理。
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b[()][0-9A-B]/g, '') // 字符集选择
+  );
 }

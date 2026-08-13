@@ -15,9 +15,21 @@ export function createTraexAdapter(): CliAdapter {
       // 允许用 TRAEX_BIN 指定可执行文件的绝对路径（如
       // /home/you/.local/share/traex/current/traex），缺省回落到 PATH 里的 'traex'。
       const bin = process.env.TRAEX_BIN?.trim() || 'traex';
+
+      // traex 首次进入一个目录会弹 "Do you trust the contents of this
+      // directory?" 的 trust 确认界面（`❯ 1. Yes 2. No`）。远程遥控没有人去
+      // 手动按 1，会卡住整条队列，所以默认用 codex 家族的启动参数直接跳过
+      // trust + sandbox；设 TRAEX_SANDBOX=1 可关掉 bypass（保守回退，需人工过 trust）。
+      // --no-alt-screen 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
+      const bypass = process.env.TRAEX_SANDBOX?.trim() !== '1';
+      const args = [
+        ...(bypass ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+        '--no-alt-screen',
+      ];
+
       return {
         command: bin,
-        args: [],
+        args,
         cwd,
         env: {
           ...process.env as Record<string, string>,
