@@ -80,8 +80,8 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
         {
           tag: 'markdown',
           content: opts.status === 'working'
-            ? "<font color='grey'>正在思考和调用工具，过程已写入只读控制台。</font>"
-            : "<font color='grey'>思考过程已归档到只读控制台。</font>",
+            ? "<font color='grey'>正在思考和调用工具，可打开只读终端查看实时过程。</font>"
+            : "<font color='grey'>思考过程可在只读终端中查看。</font>",
         },
         {
           tag: 'action',
@@ -96,12 +96,6 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
               ios_url: opts.url,
             },
           }],
-        },
-        { tag: 'hr' },
-        {
-          tag: 'markdown',
-          text_size: 'notation_small_v2',
-          content: `<font color='grey'>${meta.icon} ${meta.label}</font>`,
         },
       ],
     },

@@ -1,6 +1,5 @@
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
-import { randomUUID } from 'node:crypto';
 import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
 import { logger } from '../utils/logger.js';
@@ -62,6 +61,8 @@ export interface ConversationManagerDeps {
   createTrace(input: { id: string; sessionId: string; title: string }): void;
   updateTrace(id: string, trace: string, status: CardStatus): void;
   traceUrl(id: string): string;
+  recordTerminalOutput?(sessionId: string, chunk: string): void;
+  closeTerminal?(sessionId: string): void;
   isStreamingCardDisabled(): boolean;
 }
 
@@ -213,6 +214,7 @@ export class ConversationManager {
   }
 
   private onData(runtime: Runtime, chunk: string): void {
+    this.deps.recordTerminalOutput?.(runtime.route.sessionId, chunk);
     runtime.renderer.write(chunk);
     if (!runtime.ready) {
       runtime.detector.feed(chunk);
@@ -243,13 +245,8 @@ export class ConversationManager {
       runtime.traceCardMessageId = runtime.route.initialCardMessageId;
       runtime.route.initialCardMessageId = undefined;
     }
-    runtime.traceTurnId = randomUUID();
-    runtime.traceUrl = this.deps.traceUrl(runtime.traceTurnId);
-    this.deps.createTrace({
-      id: runtime.traceTurnId,
-      sessionId: runtime.route.sessionId,
-      title: runtime.route.title,
-    });
+    runtime.traceTurnId = runtime.route.sessionId;
+    runtime.traceUrl = this.deps.traceUrl(runtime.route.sessionId);
     runtime.currentReplyAnchorMessageId = turn.replyAnchorMessageId;
     runtime.receivedReactionId = undefined;
     runtime.doneReactionSent = false;
@@ -300,6 +297,7 @@ export class ConversationManager {
       await this.removeReceivedReaction(runtime);
     }
     this.teardown(runtime);
+    this.deps.closeTerminal?.(runtime.route.sessionId);
     logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`);
     if (!recover) {
       if (!runtime.intentionalClose && !runtime.ready && runtime.route.threadId) {
@@ -363,9 +361,6 @@ export class ConversationManager {
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
-      if (runtime.traceTurnId) {
-        this.deps.updateTrace(runtime.traceTurnId, traceBody, status);
-      }
       if (!runtime.streamingCardDisabled && runtime.traceUrl && (runtime.traceCardMessageId || traceBody || status === 'working')) {
         if (!runtime.traceCardMessageId) {
           runtime.traceCardMessageId = await this.deps.postTrace(

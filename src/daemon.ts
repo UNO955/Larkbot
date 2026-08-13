@@ -20,7 +20,7 @@ import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt } from './core/prompt.js';
 import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
-import { startConsoleServer, TurnTraceStore } from './console/server.js';
+import { startConsoleServer, TerminalStreamStore } from './console/server.js';
 import type { ImMessage, ImReaction } from './im/types.js';
 import type { Bot, Session } from './core/types.js';
 
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   logger.info(`larkmux 启动，traex cwd=${cfg.traexCwd}`);
   const store = new JsonSessionStore();
-  const traceStore = new TurnTraceStore();
+  const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
 
   const im = createLarkAdapter({
@@ -64,12 +64,18 @@ async function main(): Promise<void> {
       await im.removeReaction(messageId, reactionId);
     },
     createTrace: (input) => {
-      traceStore.create(input);
+      void input;
     },
     updateTrace: (id, trace, status) => {
-      traceStore.update(id, { content: trace, status });
+      void id; void trace; void status;
     },
-    traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/trace/${encodeURIComponent(id)}`,
+    traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(id)}`,
+    recordTerminalOutput: (sessionId, chunk) => {
+      terminalStore.append(sessionId, chunk);
+    },
+    closeTerminal: (sessionId) => {
+      terminalStore.close(sessionId);
+    },
     isStreamingCardDisabled: () => activeBot.disableStreamingCard === true,
   });
   const consoleServer = await startConsoleServer({
@@ -77,7 +83,7 @@ async function main(): Promise<void> {
     port: cfg.consolePort,
     store,
     botId: activeBot.id,
-    traceStore,
+    terminalStore,
     sessionManager: sessions,
     onBotUpdated(bot) {
       activeBot = bot;

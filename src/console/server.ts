@@ -10,6 +10,7 @@ export interface ConsoleServerOpts {
   store: SessionStore;
   botId: string;
   traceStore?: TurnTraceStore;
+  terminalStore?: TerminalStreamStore;
   sessionManager?: {
     listSessions(): Session[];
     closeSession(sessionId: string): Promise<Session | undefined>;
@@ -63,6 +64,52 @@ export class TurnTraceStore {
   }
 }
 
+export class TerminalStreamStore {
+  private buffers = new Map<string, string[]>();
+  private subscribers = new Map<string, Set<ServerResponse>>();
+
+  constructor(private maxChars = 200_000) {}
+
+  append(sessionId: string, chunk: string): void {
+    const buffer = this.buffers.get(sessionId) ?? [];
+    buffer.push(chunk);
+    let size = buffer.reduce((sum, item) => sum + item.length, 0);
+    while (size > this.maxChars && buffer.length > 1) {
+      const removed = buffer.shift() ?? '';
+      size -= removed.length;
+    }
+    this.buffers.set(sessionId, buffer);
+    this.publish(sessionId, 'data', { chunk });
+  }
+
+  close(sessionId: string): void {
+    this.publish(sessionId, 'status', { status: 'closed' });
+  }
+
+  subscribe(sessionId: string, res: ServerResponse): void {
+    let set = this.subscribers.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.subscribers.set(sessionId, set);
+    }
+    set.add(res);
+    for (const chunk of this.buffers.get(sessionId) ?? []) {
+      writeSse(res, 'data', { chunk });
+    }
+    writeSse(res, 'status', { status: 'connected' });
+    res.on('close', () => {
+      set?.delete(res);
+      if (set?.size === 0) this.subscribers.delete(sessionId);
+    });
+  }
+
+  private publish(sessionId: string, event: string, data: unknown): void {
+    for (const res of this.subscribers.get(sessionId) ?? []) {
+      writeSse(res, event, data);
+    }
+  }
+}
+
 export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Server> {
   const server = createServer((req, res) => {
     void handleRequest(opts, req, res);
@@ -91,6 +138,26 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       const trace = opts.traceStore?.get(decodeURIComponent(traceMatch[1]));
       if (!trace) throw httpError(404, 'trace_not_found');
       sendHtml(res, renderTraceHtml(trace));
+      return;
+    }
+    const terminalMatch = url.pathname.match(/^\/terminal\/([^/]+)$/);
+    if (req.method === 'GET' && terminalMatch) {
+      const sessionId = decodeURIComponent(terminalMatch[1]);
+      const session = (await listSessions(opts)).find((item) => item.sessionId === sessionId);
+      if (!session) throw httpError(404, 'session_not_found');
+      sendHtml(res, renderTerminalHtml(session));
+      return;
+    }
+    const terminalEventsMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/events$/);
+    if (req.method === 'GET' && terminalEventsMatch) {
+      const sessionId = decodeURIComponent(terminalEventsMatch[1]);
+      if (!opts.terminalStore) throw httpError(404, 'terminal_not_available');
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+      });
+      opts.terminalStore.subscribe(sessionId, res);
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/health') {
@@ -254,6 +321,11 @@ function sendHtml(res: ServerResponse, html: string): void {
     'cache-control': 'no-store',
   });
   res.end(html);
+}
+
+function writeSse(res: ServerResponse, event: string, data: unknown): void {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function renderConsoleHtml(): string {
@@ -534,6 +606,86 @@ function renderTraceHtml(trace: TurnTrace): string {
       <pre class="${trace.content.trim() ? '' : 'empty'}">${escapeHtml(trace.content.trim() || '暂无思考过程。')}</pre>
     </section>
   </main>
+</body>
+</html>`;
+}
+
+function renderTerminalHtml(session: Session): string {
+  const eventUrl = `/api/terminal/${encodeURIComponent(session.sessionId)}/events`;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(session.title || '思考过程')} · 只读终端</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; background: #1a1b26; color: #a9b1d6; overflow: hidden; }
+    body { display: flex; flex-direction: column; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    header { height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border-bottom: 1px solid #2f3549; background: #16161e; }
+    .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; }
+    .meta { color: #7c8199; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+    #terminal { flex: 1; min-height: 0; width: 100%; }
+    #terminal .xterm { height: 100%; padding: 8px 10px; }
+    #status { position: fixed; right: 12px; bottom: 10px; z-index: 10; padding: 3px 8px; border-radius: 999px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: rgba(26,27,38,.86); color: #e0af68; }
+    #status.ok { color: #9ece6a; }
+    #status.err { color: #f7768e; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">${escapeHtml(session.title || '思考过程')}</div>
+    <div class="meta">只读 · ${escapeHtml(session.sessionId.slice(0, 8))}</div>
+  </header>
+  <div id="terminal"></div>
+  <div id="status">connecting</div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"><\/script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"><\/script>
+  <script>
+    const status = document.querySelector('#status');
+    const term = new Terminal({
+      convertEol: true,
+      cursorBlink: false,
+      disableStdin: true,
+      scrollback: 5000,
+      theme: {
+        background: '#1a1b26',
+        foreground: '#a9b1d6',
+        cursor: '#c0caf5',
+        black: '#15161e',
+        red: '#f7768e',
+        green: '#9ece6a',
+        yellow: '#e0af68',
+        blue: '#7aa2f7',
+        magenta: '#bb9af7',
+        cyan: '#7dcfff',
+        white: '#c0caf5',
+      },
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontSize: 13,
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.querySelector('#terminal'));
+    fit.fit();
+    window.addEventListener('resize', () => fit.fit());
+    function setStatus(text, cls) {
+      status.textContent = text;
+      status.className = cls || '';
+    }
+    const events = new EventSource(${JSON.stringify(eventUrl)});
+    events.addEventListener('data', (event) => {
+      const payload = JSON.parse(event.data);
+      if (payload.chunk) term.write(payload.chunk);
+      setStatus('live', 'ok');
+    });
+    events.addEventListener('status', (event) => {
+      const payload = JSON.parse(event.data);
+      setStatus(payload.status || 'connected', payload.status === 'closed' ? '' : 'ok');
+    });
+    events.onerror = () => setStatus('disconnected', 'err');
+  </script>
 </body>
 </html>`;
 }
