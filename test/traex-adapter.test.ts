@@ -45,21 +45,19 @@ describe('traex adapter spawnSpec', () => {
     expect(spec.args).toContain('--no-alt-screen');
   });
 
-  it('从 traex history token_count 读取会话累计 token', () => {
+  it('从 traex rollout token_count 读取会话累计 token', () => {
     const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
     process.env.TRAE_HOME = home;
-    mkdirSync(join(home, 'cli'), { recursive: true });
-    writeFileSync(join(home, 'cli', 'history.jsonl'), [
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), [
       JSON.stringify({
-        session_id: 'trae-1',
-        type: 'event_msg',
+        type: 'turn_context',
         payload: {
-          type: 'session_meta',
           model: 'gpt-5.5',
         },
       }),
       JSON.stringify({
-        session_id: 'trae-1',
         type: 'event_msg',
         payload: {
           type: 'token_count',
@@ -72,8 +70,9 @@ describe('traex adapter spawnSpec', () => {
           },
         },
       }),
+    ].join('\n') + '\n');
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-2.jsonl'), [
       JSON.stringify({
-        session_id: 'trae-2',
         type: 'event_msg',
         payload: {
           type: 'token_count',

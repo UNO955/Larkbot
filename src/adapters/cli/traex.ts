@@ -7,6 +7,7 @@
 import {
   closeSync,
   existsSync,
+  readdirSync,
   openSync,
   readFileSync,
   readSync,
@@ -116,7 +117,8 @@ export function createTraexAdapter(): CliAdapter {
     },
 
     getSessionUsage(cliSessionId: string): SessionTokenUsage | undefined {
-      return readTraexSessionUsage(traeHistoryPath(), cliSessionId);
+      const rolloutPath = findTraexRolloutPath(cliSessionId);
+      return rolloutPath ? readTraexSessionUsage(rolloutPath) : undefined;
     },
 
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
@@ -131,6 +133,11 @@ export function createTraexAdapter(): CliAdapter {
 function traeHistoryPath(): string {
   const home = process.env.TRAE_HOME?.trim() || join(homedir(), '.trae');
   return join(home, 'cli', 'history.jsonl');
+}
+
+function traeSessionsDir(): string {
+  const home = process.env.TRAE_HOME?.trim() || join(homedir(), '.trae');
+  return join(home, 'cli', 'sessions');
 }
 
 function fileSize(path: string): number {
@@ -174,7 +181,39 @@ function findHistoryMatch(path: string, fromByte: number, expectedText: string):
   return undefined;
 }
 
-function readTraexSessionUsage(path: string, cliSessionId: string): SessionTokenUsage | undefined {
+function findTraexRolloutPath(cliSessionId: string): string | undefined {
+  const root = traeSessionsDir();
+  if (!existsSync(root)) return undefined;
+  const matches: { path: string; mtimeMs: number }[] = [];
+  try {
+    walkSessionFiles(root, (path) => {
+      if (!path.endsWith('.jsonl')) return;
+      if (!path.includes(cliSessionId)) return;
+      try {
+        matches.push({ path, mtimeMs: statSync(path).mtimeMs });
+      } catch {
+        // Ignore files that disappear while scanning.
+      }
+    });
+  } catch {
+    return undefined;
+  }
+  matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return matches[0]?.path;
+}
+
+function walkSessionFiles(dir: string, onFile: (path: string) => void): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkSessionFiles(path, onFile);
+    } else if (entry.isFile()) {
+      onFile(path);
+    }
+  }
+}
+
+function readTraexSessionUsage(path: string): SessionTokenUsage | undefined {
   if (!existsSync(path)) return undefined;
   try {
     const content = readFileSync(path, 'utf8');
@@ -188,7 +227,6 @@ function readTraexSessionUsage(path: string, cliSessionId: string): SessionToken
       } catch {
         continue;
       }
-      if (!belongsToSession(entry, cliSessionId)) continue;
       const nextModel = extractModel(entry);
       if (nextModel) model = nextModel;
       const usage = extractTokenCountUsage(entry);
@@ -198,13 +236,6 @@ function readTraexSessionUsage(path: string, cliSessionId: string): SessionToken
   } catch {
     return undefined;
   }
-}
-
-function belongsToSession(entry: any, cliSessionId: string): boolean {
-  return entry?.session_id === cliSessionId
-    || entry?.sessionId === cliSessionId
-    || entry?.payload?.session_id === cliSessionId
-    || entry?.payload?.sessionId === cliSessionId;
 }
 
 function extractModel(entry: any): string {
