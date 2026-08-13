@@ -60,10 +60,11 @@ export function createTraexAdapter(): CliAdapter {
       };
     },
 
-    // traex 同时出现过 Codex 风格的 `›` 和 Claude 风格的 `❯` 提示符，
-    // 并会渲染 "Context 100% left" 状态栏。启动的 trust/选择器界面用 `❯ 1.`
-    // 作为菜单光标，必须排除带数字的选择行，否则会把首条消息误投进选择界面。
-    readyPattern: /(?:^|[\n\r])\s*[›❯](?!\s*\d+\.)|\d+% left/,
+    // traex 用 `❯` 或 `›` 作为输入提示符。启动的 trust/选择器界面用
+    // `❯ 1.` 作为菜单光标，必须排除带数字的选择行，否则会把首条消息误投
+    // 进选择界面。不匹配状态栏的 "Context 100% left"——它在欢迎屏就出现，
+    // 会导致 readySeen 提前置 true、idle 在命令出结果前就误判。
+    readyPattern: /(?:^|[\n\r])\s*[›❯](?!\s*\d+\.)/,
 
     // traex 无显式完成标记。
     completionPattern: undefined,
