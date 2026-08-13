@@ -1,0 +1,35 @@
+{
+  "name": "larkmux",
+  "version": "0.1.0",
+  "description": "飞书 <-> AI 编程 CLI 桥接工具",
+  "type": "module",
+  "main": "dist/daemon.js",
+  "bin": {
+    "larkmux": "dist/daemon.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/daemon.ts",
+    "start": "node dist/daemon.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/fix-pty-helper.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.64.0",
+    "@napi-rs/canvas": "^0.1.65",
+    "@xterm/headless": "^6.0.0",
+    "dotenv": "^17.3.1",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.0"
+  },
+  "license": "MIT"
+}
