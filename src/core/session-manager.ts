@@ -38,7 +38,6 @@ interface SessionRuntime {
   detector: IdleDetector;
   renderer: TerminalRenderer;
   flushTimer: ReturnType<typeof setTimeout> | null;
-  lastPosted: string;      // 上次已回贴的快照文本（去重，避免重复 patch）
   posting: boolean;        // 正在发/patch，避免并发重入
 }
 
@@ -75,7 +74,7 @@ export class SessionManager {
     const detector = new IdleDetector(this.deps.cli);
     const renderer = new TerminalRenderer(PTY_COLS, PTY_ROWS);
     const rt: SessionRuntime = {
-      session, detector, renderer, flushTimer: null, lastPosted: '', posting: false,
+      session, detector, renderer, flushTimer: null, posting: false,
     };
     this.runtimes.set(threadId, rt);
 
@@ -126,9 +125,9 @@ export class SessionManager {
     const next = s.queue.shift()!;
     s.status = 'busy';
     s.currentTurnText = next;
-    // 新一轮：起一条全新的流式卡片，重置去重基线
+    // 新一轮：起一条全新的流式卡片，重置渲染器 hash
     s.cardMessageId = undefined;
-    rt.lastPosted = '';
+    rt.renderer.markNewTurn();
     rt.detector.reset();          // 重新武装 idle 检测
     s.pty.write(next + '\r');
     logger.info(`→ traex thread=${s.threadId.slice(0, 10)}: ${next.slice(0, 40)}`);
@@ -154,18 +153,17 @@ export class SessionManager {
 
   /** 立即回贴当前快照：内容变化才发；首帧 create，后续 patch。 */
   private async flushNow(rt: SessionRuntime): Promise<void> {
-    if (rt.posting) return;                       // 避免并发重入
-    const text = rt.renderer.snapshot();
-    if (!text || text === rt.lastPosted) return;  // 空或没变，不发
+    if (rt.posting) return;                              // 避免并发重入
+    const { content, changed } = rt.renderer.snapshot();
+    if (!content || !changed) return;                    // 空或没变，不发
     rt.posting = true;
-    const body = text.length > 3800 ? text.slice(-3800) : text;  // 飞书文本上限保护
+    const body = content.length > 3800 ? content.slice(-3800) : content;  // 飞书文本上限保护
     try {
       if (!rt.session.cardMessageId) {
         rt.session.cardMessageId = await this.deps.post(rt.session.threadId, body);
       } else {
         await this.deps.patch(rt.session.cardMessageId, body);
       }
-      rt.lastPosted = text;
     } catch (e: any) {
       logger.error(`回贴失败: ${e?.message ?? e}`);
     } finally {
