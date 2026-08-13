@@ -83,6 +83,9 @@ export class SessionManager {
       if (session.status !== 'busy') return;
       session.status = 'idle';
       logger.info(`一轮结束（${source}）thread=${threadId.slice(0, 10)}`);
+      // DEBUG: dump raw viewport
+      const raw = rt.renderer.rawSnapshot();
+      logger.info(`[snapshot] len=${raw.length} preview=${JSON.stringify(raw.slice(0, 200))}`);
       this.flushNow(rt);   // 收尾贴一次最终快照
       this.drain(rt);
     });
@@ -160,6 +163,7 @@ export class SessionManager {
   private async flushNow(rt: SessionRuntime): Promise<void> {
     if (rt.posting) return;                              // 避免并发重入
     const { content, changed } = rt.renderer.snapshot();
+    logger.info(`[flush] contentLen=${content.length} changed=${changed} skip=${!content || !changed}`);
     if (!content || !changed) return;                    // 空或没变，不发
     rt.posting = true;
     const body = content.length > 3800 ? content.slice(-3800) : content;  // 飞书文本上限保护
