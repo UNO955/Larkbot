@@ -19,6 +19,11 @@ import { SessionManager } from './core/session-manager.js';
 import { buildTerminalCard } from './im/lark/card-builder.js';
 import type { ImMessage, ImReaction } from './im/types.js';
 
+/** 将用户消息包装为单行 prompt，避免多行 PTY 写入时的换行问题。 */
+function wrapUserPrompt(content: string): string {
+  return `<user_message> ${content} </user_message>`;
+}
+
 async function main(): Promise<void> {
   const cfg = loadConfig();
   logger.info(`larkmux 启动，traex cwd=${cfg.traexCwd}`);
@@ -48,7 +53,7 @@ async function main(): Promise<void> {
       try {
         const { threadId } = await im.replyInThread(msg.id, '🧵 会话已创建，traex 启动中…');
         sessions.create(threadId, msg.chatId, cfg.larkAppId);
-        if (msg.content) sessions.enqueue(threadId, msg.content);
+        if (msg.content) sessions.enqueue(threadId, wrapUserPrompt(msg.content));
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
       }
@@ -61,7 +66,7 @@ async function main(): Promise<void> {
         await im.reply(msg.threadId, '⚠️ 会话已失效，请重新 @ 我开启新会话。', 'text');
         return;
       }
-      sessions.enqueue(msg.threadId, msg.content);
+      sessions.enqueue(msg.threadId, wrapUserPrompt(msg.content));
     },
 
     // ③ 表情事件：阶段一不处理。
