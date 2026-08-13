@@ -139,6 +139,11 @@ export class SessionManager {
     s.lastDataAt = Date.now();
     rt.renderer.write(chunk);     // 屏幕快照渲染
     rt.detector.feed(chunk);      // 驱动 idle 判定
+    // DEBUG: 看 raw PTY 流里到底有没有 ❯
+    const stripped = chunk.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]|\x1b\[[?]?[0-9;]*[hlmsuJ]/g, '');
+    if (stripped.trim().length > 0) {
+      logger.info(`[PTY] ${JSON.stringify(stripped.trim().slice(0, 200))}`);
+    }
     this.armFlush(rt);
   }
 
