@@ -4,6 +4,7 @@
  * traex 屏幕层没有 completionPattern，一轮结束完全靠 IdleDetector 的
  * quiescence（静默）+ spinner guard + readyPattern gate 三重启发式判定。
  */
+import { realpathSync } from 'node:fs';
 import type { CliAdapter, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
@@ -17,13 +18,34 @@ export function createTraexAdapter(): CliAdapter {
       const bin = process.env.TRAEX_BIN?.trim() || 'traex';
 
       // traex 首次进入一个目录会弹 "Do you trust the contents of this
-      // directory?" 的 trust 确认界面（`❯ 1. Yes 2. No`）。远程遥控没有人去
-      // 手动按 1，会卡住整条队列，所以默认用 codex 家族的启动参数直接跳过
-      // trust + sandbox；设 TRAEX_SANDBOX=1 可关掉 bypass（保守回退，需人工过 trust）。
-      // --no-alt-screen 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
+      // directory?" 的 folder-trust 界面（`❯ 1. Yes 2. No`）。远程遥控没有人去
+      // 手动按 1，会卡住整条队列。
+      //
+      // 注意：`--dangerously-bypass-approvals-and-sandbox` 只跳过“命令执行”的
+      // approval/sandbox，并不跳过 folder trust——后者是按目录持久化在
+      // traecli.toml 的独立门（[projects."<dir>"].trust_level）。所以这里直接用
+      // `-c` 把当前目录的 trust_level 注入为 trusted，从根上不弹 trust 界面。
+      //
+      // traex 内部用 realpath 归一化目录 key（如 /home→/data00/home 软链），
+      // 因此 key 必须用规范化后的真实路径，否则匹配不上、trust 仍会弹。
+      let trustPath = cwd;
+      try {
+        trustPath = realpathSync(cwd);
+      } catch {
+        // cwd 尚不存在等边界情况：回落到原始路径，不阻断启动。
+      }
+
+      // TRAEX_SANDBOX=1 时保守回退：既不注入 trust 也不 bypass，交由人工过 trust。
       const bypass = process.env.TRAEX_SANDBOX?.trim() !== '1';
       const args = [
-        ...(bypass ? ['--dangerously-bypass-approvals-and-sandbox'] : []),
+        ...(bypass
+          ? [
+              '-c',
+              `projects.${JSON.stringify(trustPath)}.trust_level="trusted"`,
+              '--dangerously-bypass-approvals-and-sandbox',
+            ]
+          : []),
+        // 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
         '--no-alt-screen',
       ];
 
