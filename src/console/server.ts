@@ -140,6 +140,13 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendHtml(res, renderTraceHtml(trace));
       return;
     }
+    const sessionCloseMatch = url.pathname.match(/^\/sessions\/([^/]+)\/close$/);
+    if (req.method === 'GET' && sessionCloseMatch) {
+      const sessionId = decodeURIComponent(sessionCloseMatch[1]);
+      const session = await updateSession(opts, sessionId, { status: 'closed' });
+      sendHtml(res, renderSessionClosedHtml(session));
+      return;
+    }
     const terminalMatch = url.pathname.match(/^\/terminal\/([^/]+)$/);
     if (req.method === 'GET' && terminalMatch) {
       const sessionId = decodeURIComponent(terminalMatch[1]);
@@ -818,6 +825,30 @@ function renderTerminalHtml(session: Session): string {
     });
     events.onerror = () => setStatus('disconnected', 'err');
   </script>
+</body>
+</html>`;
+}
+
+function renderSessionClosedHtml(session: Session): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>会话已关闭</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f7f8fa; color: #1f2329; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(420px, calc(100vw - 32px)); border: 1px solid #dee0e3; border-radius: 14px; background: #fff; padding: 24px; box-shadow: 0 12px 32px rgba(31,35,41,.08); }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0; color: #646a73; line-height: 1.6; }
+    code { color: #3370ff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>会话已关闭</h1>
+    <p>会话 <code>${escapeHtml(session.sessionId)}</code> 已标记为 closed，路由记录仍会保留。</p>
+  </main>
 </body>
 </html>`;
 }

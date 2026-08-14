@@ -195,7 +195,6 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     },
     sendCard,
     updateCard,
-      ackRead,
     addReaction,
     removeReaction,
     getBotOpenId: () => botOpenId,
@@ -229,35 +228,6 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     } catch (error: any) {
       logger.warn(`读取引用消息失败 message=${messageId}: ${error?.message ?? error}`);
       return { messageId };
-    }
-  }
-
-  async function ackRead(messageId: string): Promise<void> {
-    let ackMessageId = '';
-    try {
-      const res: any = await client.im.v1.message.reply({
-        path: { message_id: messageId },
-        data: {
-          msg_type: 'text',
-          content: JSON.stringify({ text: '\u200b' }),
-          reply_in_thread: true,
-        },
-      });
-      if (res.code !== 0) throw new Error(`${res.msg} (code ${res.code})`);
-      ackMessageId = res.data?.message_id ?? '';
-    } catch (error: any) {
-      logger.warn(`发送已读 ack 失败 message=${messageId}: ${error?.message ?? error}`);
-      return;
-    }
-
-    if (!ackMessageId) return;
-    try {
-      const res: any = await client.im.v1.message.delete({
-        path: { message_id: ackMessageId },
-      });
-      if (res.code !== 0) throw new Error(`${res.msg} (code ${res.code})`);
-    } catch (error: any) {
-      logger.warn(`撤回已读 ack 失败 message=${ackMessageId}: ${error?.message ?? error}`);
     }
   }
 

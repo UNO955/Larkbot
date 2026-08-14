@@ -20,6 +20,7 @@ export interface TerminalCardOpts {
 
 export interface ThinkingCardOpts {
   url: string;
+  closeUrl: string;
   status: StreamCardStatus;
   footer?: string;
 }
@@ -88,17 +89,30 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
     },
     {
       tag: 'action',
-      actions: [{
-        tag: 'button',
-        text: { tag: 'plain_text', content: '打开思考过程' },
-        type: 'default',
-        multi_url: {
-          url: opts.url,
-          pc_url: opts.url,
-          android_url: opts.url,
-          ios_url: opts.url,
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '打开思考过程' },
+          type: 'default',
+          multi_url: {
+            url: opts.url,
+            pc_url: opts.url,
+            android_url: opts.url,
+            ios_url: opts.url,
+          },
         },
-      }],
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '关闭会话' },
+          type: 'default',
+          multi_url: {
+            url: opts.closeUrl,
+            pc_url: opts.closeUrl,
+            android_url: opts.closeUrl,
+            ios_url: opts.closeUrl,
+          },
+        },
+      ],
     },
   ];
   if (opts.footer?.trim()) {

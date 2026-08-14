@@ -29,10 +29,15 @@ describe('buildTerminalCard', () => {
   it('思考卡可在底部展示累计 token', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
+      closeUrl: 'http://console/sessions/lm-1/close',
       status: 'completed',
       footer: '🪙 累计 Token ↑15K ↓3.5K',
     }).payload;
     expect(card.header.template).toBe('green');
+    expect(card.elements[1].actions[0].text.content).toBe('打开思考过程');
+    expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
+    expect(card.elements[1].actions[1].text.content).toBe('关闭会话');
+    expect(card.elements[1].actions[1].multi_url.url).toBe('http://console/sessions/lm-1/close');
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
 });

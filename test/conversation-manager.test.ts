@@ -95,6 +95,7 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -150,6 +151,7 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
     await manager.restore();
@@ -197,6 +199,7 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -233,7 +236,6 @@ describe('ConversationManager', () => {
     const child = fakePty();
     const addReaction = vi.fn(async () => 'reaction-1');
     const removeReaction = vi.fn(async () => undefined);
-    const ackRead = vi.fn(async () => undefined);
     const manager = new ConversationManager({
       cli,
       store,
@@ -243,12 +245,12 @@ describe('ConversationManager', () => {
       postTrace: async () => 'trace-card-1',
       patchTrace: async () => undefined,
       notify: async () => undefined,
-      ackRead,
       addReaction,
       removeReaction,
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -256,7 +258,6 @@ describe('ConversationManager', () => {
     await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
     child.emitData('❯ ');
     await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'Get'));
-    await vi.waitFor(() => expect(ackRead).toHaveBeenCalledWith('om-current-user'));
 
     child.emitData('TURN_DONE');
     await vi.waitFor(() => expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1'), { timeout: 1500 });
@@ -306,6 +307,7 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -328,6 +330,7 @@ describe('ConversationManager', () => {
     await vi.waitFor(() => expect(postTrace).toHaveBeenCalledWith(
       'omt-1',
       'http://console/trace/lm-1',
+      'http://console/sessions/lm-1/close',
       'completed',
       'om-current-user',
       '🪙 累计 Token ↑15K ↓3.5K · gpt-5.5',
@@ -372,6 +375,7 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
+      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => true,
     });
 

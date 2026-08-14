@@ -68,8 +68,6 @@ export interface ImAdapter {
 
   sendCard(threadId: string, card: ImCard, replyAnchorMessageId?: string): Promise<string>;
   updateCard(messageId: string, card: ImCard): Promise<void>;
-    /** 尽力触发 IM 客户端的文本已读路径；失败不影响主流程。 */
-    ackRead?(messageId: string): Promise<void>;
 
   /** 给某条消息加表情，返回 reactionId（用于后续删除）。阶段三进度指示用。 */
   addReaction(messageId: string, emojiType: string): Promise<string>;

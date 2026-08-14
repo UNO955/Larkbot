@@ -122,4 +122,30 @@ describe('console terminal page', () => {
     expect(publicBot.appSecret).toBeUndefined();
     expect(publicBot.appSecretSet).toBe(true);
   });
+
+  it('卡片关闭入口只关闭会话，不删除路由记录', async () => {
+    let savedSessions: Session[] = [structuredClone(session)];
+    const store: SessionStore = {
+      loadBots: async () => [bot],
+      saveBots: async () => undefined,
+      loadSessions: async () => savedSessions,
+      saveSessions: async (sessions) => { savedSessions = structuredClone(sessions); },
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const close = await fetch(`${base}/sessions/lm-1/close`);
+    expect(close.status).toBe(200);
+    expect(await close.text()).toContain('会话已关闭');
+
+    expect(savedSessions).toHaveLength(1);
+    expect(savedSessions[0].sessionId).toBe('lm-1');
+    expect(savedSessions[0].status).toBe('closed');
+  });
 });

@@ -46,17 +46,14 @@ async function main(): Promise<void> {
     patch: async (messageId, text, status, replyToName, replySignature) => {
       await im.updateCard(messageId, buildTerminalCard({ body: text, status, replyToName, replySignature }));
     },
-    postTrace: async (threadId, traceUrl, status, replyAnchorMessageId, footer) => {
-      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, status, footer }), replyAnchorMessageId);
+    postTrace: async (threadId, traceUrl, closeUrl, status, replyAnchorMessageId, footer) => {
+      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, closeUrl, status, footer }), replyAnchorMessageId);
     },
-    patchTrace: async (messageId, traceUrl, status, footer) => {
-      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, status, footer }));
+    patchTrace: async (messageId, traceUrl, closeUrl, status, footer) => {
+      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, closeUrl, status, footer }));
     },
     notify: async (threadId, text, replyAnchorMessageId) => {
       await im.reply(threadId, text, 'text', replyAnchorMessageId);
-    },
-    ackRead: async (messageId) => {
-      await im.ackRead?.(messageId);
     },
     addReaction: async (messageId, emojiType) => {
       return im.addReaction(messageId, emojiType);
@@ -71,6 +68,7 @@ async function main(): Promise<void> {
       void id; void trace; void status;
     },
     traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(id)}`,
+    closeUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/sessions/${encodeURIComponent(id)}/close`,
     recordTerminalOutput: (sessionId, chunk) => {
       terminalStore.append(sessionId, chunk);
     },
