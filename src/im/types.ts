@@ -39,6 +39,12 @@ export interface ImReaction {
   operatorId: string;
 }
 
+export interface ImCardAction {
+  messageId: string;
+  operatorId: string;
+  value: unknown;
+}
+
 export interface ImCard {
   payload: unknown;
 }
@@ -51,6 +57,8 @@ export interface ImEventHandler {
   onThreadReply(msg: ImMessage): Promise<void>;
   /** 表情回复事件（阶段一 no-op；阶段三用于进度指示相关判定）。 */
   onReaction(reaction: ImReaction): Promise<void>;
+  /** 交互卡片按钮回调。 */
+  onCardAction(action: ImCardAction): Promise<void>;
 }
 
 export interface ImAdapter {

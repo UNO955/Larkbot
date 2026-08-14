@@ -4,7 +4,10 @@ import { parseMessageEvent } from '../src/im/lark/message-parser.js';
 /** 构造一个 im.message.receive_v1 的最小事件 data。 */
 function evt(over: Record<string, any> = {}): any {
   return {
-    sender: { sender_id: { open_id: over.senderOpenId ?? 'ou_owner' } },
+    sender: {
+      sender_id: { open_id: over.senderOpenId ?? 'ou_owner' },
+      sender_name: over.senderName,
+    },
     message: {
       message_id: 'om_1',
       chat_id: 'oc_1',
@@ -25,6 +28,11 @@ describe('parseMessageEvent', () => {
     expect(r!.text).toBe('hello');
     expect(r!.senderOpenId).toBe('ou_owner');
     expect(r!.chatId).toBe('oc_1');
+  });
+
+  it('解析发送人展示名', () => {
+    const r = parseMessageEvent(evt({ senderName: '孟宁' }));
+    expect(r!.senderName).toBe('孟宁');
   });
 
   it('不支持的消息类型返回 null', () => {

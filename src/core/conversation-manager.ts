@@ -19,6 +19,7 @@ interface QueuedTurn {
   content: string;
   fallbackOpening: string;
   replyAnchorMessageId?: string;
+  replyToId?: string;
   replySignature?: string;
   replyToName?: string;
 }
@@ -38,9 +39,10 @@ interface Runtime {
   traceCardMessageId?: string;
   traceTurnId?: string;
   traceUrl?: string;
-  closeUrl?: string;
+  interruptSessionId?: string;
   streamingCardDisabled: boolean;
   currentReplyAnchorMessageId?: string;
+  currentReplyToId?: string;
   currentReplySignature?: string;
   currentReplyToName?: string;
   receivedReactionId?: string;
@@ -53,23 +55,22 @@ interface Runtime {
   posting: boolean;
 }
 
-type CardStatus = 'working' | 'completed' | 'failed';
+type CardStatus = 'working' | 'completed' | 'failed' | 'stopped';
 
 export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string): Promise<void>;
-  postTrace(threadId: string, traceUrl: string, closeUrl: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
-  patchTrace(messageId: string, traceUrl: string, closeUrl: string, status: CardStatus, footer?: string): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string): Promise<void>;
+  postTrace(threadId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
+  patchTrace(messageId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, footer?: string): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
   addReaction(messageId: string, emojiType: string): Promise<string>;
   removeReaction(messageId: string, reactionId: string): Promise<void>;
   createTrace(input: { id: string; sessionId: string; title: string }): void;
   updateTrace(id: string, trace: string, status: CardStatus): void;
   traceUrl(id: string): string;
-  closeUrl(id: string): string;
   recordTerminalOutput?(sessionId: string, chunk: string): void;
   closeTerminal?(sessionId: string): void;
   isStreamingCardDisabled(): boolean;
@@ -125,6 +126,27 @@ export class ConversationManager {
     return session;
   }
 
+  async interruptSession(sessionId: string): Promise<Session | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    const runtime = this.runtimes.get(sessionId);
+    if (!runtime) return session;
+    runtime.queue = [];
+    this.clearFirstPromptFallback(runtime);
+    runtime.pendingFlushStatus = undefined;
+    const wasBusy = runtime.status === 'busy' || runtime.draining;
+    runtime.status = 'idle';
+    runtime.draining = false;
+    runtime.detector.reset();
+    if (wasBusy) {
+      try { runtime.pty.write('\x03'); } catch { /* process may already be gone */ }
+      await this.removeReceivedReaction(runtime);
+    }
+    await this.patchTraceStopped(runtime);
+    logger.info(`已停止本轮思考 session=${sessionId.slice(0, 8)}`);
+    return session;
+  }
+
   async deleteSession(sessionId: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
@@ -139,7 +161,46 @@ export class ConversationManager {
     return true;
   }
 
-  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string): Promise<void> {
+  async cleanupStaleSessions(opts: {
+    idleCloseMs: number;
+    closedRetentionMs: number;
+    now?: Date;
+  }): Promise<{ closed: number; deleted: number }> {
+    const nowMs = opts.now?.getTime() ?? Date.now();
+    let closed = 0;
+    let deleted = 0;
+    for (const session of [...this.sessions.values()]) {
+      const idleMs = nowMs - sessionTimestamp(session);
+      if (session.status === 'active' && opts.idleCloseMs > 0 && idleMs >= opts.idleCloseMs) {
+        const runtime = this.runtimes.get(session.sessionId);
+        if (runtime && (runtime.status === 'busy' || runtime.draining)) continue;
+        session.status = 'closed';
+        if (runtime) {
+          runtime.intentionalClose = true;
+          try { runtime.pty.kill(); } catch { /* already exited */ }
+          this.teardown(runtime);
+          this.deps.closeTerminal?.(session.sessionId);
+        }
+        closed += 1;
+        continue;
+      }
+      if (session.status === 'closed' && opts.closedRetentionMs > 0 && idleMs >= opts.closedRetentionMs) {
+        const runtime = this.runtimes.get(session.sessionId);
+        if (runtime) {
+          runtime.intentionalClose = true;
+          try { runtime.pty.kill(); } catch { /* already exited */ }
+          this.teardown(runtime);
+          this.deps.closeTerminal?.(session.sessionId);
+        }
+        this.sessions.delete(session.sessionId);
+        deleted += 1;
+      }
+    }
+    if (closed || deleted) await this.persist();
+    return { closed, deleted };
+  }
+
+  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string): Promise<void> {
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -149,6 +210,7 @@ export class ConversationManager {
       content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
       fallbackOpening: opening,
       replyAnchorMessageId,
+      replyToId,
       replySignature,
       replyToName,
     });
@@ -258,8 +320,9 @@ export class ConversationManager {
     }
     runtime.traceTurnId = runtime.route.sessionId;
     runtime.traceUrl = this.deps.traceUrl(runtime.route.sessionId);
-    runtime.closeUrl = this.deps.closeUrl(runtime.route.sessionId);
+    runtime.interruptSessionId = runtime.route.sessionId;
     runtime.currentReplyAnchorMessageId = turn.replyAnchorMessageId;
+    runtime.currentReplyToId = turn.replyToId;
     runtime.currentReplySignature = turn.replySignature;
     runtime.currentReplyToName = turn.replyToName;
     runtime.receivedReactionId = undefined;
@@ -334,6 +397,9 @@ export class ConversationManager {
       content: turn.fallbackOpening,
       fallbackOpening: turn.fallbackOpening,
       replyAnchorMessageId: turn.replyAnchorMessageId,
+      replyToId: turn.replyToId,
+      replySignature: turn.replySignature,
+      replyToName: turn.replyToName,
     })));
   }
 
@@ -374,24 +440,24 @@ export class ConversationManager {
     if (!answer && !trace && (!changed && runtime.lastCardStatus === status)) return;
     runtime.posting = true;
     const final = status === 'working' ? undefined : await this.waitForSessionFinal(runtime);
-    const sourceAnswer = final?.text || answer;
+    const sourceAnswer = cleanAnswer(final?.text || answer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
-      if (!runtime.streamingCardDisabled && runtime.traceUrl && runtime.closeUrl && (runtime.traceCardMessageId || traceBody || status === 'working' || !!footer)) {
+      if (!runtime.streamingCardDisabled && runtime.traceUrl && runtime.interruptSessionId && (runtime.traceCardMessageId || traceBody || status === 'working' || !!footer)) {
         if (!runtime.traceCardMessageId) {
           runtime.traceCardMessageId = await this.deps.postTrace(
             runtime.route.threadId,
             runtime.traceUrl,
-            runtime.closeUrl,
+            runtime.interruptSessionId,
             status,
             runtime.currentReplyAnchorMessageId,
             footer,
           );
         } else {
-          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.closeUrl, status, footer);
+          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, status, footer);
         }
       }
       if (status !== 'working' && answerBody) {
@@ -403,9 +469,10 @@ export class ConversationManager {
             runtime.currentReplyAnchorMessageId,
             runtime.currentReplyToName,
             runtime.currentReplySignature,
+            runtime.currentReplyToId,
           );
         } else {
-          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, runtime.currentReplyToName, runtime.currentReplySignature);
+          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, runtime.currentReplyToName, runtime.currentReplySignature, runtime.currentReplyToId);
         }
       }
       runtime.lastCardStatus = status;
@@ -441,6 +508,16 @@ export class ConversationManager {
     }
   }
 
+  private async patchTraceStopped(runtime: Runtime): Promise<void> {
+    if (runtime.streamingCardDisabled || !runtime.traceUrl || !runtime.interruptSessionId || !runtime.traceCardMessageId) return;
+    try {
+      await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, 'stopped');
+      runtime.lastCardStatus = 'stopped';
+    } catch (error: any) {
+      logger.warn(`更新停止思考卡失败 session=${runtime.route.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+    }
+  }
+
   private async waitForSessionFinal(runtime: Runtime): Promise<{ key: string; text: string } | undefined> {
     const cliSessionId = runtime.route.cliSessionId;
     if (!cliSessionId || !this.deps.cli.getSessionFinal) return undefined;
@@ -471,8 +548,13 @@ async function delay(ms: number): Promise<void> {
 }
 
 function strongerStatus(current: CardStatus | undefined, next: CardStatus): CardStatus {
-  const rank: Record<CardStatus, number> = { working: 0, completed: 1, failed: 2 };
+  const rank: Record<CardStatus, number> = { working: 0, completed: 1, stopped: 2, failed: 3 };
   return !current || rank[next] > rank[current] ? next : current;
+}
+
+function sessionTimestamp(session: Session): number {
+  const parsed = Date.parse(session.lastMessageAt || session.createdAt);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function sessionUsageFooter(usage: SessionTokenUsage | undefined): string | undefined {
@@ -482,6 +564,12 @@ function sessionUsageFooter(usage: SessionTokenUsage | undefined): string | unde
   if (input <= 0 && output <= 0) return undefined;
   const model = usage.model ? ` · ${usage.model}` : '';
   return `🪙 累计 Token ↑${formatTokenCount(input)} ↓${formatTokenCount(output)}${model}`;
+}
+
+function cleanAnswer(answer: string): string {
+  const text = answer.trim();
+  if (text === 'BOTMUX_NOTHING_TO_SEND') return '';
+  return text;
 }
 
 function formatTokenCount(value: number): string {

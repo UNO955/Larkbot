@@ -7,7 +7,7 @@
  * 有意做薄：具体逻辑在 im/lark 与 core/session-manager，这里只负责编排与生命周期。
  *
  * 说明（阶段一范围）：
- *   - 关闭会话由「卡片按钮 / 控制台」触发（阶段三/四实现），不是表情。
+ *   - 停止思考由「卡片按钮 / 控制台」触发（阶段三/四实现），不是表情。
  *   - 表情是「关闭流式卡片」后的轻量进度指示（收到→GoGoGo，完成→DONE），
  *     属阶段三卡片体系的一部分，阶段一不实现。
  */
@@ -40,17 +40,17 @@ async function main(): Promise<void> {
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
-    post: async (threadId, text, status, replyAnchorMessageId, replyToName, replySignature) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replyToName, replySignature }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature }), replyAnchorMessageId);
     },
-    patch: async (messageId, text, status, replyToName, replySignature) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replyToName, replySignature }));
+    patch: async (messageId, text, status, _replyToName, replySignature) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature }));
     },
-    postTrace: async (threadId, traceUrl, closeUrl, status, replyAnchorMessageId, footer) => {
-      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, closeUrl, status, footer }), replyAnchorMessageId);
+    postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer) => {
+      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }), replyAnchorMessageId);
     },
-    patchTrace: async (messageId, traceUrl, closeUrl, status, footer) => {
-      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, closeUrl, status, footer }));
+    patchTrace: async (messageId, traceUrl, interruptSessionId, status, footer) => {
+      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }));
     },
     notify: async (threadId, text, replyAnchorMessageId) => {
       await im.reply(threadId, text, 'text', replyAnchorMessageId);
@@ -68,7 +68,6 @@ async function main(): Promise<void> {
       void id; void trace; void status;
     },
     traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(id)}`,
-    closeUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/sessions/${encodeURIComponent(id)}/close`,
     recordTerminalOutput: (sessionId, chunk) => {
       terminalStore.append(sessionId, chunk);
     },
@@ -95,6 +94,24 @@ async function main(): Promise<void> {
       im.registerThreadAnchor(session.threadId, session.anchorMessageId);
     }
   }
+  const cleanupSessions = async () => {
+    try {
+      const result = await sessions.cleanupStaleSessions({
+        idleCloseMs: cfg.sessionIdleCloseMs,
+        closedRetentionMs: cfg.sessionClosedRetentionMs,
+      });
+      if (result.closed || result.deleted) {
+        logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`);
+      }
+    } catch (error: any) {
+      logger.warn(`会话清理失败: ${error?.message ?? error}`);
+    }
+  };
+  await cleanupSessions();
+  const cleanupTimer = cfg.sessionCleanupIntervalMs > 0
+    ? setInterval(() => void cleanupSessions(), cfg.sessionCleanupIntervalMs)
+    : undefined;
+  cleanupTimer?.unref?.();
 
   await im.start({
     // ① @机器人（尚无话题）→ 建话题 + 建会话 + 首条消息入队
@@ -103,7 +120,7 @@ async function main(): Promise<void> {
         const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
+          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
           return;
         }
 
@@ -129,7 +146,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -145,7 +162,7 @@ async function main(): Promise<void> {
           return;
         }
         await sessions.touch(session, msg.senderId);
-        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
+        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');
@@ -157,11 +174,19 @@ async function main(): Promise<void> {
     async onReaction(_reaction: ImReaction): Promise<void> {
       /* no-op（阶段一） */
     },
+
+    async onCardAction(action): Promise<void> {
+      const payload = parseCardActionValue(action.value);
+      if (payload.action !== 'interrupt_thinking' || typeof payload.sessionId !== 'string') return;
+      const session = await sessions.interruptSession(payload.sessionId);
+      if (!session) logger.warn(`停止思考失败，未找到 session=${payload.sessionId}`);
+    },
   });
 
   // 优雅退出
   const shutdown = () => {
     logger.info('收到退出信号，关闭所有会话…');
+    if (cleanupTimer) clearInterval(cleanupTimer);
     sessions.shutdownAll();
     consoleServer.close();
     im.stop().finally(() => process.exit(0));
@@ -209,9 +234,20 @@ function promptOptions(bot: Bot): { systemPrompt?: string; systemPromptName?: st
 }
 
 function replyToName(message: ImMessage): string {
-  return message.senderName?.trim() || message.senderId.slice(0, 12);
+  return message.senderName?.trim() || '';
 }
 
 function replySignature(bot: Bot): string {
   return bot.replySignature?.trim() || 'larkbot';
+}
+
+function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown } {
+  if (value && typeof value === 'object') return value as { action?: unknown; sessionId?: unknown };
+  if (typeof value !== 'string' || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 }

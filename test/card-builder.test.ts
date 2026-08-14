@@ -18,26 +18,50 @@ describe('buildTerminalCard', () => {
       body: '处理完成',
       status: 'completed',
       replySignature: '只读排查助手',
-      replyToName: '孟宁',
     }).payload;
     expect(card.header).toBeUndefined();
     expect(card.elements).toHaveLength(3);
     expect(card.elements[0].content).toBe('处理完成');
-    expect(card.elements.at(-1).content).toContain('只读排查助手 · 发送给：@孟宁');
+    expect(card.elements.at(-1).content).toContain('只读排查助手');
+    expect(card.elements.at(-1).content).not.toContain('发送给');
   });
 
-  it('思考卡可在底部展示累计 token', () => {
+  it('思考完成后停止按钮不可点击', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
-      closeUrl: 'http://console/sessions/lm-1/close',
+      interruptSessionId: 'lm-1',
       status: 'completed',
       footer: '🪙 累计 Token ↑15K ↓3.5K',
     }).payload;
     expect(card.header.template).toBe('green');
     expect(card.elements[1].actions[0].text.content).toBe('打开思考过程');
     expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
-    expect(card.elements[1].actions[1].text.content).toBe('关闭会话');
-    expect(card.elements[1].actions[1].multi_url.url).toBe('http://console/sessions/lm-1/close');
+    expect(card.elements[1].actions[1].text.content).toBe('思考已完成');
+    expect(card.elements[1].actions[1].disabled).toBe(true);
+    expect(card.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
+    expect(card.elements[1].actions[1].multi_url).toBeUndefined();
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
+  });
+
+  it('思考中可停止，停止后按钮不可点击', () => {
+    const working: any = buildThinkingCard({
+      url: 'http://console/terminal/lm-1',
+      interruptSessionId: 'lm-1',
+      status: 'working',
+    }).payload;
+    expect(working.elements[1].actions[1].text.content).toBe('停止思考');
+    expect(working.elements[1].actions[1].type).toBe('danger');
+    expect(working.elements[1].actions[1].disabled).toBe(false);
+    expect(working.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
+    expect(working.elements[1].actions[1].multi_url).toBeUndefined();
+
+    const stopped: any = buildThinkingCard({
+      url: 'http://console/terminal/lm-1',
+      interruptSessionId: 'lm-1',
+      status: 'stopped',
+    }).payload;
+    expect(stopped.header.title.content).toBe('⏹️ 已停止思考');
+    expect(stopped.elements[1].actions[1].text.content).toBe('思考已停止');
+    expect(stopped.elements[1].actions[1].disabled).toBe(true);
   });
 });

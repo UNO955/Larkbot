@@ -95,7 +95,6 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -110,6 +109,66 @@ describe('ConversationManager', () => {
     await vi.waitFor(() => expect(writeInput).toHaveBeenCalledWith(child, 'FOLLOW_UP'));
     expect(saved[0].cliSessionId).toBe('trae-1');
     manager.shutdownAll();
+  });
+
+  it('定期清理会关闭闲置会话并删除过期关闭记录', async () => {
+    const activeOld = route({
+      sessionId: 'lm-active-old',
+      lastMessageAt: '2026-01-01T00:00:00.000Z',
+      status: 'active',
+    });
+    const activeFresh = route({
+      sessionId: 'lm-active-fresh',
+      lastMessageAt: '2026-01-02T00:00:00.000Z',
+      status: 'active',
+    });
+    const closedOld = route({
+      sessionId: 'lm-closed-old',
+      lastMessageAt: '2025-12-20T00:00:00.000Z',
+      status: 'closed',
+    });
+    let saved: Session[] = [];
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [activeOld, activeFresh, closedOld],
+      saveSessions: async (sessions) => { saved = structuredClone(sessions); },
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true })),
+      findSessionId: () => undefined,
+      readyPattern: /❯/,
+    };
+    const manager = new ConversationManager({
+      cli,
+      store,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.restore();
+    const result = await manager.cleanupStaleSessions({
+      idleCloseMs: 12 * 60 * 60 * 1000,
+      closedRetentionMs: 7 * 24 * 60 * 60 * 1000,
+      now: new Date('2026-01-02T00:00:00.000Z'),
+    });
+
+    expect(result).toEqual({ closed: 1, deleted: 1 });
+    expect(saved.map((session) => [session.sessionId, session.status])).toEqual([
+      ['lm-active-old', 'closed'],
+      ['lm-active-fresh', 'active'],
+    ]);
   });
 
   it('resume 在 composer 前失败时提示并用 opening 降级为新会话', async () => {
@@ -151,7 +210,6 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
     await manager.restore();
@@ -199,7 +257,6 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -250,7 +307,6 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
@@ -266,7 +322,60 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡标记回复对象', async () => {
+  it('停止思考只中断当前轮并更新思考卡，不关闭会话', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined, initialCardMessageId: 'trace-card-1' });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      readyPattern: /❯/,
+    };
+    const child = fakePty();
+    const removeReaction = vi.fn(async () => undefined);
+    const patchTrace = vi.fn(async () => undefined);
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    const interrupted = await manager.interruptSession('lm-1');
+    expect(interrupted?.status).toBe('active');
+    expect(child.write).toHaveBeenCalledWith('\x03');
+    expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1');
+    expect(patchTrace).toHaveBeenCalledWith(
+      'trace-card-1',
+      'http://console/trace/lm-1',
+      'lm-1',
+      'stopped',
+    );
+    manager.shutdownAll();
+  });
+
+  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡使用自定义落款', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {
       loadBots: async () => [],
@@ -285,6 +394,10 @@ describe('ConversationManager', () => {
         cacheReadTokens: 3000,
         cacheCreateTokens: 0,
         model: 'gpt-5.5',
+      })),
+      getSessionFinal: vi.fn(() => ({
+        key: 'turn-token:done',
+        text: '最终回复',
       })),
       readyPattern: /❯/,
       completionPattern: /❯/,
@@ -307,12 +420,11 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => false,
     });
 
     await manager.add(session);
-    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user', '孟宁', '只读排查助手');
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user', '孟宁', '只读排查助手', 'ou_123');
     child.emitData('❯ ');
     await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
 
@@ -326,11 +438,12 @@ describe('ConversationManager', () => {
       'om-current-user',
       '孟宁',
       '只读排查助手',
+      'ou_123',
     ), { timeout: 1500 });
     await vi.waitFor(() => expect(postTrace).toHaveBeenCalledWith(
       'omt-1',
       'http://console/trace/lm-1',
-      'http://console/sessions/lm-1/close',
+      'lm-1',
       'completed',
       'om-current-user',
       '🪙 累计 Token ↑15K ↓3.5K · gpt-5.5',
@@ -375,7 +488,6 @@ describe('ConversationManager', () => {
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      closeUrl: (id) => `http://console/sessions/${id}/close`,
       isStreamingCardDisabled: () => true,
     });
 
@@ -393,7 +505,65 @@ describe('ConversationManager', () => {
       'om-current-user',
       undefined,
       undefined,
+      undefined,
     ), { timeout: 1500 });
+    manager.shutdownAll();
+  });
+
+  it('空回复哨兵不发送最终回复卡', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionFinal: vi.fn(() => ({
+        key: 'turn-empty:done',
+        text: 'BOTMUX_NOTHING_TO_SEND',
+      })),
+      getSessionUsage: vi.fn(() => ({
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      })),
+      readyPattern: /❯/,
+      completionPattern: /TURN_DONE/,
+    };
+    const child = fakePty();
+    const post = vi.fn(async () => 'card-1');
+    const postTrace = vi.fn(async () => 'trace-card-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post,
+      patch: async () => undefined,
+      postTrace,
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    child.emitData('\r\nBOTMUX_NOTHING_TO_SEND\r\nTURN_DONE');
+    await vi.waitFor(() => expect(postTrace).toHaveBeenCalled(), { timeout: 1500 });
+    expect(post).not.toHaveBeenCalled();
     manager.shutdownAll();
   });
 });

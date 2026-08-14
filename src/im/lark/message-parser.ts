@@ -7,6 +7,7 @@ export interface ParsedMessage {
   rootId?: string;
   replyToMessageId?: string;
   senderOpenId: string;
+  senderName?: string;
   text: string;
   mentionedOpenIds: string[];
   resources: Array<{ type: 'image' | 'file'; key: string; name?: string }>;
@@ -59,8 +60,24 @@ export function parseMessageEvent(data: any): ParsedMessage | null {
     rootId: msg.root_id || undefined,
     replyToMessageId: msg.parent_id || undefined,
     senderOpenId: data?.sender?.sender_id?.open_id ?? '',
+    senderName: extractSenderName(data),
     text: cleanText,
     mentionedOpenIds,
     resources,
   };
+}
+
+function extractSenderName(data: any): string | undefined {
+  const sender = data?.sender;
+  const candidates = [
+    sender?.sender_name,
+    sender?.name,
+    sender?.display_name,
+    sender?.user?.name,
+    sender?.user?.en_name,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
 }

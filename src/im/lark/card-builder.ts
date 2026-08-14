@@ -7,7 +7,7 @@
  */
 import type { ImCard } from '../types.js';
 
-export type StreamCardStatus = 'working' | 'completed' | 'failed';
+export type StreamCardStatus = 'working' | 'completed' | 'failed' | 'stopped';
 
 export interface TerminalCardOpts {
   /** 当前模型输出（已渲染、去噪）。 */
@@ -15,12 +15,11 @@ export interface TerminalCardOpts {
   status: StreamCardStatus;
   title?: string;
   replySignature?: string;
-  replyToName?: string;
 }
 
 export interface ThinkingCardOpts {
   url: string;
-  closeUrl: string;
+  interruptSessionId: string;
   status: StreamCardStatus;
   footer?: string;
 }
@@ -29,6 +28,7 @@ const STATUS_META = {
   working: { icon: '⏳', label: '正在处理', template: 'blue' },
   completed: { icon: '✅', label: '已完成', template: 'green' },
   failed: { icon: '⚠️', label: '处理失败', template: 'red' },
+  stopped: { icon: '⏹️', label: '已停止', template: 'grey' },
 } as const;
 
 export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
@@ -45,14 +45,13 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
         : "<font color='grey'>本轮没有可展示的文本输出。</font>",
     });
   }
-  const recipient = opts.replyToName?.trim();
-  if (opts.status === 'completed' && recipient) {
+  if (opts.status === 'completed') {
     const signature = opts.replySignature?.trim() || 'larkbot';
     elements.push({ tag: 'hr' });
     elements.push({
       tag: 'markdown',
       text_size: 'notation_small_v2',
-      content: `<font color='grey'>${escapeMarkdownText(signature)} · 发送给：@${escapeMarkdownText(recipient)}</font>`,
+      content: `<font color='grey'>${escapeMarkdownText(signature)}</font>`,
     });
   }
   const payload: Record<string, unknown> = {
@@ -80,10 +79,19 @@ function escapeMarkdownText(value: string): string {
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
   const meta = STATUS_META[opts.status];
+  const stopped = opts.status === 'stopped';
+  const buttonDisabled = opts.status !== 'working';
+  const buttonText = opts.status === 'completed'
+    ? '思考已完成'
+    : stopped
+    ? '思考已停止'
+    : '停止思考';
   const elements: unknown[] = [
     {
       tag: 'markdown',
-      content: opts.status === 'working'
+      content: stopped
+        ? "<font color='grey'>本轮思考已停止，会话仍可继续使用。</font>"
+        : opts.status === 'working'
         ? "<font color='grey'>正在思考和调用工具，可打开只读终端查看实时过程。</font>"
         : "<font color='grey'>思考过程可在只读终端中查看。</font>",
     },
@@ -103,14 +111,10 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
         },
         {
           tag: 'button',
-          text: { tag: 'plain_text', content: '关闭会话' },
-          type: 'default',
-          multi_url: {
-            url: opts.closeUrl,
-            pc_url: opts.closeUrl,
-            android_url: opts.closeUrl,
-            ios_url: opts.closeUrl,
-          },
+          text: { tag: 'plain_text', content: buttonText },
+          type: buttonDisabled ? 'default' : 'danger',
+          disabled: buttonDisabled,
+          value: { action: 'interrupt_thinking', sessionId: opts.interruptSessionId },
         },
       ],
     },
@@ -130,7 +134,7 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
         template: meta.template,
         title: {
           tag: 'plain_text',
-          content: `${opts.status === 'completed' ? '✅ 思考完成' : opts.status === 'failed' ? '⚠️ 思考失败' : '🧠 思考中'}`,
+          content: `${opts.status === 'completed' ? '✅ 思考完成' : opts.status === 'stopped' ? '⏹️ 已停止思考' : opts.status === 'failed' ? '⚠️ 思考失败' : '🧠 思考中'}`,
         },
       },
       elements,

@@ -127,4 +127,24 @@ describe('traex adapter spawnSpec', () => {
       text: '你好，我在。',
     });
   });
+
+  it('忽略 traex 空回复哨兵', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), [
+      JSON.stringify({
+        timestamp: '2026-08-13T13:00:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-empty',
+          last_agent_message: 'BOTMUX_NOTHING_TO_SEND',
+        },
+      }),
+    ].join('\n') + '\n');
+
+    expect(createTraexAdapter().getSessionFinal?.('trae-1')).toBeUndefined();
+  });
 });

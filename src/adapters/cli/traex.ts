@@ -272,13 +272,17 @@ function extractTaskCompleteFinal(entry: any): SessionFinalMessage | undefined {
   const text = typeof entry.payload?.last_agent_message === 'string'
     ? entry.payload.last_agent_message.trim()
     : '';
-  if (!text) return undefined;
+  if (!text || isEmptyFinalSentinel(text)) return undefined;
   const completedAt = typeof entry.payload?.completed_at === 'string' ? entry.payload.completed_at : '';
   const timestamp = typeof entry?.timestamp === 'string' ? entry.timestamp : '';
   return {
     key: `${turnId}:${completedAt || timestamp}`,
     text,
   };
+}
+
+function isEmptyFinalSentinel(text: string): boolean {
+  return text === 'BOTMUX_NOTHING_TO_SEND';
 }
 
 function extractModel(entry: any): string {

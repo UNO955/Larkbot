@@ -21,6 +21,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret });
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
+  const userNameCache = new Map<string, string | undefined>();
   // threadId(omt_) -> 话题内锚点 messageId。回贴时 reply 到锚点并 reply_in_thread，
   // 消息即落进该话题（message.create 不支持 receive_id_type='thread_id'）。
   const threadAnchors = new Map<string, string>();
@@ -171,6 +172,16 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
             operatorId,
           });
         },
+
+        'card.action.trigger': async (data: any) => {
+          const operatorId = data?.operator?.open_id ?? '';
+          if (operatorId !== opts.ownerOpenId) return;
+          await handler.onCardAction({
+            messageId: data?.context?.open_message_id ?? data?.open_message_id ?? '',
+            operatorId,
+            value: data?.action?.value,
+          });
+        },
       });
 
       wsClient = new lark.WSClient({
@@ -208,12 +219,40 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       chatId: m.chatId,
       senderId: m.senderOpenId,
       senderType: 'user' as const,
+      senderName: m.senderName ?? await resolveUserName(m.senderOpenId),
       content: m.text,
       attachments: await downloadAttachments(m),
       quotedMessageId: m.replyToMessageId,
       quotedMessage: m.replyToMessageId ? await fetchQuotedMessage(m.replyToMessageId) : undefined,
       createTime: String(Date.now()),
     };
+  }
+
+  async function resolveUserName(openId: string): Promise<string | undefined> {
+    if (!openId) return undefined;
+    if (userNameCache.has(openId)) return userNameCache.get(openId);
+    try {
+      const res: any = await client.request({
+        method: 'GET',
+        url: `/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
+      });
+      const user = res?.data?.user ?? res?.user;
+      const name = pickUserName(user);
+      userNameCache.set(openId, name);
+      return name;
+    } catch (error: any) {
+      logger.warn(`查询发送人名称失败 open_id=${openId.slice(0, 12)}: ${error?.message ?? error}`);
+      userNameCache.set(openId, undefined);
+      return undefined;
+    }
+  }
+
+  function pickUserName(user: any): string | undefined {
+    const candidates = [user?.name, user?.en_name, user?.nickname, user?.email];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return undefined;
   }
 
   async function fetchQuotedMessage(messageId: string) {
