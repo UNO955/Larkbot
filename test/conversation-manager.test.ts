@@ -322,6 +322,54 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('首轮已预加 Get 时不重复添加，完成时清理该表情', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      readyPattern: /❯/,
+      completionPattern: /TURN_DONE/,
+    };
+    const child = fakePty();
+    const addReaction = vi.fn(async () => 'reaction-late');
+    const removeReaction = vi.fn(async () => undefined);
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction,
+      removeReaction,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user', undefined, undefined, undefined, 'reaction-pre');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+    expect(addReaction).not.toHaveBeenCalledWith('om-current-user', 'Get');
+
+    child.emitData('TURN_DONE');
+    await vi.waitFor(() => expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-pre'), { timeout: 1500 });
+    await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'DONE'), { timeout: 1500 });
+    manager.shutdownAll();
+  });
+
   it('停止思考只中断当前轮并更新思考卡，不关闭会话', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined, initialCardMessageId: 'trace-card-1' });
     const store: SessionStore = {

@@ -86,6 +86,7 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
     : stopped
     ? '思考已停止'
     : '停止思考';
+  const interruptValue = { action: 'interrupt_thinking', sessionId: opts.interruptSessionId };
   const elements: unknown[] = [
     {
       tag: 'markdown',
@@ -114,7 +115,8 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
           text: { tag: 'plain_text', content: buttonText },
           type: buttonDisabled ? 'default' : 'danger',
           disabled: buttonDisabled,
-          value: { action: 'interrupt_thinking', sessionId: opts.interruptSessionId },
+          value: interruptValue,
+          behaviors: [{ type: 'callback', value: interruptValue }],
         },
       ],
     },

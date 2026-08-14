@@ -19,9 +19,10 @@ import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt } from './core/prompt.js';
+import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
-import type { ImMessage, ImReaction } from './im/types.js';
+import type { ImAdapter, ImMessage, ImReaction } from './im/types.js';
 import type { Bot, Session } from './core/types.js';
 
 async function main(): Promise<void> {
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
           return;
         }
 
+        const receivedReactionId = await addReceivedReactionBeforeThread(im, msg.id);
         const { threadId } = await im.replyInThread(msg.id, '🧵 会话已创建，启动中…');
         im.registerThreadAnchor(threadId, msg.id);
         const now = new Date().toISOString();
@@ -146,7 +148,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, receivedReactionId);
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -239,6 +241,15 @@ function replyToName(message: ImMessage): string {
 
 function replySignature(bot: Bot): string {
   return bot.replySignature?.trim() || 'larkbot';
+}
+
+async function addReceivedReactionBeforeThread(im: ImAdapter, messageId: string): Promise<string | undefined> {
+  try {
+    return await im.addReaction(messageId, RECEIVED_REACTION);
+  } catch (error: any) {
+    logger.warn(`首轮 Get 表情添加失败 message=${messageId.slice(0, 12)}: ${error?.message ?? error}`);
+    return undefined;
+  }
 }
 
 function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown } {

@@ -39,6 +39,9 @@ describe('buildTerminalCard', () => {
     expect(card.elements[1].actions[1].text.content).toBe('思考已完成');
     expect(card.elements[1].actions[1].disabled).toBe(true);
     expect(card.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
+    expect(card.elements[1].actions[1].behaviors).toEqual([
+      { type: 'callback', value: { action: 'interrupt_thinking', sessionId: 'lm-1' } },
+    ]);
     expect(card.elements[1].actions[1].multi_url).toBeUndefined();
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
@@ -53,6 +56,9 @@ describe('buildTerminalCard', () => {
     expect(working.elements[1].actions[1].type).toBe('danger');
     expect(working.elements[1].actions[1].disabled).toBe(false);
     expect(working.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
+    expect(working.elements[1].actions[1].behaviors).toEqual([
+      { type: 'callback', value: { action: 'interrupt_thinking', sessionId: 'lm-1' } },
+    ]);
     expect(working.elements[1].actions[1].multi_url).toBeUndefined();
 
     const stopped: any = buildThinkingCard({

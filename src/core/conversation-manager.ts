@@ -19,6 +19,7 @@ interface QueuedTurn {
   content: string;
   fallbackOpening: string;
   replyAnchorMessageId?: string;
+  receivedReactionId?: string;
   replyToId?: string;
   replySignature?: string;
   replyToName?: string;
@@ -200,7 +201,7 @@ export class ConversationManager {
     return { closed, deleted };
   }
 
-  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string): Promise<void> {
+  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string): Promise<void> {
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -210,6 +211,7 @@ export class ConversationManager {
       content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
       fallbackOpening: opening,
       replyAnchorMessageId,
+      receivedReactionId,
       replyToId,
       replySignature,
       replyToName,
@@ -325,7 +327,7 @@ export class ConversationManager {
     runtime.currentReplyToId = turn.replyToId;
     runtime.currentReplySignature = turn.replySignature;
     runtime.currentReplyToName = turn.replyToName;
-    runtime.receivedReactionId = undefined;
+    runtime.receivedReactionId = turn.receivedReactionId;
     runtime.doneReactionSent = false;
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
@@ -335,7 +337,9 @@ export class ConversationManager {
     runtime.renderer.markNewTurn();
     runtime.detector.reset();
     try {
-      runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
+      if (!runtime.receivedReactionId) {
+        runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
+      }
       const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
       if (!result.submitted) throw new Error('traex 未确认接收输入');
       runtime.route.hasHistory = true;
@@ -397,6 +401,7 @@ export class ConversationManager {
       content: turn.fallbackOpening,
       fallbackOpening: turn.fallbackOpening,
       replyAnchorMessageId: turn.replyAnchorMessageId,
+      receivedReactionId: turn.receivedReactionId,
       replyToId: turn.replyToId,
       replySignature: turn.replySignature,
       replyToName: turn.replyToName,
