@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, Session } from './types.js';
+import type { Bot, Session, SystemPromptProfile } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
@@ -82,7 +82,17 @@ function isBot(value: unknown): value is Bot {
     && typeof bot.appSecret === 'string'
     && typeof bot.cwd === 'string'
     && typeof bot.ownerOpenId === 'string'
-    && typeof bot.enabled === 'boolean';
+    && typeof bot.enabled === 'boolean'
+    && (bot.systemPromptProfiles === undefined || (Array.isArray(bot.systemPromptProfiles) && bot.systemPromptProfiles.every(isSystemPromptProfile)))
+    && (bot.activeSystemPromptProfileId === undefined || typeof bot.activeSystemPromptProfileId === 'string');
+}
+
+function isSystemPromptProfile(value: unknown): value is SystemPromptProfile {
+  if (!value || typeof value !== 'object') return false;
+  const profile = value as Partial<SystemPromptProfile>;
+  return typeof profile.id === 'string'
+    && typeof profile.name === 'string'
+    && typeof profile.content === 'string';
 }
 
 function isSession(value: unknown): value is Session {

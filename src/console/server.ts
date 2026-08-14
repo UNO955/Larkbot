@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { SessionStore } from '../core/store.js';
-import type { Bot, Session } from '../core/types.js';
+import type { Bot, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -262,12 +262,22 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
   if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
   if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
   if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
+  if (Array.isArray(input.systemPromptProfiles)) {
+    next.systemPromptProfiles = sanitizeSystemPromptProfiles(input.systemPromptProfiles);
+  }
+  if (typeof input.activeSystemPromptProfileId === 'string') {
+    const activeId = clean(input.activeSystemPromptProfileId, 128);
+    next.activeSystemPromptProfileId = activeId || undefined;
+  }
 
   if (!next.name) throw httpError(400, 'name_required');
   if (!next.appId) throw httpError(400, 'app_id_required');
   if (!next.appSecret) throw httpError(400, 'app_secret_required');
   if (!next.cwd) throw httpError(400, 'cwd_required');
   if (!next.ownerOpenId) throw httpError(400, 'owner_open_id_required');
+  if (!next.systemPromptProfiles?.some((profile) => profile.id === next.activeSystemPromptProfileId)) {
+    next.activeSystemPromptProfileId = undefined;
+  }
 
   bots[index] = next;
   await opts.store.saveBots(bots);
@@ -299,6 +309,25 @@ function toPublicBot(bot: Bot): PublicBot {
 
 function clean(value: string, max: number): string {
   return value.trim().slice(0, max);
+}
+
+function sanitizeSystemPromptProfiles(value: unknown[]): Bot['systemPromptProfiles'] {
+  const profiles: SystemPromptProfile[] = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 20)) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.id !== 'string' || typeof raw.name !== 'string' || typeof raw.content !== 'string') continue;
+    const id = clean(raw.id, 128) || `profile-${profiles.length + 1}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    profiles.push({
+      id,
+      name: clean(raw.name, 80) || '未命名提示词',
+      content: raw.content.trim().slice(0, 20_000),
+    });
+  }
+  return profiles;
 }
 
 function httpError(statusCode: number, message: string): Error & { statusCode: number } {
@@ -345,8 +374,10 @@ function renderConsoleHtml(): string {
     .sub { margin-top: 8px; color: #646a73; font-size: 14px; }
     form { padding: 24px 28px 28px; display: grid; gap: 18px; }
     label { display: grid; gap: 8px; font-weight: 600; font-size: 14px; }
-    input[type="text"], input[type="password"] { height: 42px; border: 1px solid #bbbfc4; border-radius: 10px; padding: 0 12px; font: inherit; }
-    input:focus { outline: 2px solid #3370ff33; border-color: #3370ff; }
+      input[type="text"], input[type="password"], select, textarea { border: 1px solid #bbbfc4; border-radius: 10px; padding: 0 12px; font: inherit; }
+      input[type="text"], input[type="password"], select { height: 42px; }
+      textarea { min-height: 160px; padding: 12px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      input:focus, select:focus, textarea:focus { outline: 2px solid #3370ff33; border-color: #3370ff; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .check { display: flex; align-items: center; gap: 10px; font-weight: 500; color: #343840; }
     .hint { color: #8f959e; font-size: 12px; font-weight: 400; }
@@ -370,6 +401,8 @@ function renderConsoleHtml(): string {
     .status.closed { background: #eff0f1; color: #646a73; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .actions button { height: 32px; padding: 0 10px; font-size: 13px; }
+      .prompt-box { border: 1px solid #eff0f1; border-radius: 14px; padding: 16px; display: grid; gap: 14px; background: #fbfcff; }
+      .prompt-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
     @media (max-width: 720px) { .row { grid-template-columns: 1fr; } main { margin: 20px auto; } }
   </style>
 </head>
@@ -406,6 +439,27 @@ function renderConsoleHtml(): string {
         <label class="check">
           <input name="disableStreamingCard" type="checkbox"> 关闭流式卡片，只使用表情进度
         </label>
+          <section class="prompt-box">
+            <div>
+              <strong>系统提示词</strong>
+              <div class="hint">可保存多份提示词，选择后下一轮消息立即生效。</div>
+            </div>
+            <div class="prompt-head">
+              <label>当前提示词
+                <select id="prompt-select"></select>
+              </label>
+              <div class="actions">
+                <button id="new-prompt" type="button" class="ghost">新建</button>
+                <button id="delete-prompt" type="button" class="danger">删除</button>
+              </div>
+            </div>
+            <label>提示词名称
+              <input id="prompt-name" type="text" autocomplete="off" placeholder="例如：代码审查 / 简洁回答 / 产品顾问">
+            </label>
+            <label>提示词内容
+              <textarea id="prompt-content" placeholder="这里写入会注入到 traex 每轮 prompt 的系统提示词。留空表示不使用。"></textarea>
+            </label>
+          </section>
         <div class="warn">当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</div>
         <footer>
           <button id="save" type="submit">保存设置</button>
@@ -446,6 +500,13 @@ function renderConsoleHtml(): string {
     const save = document.querySelector('#save');
     const sessionsBody = document.querySelector('#sessions-body');
     const refreshSessions = document.querySelector('#refresh-sessions');
+      const promptSelect = document.querySelector('#prompt-select');
+      const promptName = document.querySelector('#prompt-name');
+      const promptContent = document.querySelector('#prompt-content');
+      const newPrompt = document.querySelector('#new-prompt');
+      const deletePrompt = document.querySelector('#delete-prompt');
+      let promptProfiles = [];
+      let activePromptId = '';
 
     function setStatus(text, failed = false) {
       status.textContent = text;
@@ -464,8 +525,69 @@ function renderConsoleHtml(): string {
       form.enabled.checked = !!bot.enabled;
       form.disableStreamingCard.checked = !!bot.disableStreamingCard;
       form.appSecret.placeholder = bot.appSecretSet ? '已设置，留空表示不修改' : '尚未设置';
+        promptProfiles = Array.isArray(bot.systemPromptProfiles) ? bot.systemPromptProfiles.map((p) => ({ ...p })) : [];
+        activePromptId = bot.activeSystemPromptProfileId || '';
+        renderPromptProfiles();
       setStatus('已加载');
     }
+
+      function syncPromptEditorToState() {
+        if (!activePromptId) return;
+        const profile = promptProfiles.find((item) => item.id === activePromptId);
+        if (!profile) return;
+        profile.name = promptName.value;
+        profile.content = promptContent.value;
+      }
+
+      function renderPromptProfiles() {
+        if (activePromptId && !promptProfiles.some((item) => item.id === activePromptId)) activePromptId = '';
+        promptSelect.innerHTML = '<option value="">不使用系统提示词</option>' + promptProfiles.map((profile) =>
+          '<option value="' + esc(profile.id) + '">' + esc(profile.name || '未命名提示词') + '</option>'
+        ).join('');
+        promptSelect.value = activePromptId;
+        const profile = promptProfiles.find((item) => item.id === activePromptId);
+        promptName.value = profile?.name || '';
+        promptContent.value = profile?.content || '';
+        promptName.disabled = !profile;
+        promptContent.disabled = !profile;
+        deletePrompt.disabled = !profile;
+      }
+
+      promptSelect.addEventListener('change', () => {
+        syncPromptEditorToState();
+        activePromptId = promptSelect.value;
+        renderPromptProfiles();
+      });
+
+      promptName.addEventListener('input', () => {
+        syncPromptEditorToState();
+        const option = promptSelect.querySelector('option[value="' + CSS.escape(activePromptId) + '"]');
+        if (option) option.textContent = promptName.value || '未命名提示词';
+      });
+      promptContent.addEventListener('input', syncPromptEditorToState);
+
+      newPrompt.addEventListener('click', () => {
+        syncPromptEditorToState();
+        const profile = {
+          id: 'profile-' + Date.now().toString(36),
+          name: '新提示词',
+          content: '',
+        };
+        promptProfiles.push(profile);
+        activePromptId = profile.id;
+        renderPromptProfiles();
+        promptName.focus();
+        promptName.select();
+      });
+
+      deletePrompt.addEventListener('click', () => {
+        if (!activePromptId) return;
+        const profile = promptProfiles.find((item) => item.id === activePromptId);
+        if (profile && !confirm('删除提示词「' + (profile.name || '未命名提示词') + '」？')) return;
+        promptProfiles = promptProfiles.filter((item) => item.id !== activePromptId);
+        activePromptId = '';
+        renderPromptProfiles();
+      });
 
     function esc(value) {
       return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -537,6 +659,7 @@ function renderConsoleHtml(): string {
       event.preventDefault();
       save.disabled = true;
       setStatus('保存中…');
+        syncPromptEditorToState();
       const payload = {
         name: form.name.value,
         cwd: form.cwd.value,
@@ -545,6 +668,8 @@ function renderConsoleHtml(): string {
         ownerOpenId: form.ownerOpenId.value,
         enabled: form.enabled.checked,
         disableStreamingCard: form.disableStreamingCard.checked,
+          systemPromptProfiles: promptProfiles,
+          activeSystemPromptProfileId: activePromptId,
       };
       try {
         const res = await fetch('/api/bot', {

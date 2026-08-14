@@ -14,12 +14,12 @@ export interface TerminalCardOpts {
   body: string;
   status: StreamCardStatus;
   title?: string;
-  footer?: string;
 }
 
 export interface ThinkingCardOpts {
   url: string;
   status: StreamCardStatus;
+  footer?: string;
 }
 
 const STATUS_META = {
@@ -42,30 +42,54 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
         : "<font color='grey'>本轮没有可展示的文本输出。</font>",
     });
   }
-  elements.push({ tag: 'hr' });
-  elements.push({
-    tag: 'markdown',
-    text_size: 'notation_small_v2',
-    content: `<font color='grey'>${opts.footer?.trim() || `${meta.icon} ${meta.label}`}</font>`,
-  });
-
-  return {
-    payload: {
-      config: { wide_screen_mode: true },
-      header: {
-        template: meta.template,
-        title: {
-          tag: 'plain_text',
-          content: `${meta.icon} ${opts.title?.trim() || meta.label}`,
-        },
-      },
-      elements,
-    },
+  const payload: Record<string, unknown> = {
+    config: { wide_screen_mode: true },
+    elements,
   };
+  if (opts.status !== 'completed') {
+    payload.header = {
+      template: meta.template,
+      title: {
+        tag: 'plain_text',
+        content: `${meta.icon} ${opts.title?.trim() || meta.label}`,
+      },
+    };
+  }
+  return { payload };
 }
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
   const meta = STATUS_META[opts.status];
+  const elements: unknown[] = [
+    {
+      tag: 'markdown',
+      content: opts.status === 'working'
+        ? "<font color='grey'>正在思考和调用工具，可打开只读终端查看实时过程。</font>"
+        : "<font color='grey'>思考过程可在只读终端中查看。</font>",
+    },
+    {
+      tag: 'action',
+      actions: [{
+        tag: 'button',
+        text: { tag: 'plain_text', content: '打开思考过程' },
+        type: 'default',
+        multi_url: {
+          url: opts.url,
+          pc_url: opts.url,
+          android_url: opts.url,
+          ios_url: opts.url,
+        },
+      }],
+    },
+  ];
+  if (opts.footer?.trim()) {
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: `<font color='grey'>${opts.footer.trim()}</font>`,
+    });
+  }
   return {
     payload: {
       config: { wide_screen_mode: true },
@@ -76,28 +100,7 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
           content: `${opts.status === 'completed' ? '✅ 思考完成' : opts.status === 'failed' ? '⚠️ 思考失败' : '🧠 思考中'}`,
         },
       },
-      elements: [
-        {
-          tag: 'markdown',
-          content: opts.status === 'working'
-            ? "<font color='grey'>正在思考和调用工具，可打开只读终端查看实时过程。</font>"
-            : "<font color='grey'>思考过程可在只读终端中查看。</font>",
-        },
-        {
-          tag: 'action',
-          actions: [{
-            tag: 'button',
-            text: { tag: 'plain_text', content: '打开思考过程' },
-            type: 'default',
-            multi_url: {
-              url: opts.url,
-              pc_url: opts.url,
-              android_url: opts.url,
-              ios_url: opts.url,
-            },
-          }],
-        },
-      ],
+      elements,
     },
   };
 }

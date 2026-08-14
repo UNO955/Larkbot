@@ -54,11 +54,12 @@ export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus, footer?: string): Promise<void>;
-  postTrace(threadId: string, traceUrl: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
-  patchTrace(messageId: string, traceUrl: string, status: CardStatus): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus): Promise<void>;
+  postTrace(threadId: string, traceUrl: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
+  patchTrace(messageId: string, traceUrl: string, status: CardStatus, footer?: string): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
+  ackRead?(messageId: string): Promise<void>;
   addReaction(messageId: string, emojiType: string): Promise<string>;
   removeReaction(messageId: string, reactionId: string): Promise<void>;
   createTrace(input: { id: string; sessionId: string; title: string }): void;
@@ -262,6 +263,7 @@ export class ConversationManager {
     runtime.detector.reset();
     try {
       runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
+        void this.ackRead(runtime.currentReplyAnchorMessageId);
       const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
       if (!result.submitted) throw new Error('traex 未确认接收输入');
       runtime.route.hasHistory = true;
@@ -369,16 +371,17 @@ export class ConversationManager {
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
-      if (!runtime.streamingCardDisabled && runtime.traceUrl && (runtime.traceCardMessageId || traceBody || status === 'working')) {
+      if (!runtime.streamingCardDisabled && runtime.traceUrl && (runtime.traceCardMessageId || traceBody || status === 'working' || !!footer)) {
         if (!runtime.traceCardMessageId) {
           runtime.traceCardMessageId = await this.deps.postTrace(
             runtime.route.threadId,
             runtime.traceUrl,
             status,
             runtime.currentReplyAnchorMessageId,
+            footer,
           );
         } else {
-          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, status);
+          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, status, footer);
         }
       }
       if (status !== 'working' && answerBody) {
@@ -388,10 +391,9 @@ export class ConversationManager {
             answerBody,
             status,
             runtime.currentReplyAnchorMessageId,
-            footer,
           );
         } else {
-          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, footer);
+          await this.deps.patch(runtime.answerCardMessageId, answerBody, status);
         }
       }
       runtime.lastCardStatus = status;
@@ -412,6 +414,15 @@ export class ConversationManager {
     } catch (error: any) {
       logger.warn(`加表情失败 message=${messageId.slice(0, 12)} emoji=${emojiType}: ${error?.message ?? error}`);
       return undefined;
+    }
+  }
+
+  private async ackRead(messageId: string | undefined): Promise<void> {
+    if (!messageId || !this.deps.ackRead) return;
+    try {
+      await this.deps.ackRead(messageId);
+    } catch (error: any) {
+      logger.warn(`已读 ack 失败 message=${messageId.slice(0, 12)}: ${error?.message ?? error}`);
     }
   }
 

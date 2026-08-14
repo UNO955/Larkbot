@@ -40,7 +40,8 @@ describe('prompt envelope', () => {
     expect(prompt).toContain('<user_message>\n检查当前改动\n</user_message>');
     expect(prompt).toContain('<sender type="user" open_id="ou-1" name="MN" />');
     expect(prompt).toContain('<image n="1" path="/tmp/a.png" />');
-    expect(prompt).toContain('<quoted_message message_id="om-parent" />');
+    expect(prompt).toContain('<quoted_message message_id="om-parent" unavailable="true" />');
+    expect(prompt).not.toContain('larkmux history');
   });
 
   it('跟帖只包含轻量 reminder，不重复 routing', () => {
@@ -48,5 +49,29 @@ describe('prompt envelope', () => {
     expect(prompt).toContain('<larkmux_reminder>');
     expect(prompt).not.toContain('<larkmux_routing>');
     expect(prompt).not.toContain('<session_id>');
+  });
+
+  it('可注入当前系统提示词 profile', () => {
+    const prompt = buildOpeningPrompt(session, message, {
+      systemPromptName: '代码审查',
+      systemPrompt: '优先指出风险，避免冗余表扬。',
+    });
+    expect(prompt).toContain('<system_prompt_profile name="代码审查">\n优先指出风险，避免冗余表扬。\n</system_prompt_profile>');
+    expect(prompt.indexOf('<system_prompt_profile')).toBeLessThan(prompt.lastIndexOf('<user_message>'));
+  });
+
+  it('引用消息只作为上下文，当前消息保持最后', () => {
+    const prompt = buildFollowUpPrompt({
+      ...message,
+      content: 'Summarize recent commits',
+      quotedMessage: {
+        messageId: 'om-parent',
+        content: '帮我写个3000字议论文',
+      },
+    });
+
+    expect(prompt).toContain('<quoted_message message_id="om-parent">\n帮我写个3000字议论文\n</quoted_message>');
+    expect(prompt.trim()).toMatch(/<user_message>\nSummarize recent commits\n<\/user_message>$/);
+    expect(prompt.indexOf('<quoted_message')).toBeLessThan(prompt.indexOf('<user_message>'));
   });
 });

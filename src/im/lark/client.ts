@@ -195,6 +195,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     },
     sendCard,
     updateCard,
+      ackRead,
     addReaction,
     removeReaction,
     getBotOpenId: () => botOpenId,
@@ -211,8 +212,78 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       content: m.text,
       attachments: await downloadAttachments(m),
       quotedMessageId: m.replyToMessageId,
+      quotedMessage: m.replyToMessageId ? await fetchQuotedMessage(m.replyToMessageId) : undefined,
       createTime: String(Date.now()),
     };
+  }
+
+  async function fetchQuotedMessage(messageId: string) {
+    try {
+      const res: any = await client.im.v1.message.get({
+        path: { message_id: messageId },
+      });
+      if (res.code !== 0) throw new Error(`${res.msg} (code ${res.code})`);
+      const item = Array.isArray(res.data?.items) ? res.data.items[0] : undefined;
+      const content = extractMessageText(item);
+      return { messageId, content };
+    } catch (error: any) {
+      logger.warn(`读取引用消息失败 message=${messageId}: ${error?.message ?? error}`);
+      return { messageId };
+    }
+  }
+
+  async function ackRead(messageId: string): Promise<void> {
+    let ackMessageId = '';
+    try {
+      const res: any = await client.im.v1.message.reply({
+        path: { message_id: messageId },
+        data: {
+          msg_type: 'text',
+          content: JSON.stringify({ text: '\u200b' }),
+          reply_in_thread: true,
+        },
+      });
+      if (res.code !== 0) throw new Error(`${res.msg} (code ${res.code})`);
+      ackMessageId = res.data?.message_id ?? '';
+    } catch (error: any) {
+      logger.warn(`发送已读 ack 失败 message=${messageId}: ${error?.message ?? error}`);
+      return;
+    }
+
+    if (!ackMessageId) return;
+    try {
+      const res: any = await client.im.v1.message.delete({
+        path: { message_id: ackMessageId },
+      });
+      if (res.code !== 0) throw new Error(`${res.msg} (code ${res.code})`);
+    } catch (error: any) {
+      logger.warn(`撤回已读 ack 失败 message=${ackMessageId}: ${error?.message ?? error}`);
+    }
+  }
+
+  function extractMessageText(item: any): string | undefined {
+    const raw = item?.body?.content ?? item?.content;
+    if (typeof raw !== 'string') return undefined;
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.text === 'string') return parsed.text.trim();
+      if (Array.isArray(parsed.content)) return extractPostText(parsed.content);
+    } catch {
+      return raw.trim() || undefined;
+    }
+    return undefined;
+  }
+
+  function extractPostText(content: any[]): string | undefined {
+    const pieces: string[] = [];
+    for (const row of content) {
+      if (!Array.isArray(row)) continue;
+      for (const node of row) {
+        const text = node?.text ?? node?.un_escape_text;
+        if (typeof text === 'string' && text.trim()) pieces.push(text.trim());
+      }
+    }
+    return pieces.join('\n').trim() || undefined;
   }
 
   async function downloadAttachments(message: ParsedMessage) {

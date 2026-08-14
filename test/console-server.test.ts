@@ -81,4 +81,43 @@ describe('console terminal page', () => {
       await reader.cancel();
     }
   });
+
+  it('保存并返回系统提示词 profiles', async () => {
+    let savedBots: Bot[] = [structuredClone(bot)];
+    const store: SessionStore = {
+      loadBots: async () => savedBots,
+      saveBots: async (bots) => { savedBots = structuredClone(bots); },
+      loadSessions: async () => [session],
+      saveSessions: async () => undefined,
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const patch = await fetch(`${base}/api/bot`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        systemPromptProfiles: [
+          { id: 'review', name: '代码审查', content: '先列风险。' },
+          { id: 'brief', name: '简洁回答', content: '直接给结论。' },
+        ],
+        activeSystemPromptProfileId: 'review',
+      }),
+    });
+    expect(patch.status).toBe(200);
+
+    const res = await fetch(`${base}/api/bot`);
+    const { bot: publicBot } = await res.json();
+    expect(publicBot.systemPromptProfiles).toHaveLength(2);
+    expect(publicBot.activeSystemPromptProfileId).toBe('review');
+    expect(publicBot.systemPromptProfiles[0]).toMatchObject({ id: 'review', name: '代码审查', content: '先列风险。' });
+    expect(publicBot.appSecret).toBeUndefined();
+    expect(publicBot.appSecretSet).toBe(true);
+  });
 });

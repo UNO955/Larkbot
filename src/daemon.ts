@@ -40,22 +40,23 @@ async function main(): Promise<void> {
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
-    // 首帧：在话题里发一张「运行中」终端卡片，返回 message_id
-    post: async (threadId, text, status, replyAnchorMessageId, footer) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status, footer }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status }), replyAnchorMessageId);
     },
-    // 后续帧：patch 同一张卡片，原地刷新（不再新发消息，杜绝刷屏）
-    patch: async (messageId, text, status, footer) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status, footer }));
+    patch: async (messageId, text, status) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status }));
     },
-    postTrace: async (threadId, traceUrl, status, replyAnchorMessageId) => {
-      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, status }), replyAnchorMessageId);
+    postTrace: async (threadId, traceUrl, status, replyAnchorMessageId, footer) => {
+      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, status, footer }), replyAnchorMessageId);
     },
-    patchTrace: async (messageId, traceUrl, status) => {
-      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, status }));
+    patchTrace: async (messageId, traceUrl, status, footer) => {
+      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, status, footer }));
     },
     notify: async (threadId, text, replyAnchorMessageId) => {
       await im.reply(threadId, text, 'text', replyAnchorMessageId);
+    },
+    ackRead: async (messageId) => {
+      await im.ackRead?.(messageId);
     },
     addReaction: async (messageId, emojiType) => {
       return im.addReaction(messageId, emojiType);
@@ -104,7 +105,7 @@ async function main(): Promise<void> {
         const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-          await sessions.submit(existing, buildOpeningPrompt(existing, msg), buildFollowUpPrompt(msg), msg.id);
+            await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
           return;
         }
 
@@ -130,7 +131,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-          await sessions.submit(session, buildOpeningPrompt(session, msg), buildFollowUpPrompt(msg), msg.id);
+            await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
           return;
         }
         await sessions.touch(session, msg.senderId);
-        await sessions.submit(session, buildOpeningPrompt(session, msg), buildFollowUpPrompt(msg), msg.id);
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');
@@ -192,7 +193,18 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
     ownerOpenId: cfg.ownerOpenId,
     enabled: true,
     disableStreamingCard: false,
+      systemPromptProfiles: [],
   };
   await store.saveBots([bot]);
   return bot;
+}
+
+function promptOptions(bot: Bot): { systemPrompt?: string; systemPromptName?: string } {
+  const profiles = bot.systemPromptProfiles ?? [];
+  const profile = profiles.find((item) => item.id === bot.activeSystemPromptProfileId);
+  if (!profile?.content.trim()) return {};
+  return {
+    systemPrompt: profile.content,
+    systemPromptName: profile.name,
+  };
 }

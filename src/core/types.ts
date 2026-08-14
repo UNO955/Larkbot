@@ -9,6 +9,14 @@ export interface Bot {
   ownerOpenId: string;  // 白名单：只响应这个 open_id
   enabled: boolean;
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
+  systemPromptProfiles?: SystemPromptProfile[];
+  activeSystemPromptProfileId?: string;
+}
+
+export interface SystemPromptProfile {
+  id: string;
+  name: string;
+  content: string;
 }
 
 export type SessionStatus = 'active' | 'closed';

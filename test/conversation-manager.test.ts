@@ -233,6 +233,7 @@ describe('ConversationManager', () => {
     const child = fakePty();
     const addReaction = vi.fn(async () => 'reaction-1');
     const removeReaction = vi.fn(async () => undefined);
+    const ackRead = vi.fn(async () => undefined);
     const manager = new ConversationManager({
       cli,
       store,
@@ -242,6 +243,7 @@ describe('ConversationManager', () => {
       postTrace: async () => 'trace-card-1',
       patchTrace: async () => undefined,
       notify: async () => undefined,
+      ackRead,
       addReaction,
       removeReaction,
       createTrace: () => undefined,
@@ -254,6 +256,7 @@ describe('ConversationManager', () => {
     await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
     child.emitData('❯ ');
     await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'Get'));
+    await vi.waitFor(() => expect(ackRead).toHaveBeenCalledWith('om-current-user'));
 
     child.emitData('TURN_DONE');
     await vi.waitFor(() => expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1'), { timeout: 1500 });
@@ -262,7 +265,7 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('完成回复卡 footer 展示当前 traex 会话累计 token', async () => {
+  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡只保留内容', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {
       loadBots: async () => [],
@@ -287,21 +290,23 @@ describe('ConversationManager', () => {
     };
     const child = fakePty();
     const post = vi.fn(async () => 'card-1');
+    const postTrace = vi.fn(async () => 'trace-card-1');
+    const patchTrace = vi.fn(async () => undefined);
     const manager = new ConversationManager({
       cli,
       store,
       spawnPty: () => child,
       post,
       patch: async () => undefined,
-      postTrace: async () => 'trace-card-1',
-      patchTrace: async () => undefined,
+      postTrace,
+      patchTrace,
       notify: async () => undefined,
       addReaction: async () => 'reaction-1',
       removeReaction: async () => undefined,
       createTrace: () => undefined,
       updateTrace: () => undefined,
       traceUrl: (id) => `http://console/trace/${id}`,
-      isStreamingCardDisabled: () => true,
+      isStreamingCardDisabled: () => false,
     });
 
     await manager.add(session);
@@ -317,8 +322,15 @@ describe('ConversationManager', () => {
       expect.any(String),
       'completed',
       'om-current-user',
+    ), { timeout: 1500 });
+    await vi.waitFor(() => expect(postTrace).toHaveBeenCalledWith(
+      'omt-1',
+      'http://console/trace/lm-1',
+      'completed',
+      'om-current-user',
       '🪙 累计 Token ↑15K ↓3.5K · gpt-5.5',
     ), { timeout: 1500 });
+    expect(patchTrace).not.toHaveBeenCalled();
     manager.shutdownAll();
   });
 
@@ -373,7 +385,6 @@ describe('ConversationManager', () => {
       '你好，我在。需要我帮你看什么？',
       'completed',
       'om-current-user',
-      undefined,
     ), { timeout: 1500 });
     manager.shutdownAll();
   });
