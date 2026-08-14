@@ -7,7 +7,7 @@ import type { Bot, Session } from '../src/core/types.js';
 
 const bot: Bot = {
   id: 'bot-1',
-  name: 'larkmux-dev',
+  name: 'larkbot-dev',
   appId: 'cli_x',
   appSecret: 'secret',
   cwd: '/repo',
@@ -103,6 +103,7 @@ describe('console terminal page', () => {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        replySignature: '只读排查助手',
         systemPromptProfiles: [
           { id: 'review', name: '代码审查', content: '先列风险。' },
           { id: 'brief', name: '简洁回答', content: '直接给结论。' },
@@ -114,6 +115,7 @@ describe('console terminal page', () => {
 
     const res = await fetch(`${base}/api/bot`);
     const { bot: publicBot } = await res.json();
+    expect(publicBot.replySignature).toBe('只读排查助手');
     expect(publicBot.systemPromptProfiles).toHaveLength(2);
     expect(publicBot.activeSystemPromptProfileId).toBe('review');
     expect(publicBot.systemPromptProfiles[0]).toMatchObject({ id: 'review', name: '代码审查', content: '先列风险。' });

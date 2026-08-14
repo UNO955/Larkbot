@@ -35,19 +35,19 @@ const message: ImMessage = {
 describe('prompt envelope', () => {
   it('首轮包含 routing、session 和发送者信息', () => {
     const prompt = buildOpeningPrompt(session, message);
-    expect(prompt).toContain('<larkmux_routing>');
+    expect(prompt).toContain('<larkbot_routing>');
     expect(prompt).toContain('<session_id>lm-1</session_id>');
     expect(prompt).toContain('<user_message>\n检查当前改动\n</user_message>');
     expect(prompt).toContain('<sender type="user" open_id="ou-1" name="MN" />');
     expect(prompt).toContain('<image n="1" path="/tmp/a.png" />');
     expect(prompt).toContain('<quoted_message message_id="om-parent" unavailable="true" />');
-    expect(prompt).not.toContain('larkmux history');
+    expect(prompt).not.toContain('larkbot history');
   });
 
   it('跟帖只包含轻量 reminder，不重复 routing', () => {
     const prompt = buildFollowUpPrompt(message);
-    expect(prompt).toContain('<larkmux_reminder>');
-    expect(prompt).not.toContain('<larkmux_routing>');
+    expect(prompt).toContain('<larkbot_reminder>');
+    expect(prompt).not.toContain('<larkbot_routing>');
     expect(prompt).not.toContain('<session_id>');
   });
 

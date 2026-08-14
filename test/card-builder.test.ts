@@ -13,14 +13,17 @@ describe('buildTerminalCard', () => {
     expect(card.elements[0].content).not.toContain('```');
   });
 
-  it('完成态只保留正文，不渲染底部状态栏', () => {
+  it('完成态保留正文并显示回复对象落款', () => {
     const card: any = buildTerminalCard({
       body: '处理完成',
       status: 'completed',
+      replySignature: '只读排查助手',
+      replyToName: '孟宁',
     }).payload;
     expect(card.header).toBeUndefined();
-    expect(card.elements).toHaveLength(1);
+    expect(card.elements).toHaveLength(3);
     expect(card.elements[0].content).toBe('处理完成');
+    expect(card.elements.at(-1).content).toContain('只读排查助手 · 发送给：@孟宁');
   });
 
   it('思考卡可在底部展示累计 token', () => {

@@ -2,7 +2,7 @@
 
 ## 1. Bot（机器人配置）
 
-由控制台创建 / 编辑，持久化在 `~/.larkmux/bots.json`。
+由控制台创建 / 编辑，持久化在 `~/.larkbot/bots.json`。
 
 ```typescript
 interface Bot {

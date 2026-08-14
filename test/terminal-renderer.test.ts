@@ -99,9 +99,9 @@ describe('TerminalRenderer', () => {
       ' permissions: YOLO mode',
       ' Tip: hello',
       'background.',
-      '▍ <larkmux_routing>',
+      '▍ <larkbot_routing>',
       '▍ routing text',
-      '▍ </larkmux_routing>',
+      '▍ </larkbot_routing>',
       '▍ <user_message>',
       '▍ 你好',
       '▍ </user_message>',
@@ -145,12 +145,12 @@ describe('TerminalRenderer', () => {
     const r = new TerminalRenderer(120, 30);
     r.markNewTurn();
     await r.writeAndFlush([
-      "Ran find ~/.larkmux -maxdepth 4 -type f 2>/dev/null | sed -n '1,200p'",
-      ' /home/mengning.uno/.larkmux/sessions.json',
+      "Ran find ~/.larkbot -maxdepth 4 -type f 2>/dev/null | sed -n '1,200p'",
+      ' /home/mengning.uno/.larkbot/sessions.json',
       '',
       'Read src/im/lark/client.ts (ctrl+o to expand)',
       '',
-      '我找到了本机的 .larkmux 状态文件和飞书 app 凭证入口。现在会用飞书 API 直接拉取这条引用消息。',
+      '我找到了本机的 .larkbot 状态文件和飞书 app 凭证入口。现在会用飞书 API 直接拉取这条引用消息。',
       '',
       'Searched for "message.get|im.v1.message.get|/op…" in node-sdk, read 3 files (ctrl+o to expand)',
       '',

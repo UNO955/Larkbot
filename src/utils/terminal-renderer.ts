@@ -28,7 +28,7 @@ const INPUT_ECHO_RE = /^[›❯]\s+\S/;
 /** 纯空白行 */
 const BLANK_RE = /^\s*$/;
 const ENVELOPE_ECHO_RE = /^\s*▍/;
-const XML_ENVELOPE_RE = /^\s*<\/?(?:larkmux_routing|larkmux_reminder|session_id|user_message|sender|attachments|quoted_message)\b/i;
+const XML_ENVELOPE_RE = /^\s*<\/?(?:larkbot_routing|larkbot_reminder|session_id|system_prompt_profile|user_message|sender|attachments|quoted_message)\b/i;
 const TRAEX_NOISE_RES = [
   /TraeCode CLI/i,
   /^\s*Good (?:morning|afternoon|evening)/i,

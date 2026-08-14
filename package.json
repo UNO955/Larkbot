@@ -1,11 +1,11 @@
 {
-  "name": "larkmux",
+  "name": "larkbot",
   "version": "0.1.0",
   "description": "飞书 <-> AI 编程 CLI 桥接工具",
   "type": "module",
   "main": "dist/daemon.js",
   "bin": {
-    "larkmux": "dist/daemon.js"
+    "larkbot": "dist/daemon.js"
   },
   "scripts": {
     "build": "tsc",

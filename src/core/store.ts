@@ -56,12 +56,12 @@ export class JsonSessionStore implements SessionStore {
 }
 
 function defaultSessionsPath(): string {
-  const stateDir = process.env.LARKMUX_STATE_DIR?.trim() || join(homedir(), '.larkmux');
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'sessions.json');
 }
 
 function defaultBotsPath(): string {
-  const stateDir = process.env.LARKMUX_STATE_DIR?.trim() || join(homedir(), '.larkmux');
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'bots.json');
 }
 
@@ -83,6 +83,7 @@ function isBot(value: unknown): value is Bot {
     && typeof bot.cwd === 'string'
     && typeof bot.ownerOpenId === 'string'
     && typeof bot.enabled === 'boolean'
+    && (bot.replySignature === undefined || typeof bot.replySignature === 'string')
     && (bot.systemPromptProfiles === undefined || (Array.isArray(bot.systemPromptProfiles) && bot.systemPromptProfiles.every(isSystemPromptProfile)))
     && (bot.activeSystemPromptProfileId === undefined || typeof bot.activeSystemPromptProfileId === 'string');
 }

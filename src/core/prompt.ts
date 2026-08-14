@@ -7,7 +7,7 @@ export interface PromptOptions {
 }
 
 const ROUTING = [
-  '你运行在 larkmux 中。',
+  '你运行在 larkbot 中。',
   '用户在飞书话题中与你对话。',
   '回复用户时直接输出最终答案，不需要解释桥接细节。',
   '如果消息包含 <quoted_message>，它只是用户引用的历史上下文；必须以最后的 <user_message> 作为当前请求。',
@@ -15,7 +15,7 @@ const ROUTING = [
 
 export function buildOpeningPrompt(session: Session, message: ImMessage, opts: PromptOptions = {}): string {
   return [
-    `<larkmux_routing>\n${ROUTING}\n</larkmux_routing>`,
+    `<larkbot_routing>\n${ROUTING}\n</larkbot_routing>`,
     `<session_id>${xmlEscape(session.sessionId)}</session_id>`,
     systemPromptBlock(opts),
     senderTag(message),
@@ -27,7 +27,7 @@ export function buildOpeningPrompt(session: Session, message: ImMessage, opts: P
 
 export function buildFollowUpPrompt(message: ImMessage, opts: PromptOptions = {}): string {
   return [
-    '<larkmux_reminder>\n这是同一个飞书话题中的后续消息。请基于当前 traex 会话上下文继续处理。\n</larkmux_reminder>',
+    '<larkbot_reminder>\n这是同一个飞书话题中的后续消息。请基于当前 traex 会话上下文继续处理。\n</larkbot_reminder>',
     systemPromptBlock(opts),
     senderTag(message),
     quotedBlock(message.quotedMessageId, message.quotedMessage?.content),

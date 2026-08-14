@@ -14,6 +14,8 @@ export interface TerminalCardOpts {
   body: string;
   status: StreamCardStatus;
   title?: string;
+  replySignature?: string;
+  replyToName?: string;
 }
 
 export interface ThinkingCardOpts {
@@ -42,6 +44,16 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
         : "<font color='grey'>本轮没有可展示的文本输出。</font>",
     });
   }
+  const recipient = opts.replyToName?.trim();
+  if (opts.status === 'completed' && recipient) {
+    const signature = opts.replySignature?.trim() || 'larkbot';
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: `<font color='grey'>${escapeMarkdownText(signature)} · 发送给：@${escapeMarkdownText(recipient)}</font>`,
+    });
+  }
   const payload: Record<string, unknown> = {
     config: { wide_screen_mode: true },
     elements,
@@ -56,6 +68,13 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
     };
   }
   return { payload };
+}
+
+function escapeMarkdownText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {

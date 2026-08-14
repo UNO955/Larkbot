@@ -9,6 +9,7 @@ export interface Bot {
   ownerOpenId: string;  // 白名单：只响应这个 open_id
   enabled: boolean;
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
+  replySignature?: string;
   systemPromptProfiles?: SystemPromptProfile[];
   activeSystemPromptProfileId?: string;
 }
@@ -22,7 +23,7 @@ export interface SystemPromptProfile {
 export type SessionStatus = 'active' | 'closed';
 
 export interface Session {
-  sessionId: string;        // larkmux 自己的会话 id
+  sessionId: string;        // larkbot 自己的会话 id
   chatId: string;
   rootMessageId: string;    // 飞书话题根消息
   threadId?: string;

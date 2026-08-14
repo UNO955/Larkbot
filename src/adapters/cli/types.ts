@@ -46,7 +46,7 @@ export interface CliAdapter {
   /** 原子提交一轮输入；多行内容不能被拆成多个 turn。 */
   writeInput(pty: IPty, content: string): Promise<SubmitResult>;
 
-  /** 用 larkmux session id 从 CLI 原生记录反查会话 id。 */
+  /** 用 larkbot session id 从 CLI 原生记录反查会话 id。 */
   findSessionId(sessionId: string): string | undefined;
 
   /** 读取 CLI 原生会话的累计 token 用量。 */

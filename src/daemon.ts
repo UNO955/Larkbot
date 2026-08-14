@@ -26,7 +26,7 @@ import type { Bot, Session } from './core/types.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  logger.info(`larkmux 启动，traex cwd=${cfg.traexCwd}`);
+  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd}`);
   const store = new JsonSessionStore();
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
@@ -40,11 +40,11 @@ async function main(): Promise<void> {
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
-    post: async (threadId, text, status, replyAnchorMessageId) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId, replyToName, replySignature) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replyToName, replySignature }), replyAnchorMessageId);
     },
-    patch: async (messageId, text, status) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status }));
+    patch: async (messageId, text, status, replyToName, replySignature) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replyToName, replySignature }));
     },
     postTrace: async (threadId, traceUrl, status, replyAnchorMessageId, footer) => {
       return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, status, footer }), replyAnchorMessageId);
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
         const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-            await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
+          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
           return;
         }
 
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-            await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -143,11 +143,11 @@ async function main(): Promise<void> {
       try {
         const session = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
         if (!session) {
-          await im.reply(msg.threadId, '找不到这个话题对应的 larkmux 会话，无法恢复旧上下文。', 'text');
+          await im.reply(msg.threadId, '找不到这个话题对应的 larkbot 会话，无法恢复旧上下文。', 'text');
           return;
         }
         await sessions.touch(session, msg.senderId);
-          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id);
+        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot));
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  logger.info('larkmux 就绪，等待飞书消息…');
+  logger.info('larkbot 就绪，等待飞书消息…');
 }
 
 main().catch((err) => {
@@ -186,14 +186,15 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
 
   const bot: Bot = {
     id: 'default',
-    name: process.env.BOT_NAME?.trim() || 'larkmux-dev',
+    name: process.env.BOT_NAME?.trim() || 'larkbot-dev',
     appId: cfg.larkAppId,
     appSecret: cfg.larkAppSecret,
     cwd: cfg.traexCwd,
     ownerOpenId: cfg.ownerOpenId,
     enabled: true,
     disableStreamingCard: false,
-      systemPromptProfiles: [],
+    replySignature: 'larkbot',
+    systemPromptProfiles: [],
   };
   await store.saveBots([bot]);
   return bot;
@@ -207,4 +208,12 @@ function promptOptions(bot: Bot): { systemPrompt?: string; systemPromptName?: st
     systemPrompt: profile.content,
     systemPromptName: profile.name,
   };
+}
+
+function replyToName(message: ImMessage): string {
+  return message.senderName?.trim() || message.senderId.slice(0, 12);
+}
+
+function replySignature(bot: Bot): string {
+  return bot.replySignature?.trim() || 'larkbot';
 }

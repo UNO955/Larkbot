@@ -29,7 +29,7 @@ function session(): Session {
 function bot(): Bot {
   return {
     id: 'default',
-    name: 'larkmux-dev',
+    name: 'larkbot-dev',
     appId: 'cli_xxx',
     appSecret: 'secret',
     cwd: '/repo',
@@ -45,7 +45,7 @@ afterEach(async () => {
 
 describe('JsonSessionStore', () => {
   it('原子保存并恢复纯路由会话', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'larkmux-store-'));
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
     dirs.push(dir);
     const path = join(dir, 'sessions.json');
     const store = new JsonSessionStore(path);
@@ -56,13 +56,13 @@ describe('JsonSessionStore', () => {
   });
 
   it('文件不存在时返回空路由表', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'larkmux-store-'));
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
     dirs.push(dir);
     expect(await new JsonSessionStore(join(dir, 'missing.json')).loadSessions()).toEqual([]);
   });
 
   it('保存并恢复 bot 配置', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'larkmux-store-'));
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
     dirs.push(dir);
     const store = new JsonSessionStore(join(dir, 'sessions.json'), join(dir, 'bots.json'));
     await store.saveBots([bot()]);

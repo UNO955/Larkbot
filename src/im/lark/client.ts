@@ -288,7 +288,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
   async function downloadAttachments(message: ParsedMessage) {
     if (message.resources.length === 0) return undefined;
-    const dir = join(homedir(), '.larkmux', 'attachments', safeName(message.messageId));
+    const dir = join(homedir(), '.larkbot', 'attachments', safeName(message.messageId));
     await mkdir(dir, { recursive: true });
     const attachments = [];
     for (const resource of message.resources) {

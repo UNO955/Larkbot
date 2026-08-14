@@ -19,6 +19,8 @@ interface QueuedTurn {
   content: string;
   fallbackOpening: string;
   replyAnchorMessageId?: string;
+  replySignature?: string;
+  replyToName?: string;
 }
 
 interface Runtime {
@@ -38,6 +40,8 @@ interface Runtime {
   traceUrl?: string;
   streamingCardDisabled: boolean;
   currentReplyAnchorMessageId?: string;
+  currentReplySignature?: string;
+  currentReplyToName?: string;
   receivedReactionId?: string;
   doneReactionSent: boolean;
   lastCardStatus?: CardStatus;
@@ -54,8 +58,8 @@ export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string): Promise<void>;
   postTrace(threadId: string, traceUrl: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
   patchTrace(messageId: string, traceUrl: string, status: CardStatus, footer?: string): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
@@ -134,7 +138,7 @@ export class ConversationManager {
     return true;
   }
 
-  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string): Promise<void> {
+  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string): Promise<void> {
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -144,6 +148,8 @@ export class ConversationManager {
       content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
       fallbackOpening: opening,
       replyAnchorMessageId,
+      replySignature,
+      replyToName,
     });
     if (!runtime.ready) this.armFirstPromptFallback(runtime);
     if (runtime.ready && runtime.status === 'idle') void this.drain(runtime);
@@ -252,6 +258,8 @@ export class ConversationManager {
     runtime.traceTurnId = runtime.route.sessionId;
     runtime.traceUrl = this.deps.traceUrl(runtime.route.sessionId);
     runtime.currentReplyAnchorMessageId = turn.replyAnchorMessageId;
+    runtime.currentReplySignature = turn.replySignature;
+    runtime.currentReplyToName = turn.replyToName;
     runtime.receivedReactionId = undefined;
     runtime.doneReactionSent = false;
     runtime.lastCardStatus = undefined;
@@ -391,9 +399,11 @@ export class ConversationManager {
             answerBody,
             status,
             runtime.currentReplyAnchorMessageId,
+            runtime.currentReplyToName,
+            runtime.currentReplySignature,
           );
         } else {
-          await this.deps.patch(runtime.answerCardMessageId, answerBody, status);
+          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, runtime.currentReplyToName, runtime.currentReplySignature);
         }
       }
       runtime.lastCardStatus = status;

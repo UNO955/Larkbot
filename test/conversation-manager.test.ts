@@ -265,7 +265,7 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡只保留内容', async () => {
+  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡标记回复对象', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {
       loadBots: async () => [],
@@ -310,7 +310,7 @@ describe('ConversationManager', () => {
     });
 
     await manager.add(session);
-    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user', '孟宁', '只读排查助手');
     child.emitData('❯ ');
     await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
 
@@ -322,6 +322,8 @@ describe('ConversationManager', () => {
       expect.any(String),
       'completed',
       'om-current-user',
+      '孟宁',
+      '只读排查助手',
     ), { timeout: 1500 });
     await vi.waitFor(() => expect(postTrace).toHaveBeenCalledWith(
       'omt-1',
@@ -385,6 +387,8 @@ describe('ConversationManager', () => {
       '你好，我在。需要我帮你看什么？',
       'completed',
       'om-current-user',
+      undefined,
+      undefined,
     ), { timeout: 1500 });
     manager.shutdownAll();
   });

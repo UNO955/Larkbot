@@ -128,7 +128,7 @@ export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Serve
 
 async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const url = new URL(req.url || '/', 'http://larkmux.local');
+    const url = new URL(req.url || '/', 'http://larkbot.local');
     if (req.method === 'GET' && url.pathname === '/') {
       sendHtml(res, renderConsoleHtml());
       return;
@@ -262,6 +262,7 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
   if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
   if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
   if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
+  if (typeof input.replySignature === 'string') next.replySignature = clean(input.replySignature, 80);
   if (Array.isArray(input.systemPromptProfiles)) {
     next.systemPromptProfiles = sanitizeSystemPromptProfiles(input.systemPromptProfiles);
   }
@@ -363,7 +364,7 @@ function renderConsoleHtml(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>larkmux 控制台</title>
+  <title>larkbot 控制台</title>
   <style>
     :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; background: #f6f7fb; color: #1f2329; }
@@ -400,7 +401,7 @@ function renderConsoleHtml(): string {
     .status.active { background: #e8f7ee; color: #178b3a; }
     .status.closed { background: #eff0f1; color: #646a73; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .actions button { height: 32px; padding: 0 10px; font-size: 13px; }
+      .actions button { height: 32px; padding: 0 10px; font-size: 13px; }
       .prompt-box { border: 1px solid #eff0f1; border-radius: 14px; padding: 16px; display: grid; gap: 14px; background: #fbfcff; }
       .prompt-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
     @media (max-width: 720px) { .row { grid-template-columns: 1fr; } main { margin: 20px auto; } }
@@ -410,7 +411,7 @@ function renderConsoleHtml(): string {
   <main>
     <section class="card">
       <header>
-        <h1>larkmux 控制台</h1>
+        <h1>larkbot 控制台</h1>
         <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
       </header>
       <form id="bot-form">
@@ -436,9 +437,13 @@ function renderConsoleHtml(): string {
         <label class="check">
           <input name="enabled" type="checkbox"> 启用 bot
         </label>
-        <label class="check">
-          <input name="disableStreamingCard" type="checkbox"> 关闭流式卡片，只使用表情进度
-        </label>
+          <label class="check">
+            <input name="disableStreamingCard" type="checkbox"> 关闭流式卡片，只使用表情进度
+          </label>
+          <label>回复卡落款
+            <input name="replySignature" type="text" autocomplete="off" placeholder="例如：larkbot">
+            <span class="hint">最终回复卡底部展示为：落款 · 发送给：@提问人。留空则使用默认落款。</span>
+          </label>
           <section class="prompt-box">
             <div>
               <strong>系统提示词</strong>
@@ -451,7 +456,7 @@ function renderConsoleHtml(): string {
               <div class="actions">
                 <button id="new-prompt" type="button" class="ghost">新建</button>
                 <button id="delete-prompt" type="button" class="danger">删除</button>
-              </div>
+            </div>
             </div>
             <label>提示词名称
               <input id="prompt-name" type="text" autocomplete="off" placeholder="例如：代码审查 / 简洁回答 / 产品顾问">
@@ -524,6 +529,7 @@ function renderConsoleHtml(): string {
       form.ownerOpenId.value = bot.ownerOpenId || '';
       form.enabled.checked = !!bot.enabled;
       form.disableStreamingCard.checked = !!bot.disableStreamingCard;
+        form.replySignature.value = bot.replySignature || '';
       form.appSecret.placeholder = bot.appSecretSet ? '已设置，留空表示不修改' : '尚未设置';
         promptProfiles = Array.isArray(bot.systemPromptProfiles) ? bot.systemPromptProfiles.map((p) => ({ ...p })) : [];
         activePromptId = bot.activeSystemPromptProfileId || '';
@@ -635,7 +641,7 @@ function renderConsoleHtml(): string {
       if (!button) return;
       const id = button.dataset.session;
       const action = button.dataset.action;
-      if (action === 'delete' && !confirm('删除这个会话路由？这不会删除 traex 原生日志，但会让 larkmux 忘记这条飞书话题映射。')) return;
+      if (action === 'delete' && !confirm('删除这个会话路由？这不会删除 traex 原生日志，但会让 larkbot 忘记这条飞书话题映射。')) return;
       button.disabled = true;
       try {
         const res = await fetch('/api/sessions/' + encodeURIComponent(id), {
@@ -668,6 +674,7 @@ function renderConsoleHtml(): string {
         ownerOpenId: form.ownerOpenId.value,
         enabled: form.enabled.checked,
         disableStreamingCard: form.disableStreamingCard.checked,
+          replySignature: form.replySignature.value,
           systemPromptProfiles: promptProfiles,
           activeSystemPromptProfileId: activePromptId,
       };
