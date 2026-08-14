@@ -29,6 +29,8 @@ export interface Session {
   threadId?: string;
   anchorMessageId?: string; // 话题内用于 reply_in_thread 的锚点消息
   initialCardMessageId?: string; // 建话题时发出的首张运行中卡片，首轮输出直接 patch 它
+  traceCardMessageId?: string; // 最近一张思考卡 message_id，用于引用/回复卡片时反查会话
+  answerCardMessageId?: string; // 最近一张最终回复卡 message_id，用于引用/回复卡片时反查会话
   scope: 'thread';
   title: string;
   status: SessionStatus;

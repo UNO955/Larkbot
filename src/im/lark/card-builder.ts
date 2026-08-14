@@ -15,6 +15,7 @@ export interface TerminalCardOpts {
   status: StreamCardStatus;
   title?: string;
   replySignature?: string;
+  replyToId?: string;
 }
 
 export interface ThinkingCardOpts {
@@ -46,12 +47,12 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
     });
   }
   if (opts.status === 'completed') {
-    const signature = opts.replySignature?.trim() || 'larkbot';
+    const signature = completedFooter(opts.replySignature, opts.replyToId);
     elements.push({ tag: 'hr' });
     elements.push({
       tag: 'markdown',
       text_size: 'notation_small_v2',
-      content: `<font color='grey'>${escapeMarkdownText(signature)}</font>`,
+      content: `<font color='grey'>${signature}</font>`,
     });
   }
   const payload: Record<string, unknown> = {
@@ -75,6 +76,12 @@ function escapeMarkdownText(value: string): string {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
+}
+
+function completedFooter(replySignature?: string, replyToId?: string): string {
+  const signature = escapeMarkdownText(replySignature?.trim() || 'larkbot');
+  const at = replyToId?.trim() ? ` 发送给: <at id="${escapeMarkdownText(replyToId.trim())}"></at>` : '';
+  return `${signature}${at}`;
 }
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {

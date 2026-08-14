@@ -174,13 +174,11 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         },
 
         'card.action.trigger': async (data: any) => {
-          const operatorId = data?.operator?.open_id ?? '';
-          if (operatorId !== opts.ownerOpenId) return;
-          await handler.onCardAction({
-            messageId: data?.context?.open_message_id ?? data?.open_message_id ?? '',
-            operatorId,
-            value: data?.action?.value,
-          });
+          return await handleCardAction(data, handler);
+        },
+
+        'card.action.trigger_v1': async (data: any) => {
+          return await handleCardAction(data, handler);
         },
       });
 
@@ -319,5 +317,46 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
   function safeName(value: string): string {
     return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 160) || 'attachment';
+  }
+
+  async function handleCardAction(data: any, handler: ImEventHandler): Promise<unknown> {
+    const action = normalizeCardAction(data);
+    if (!action) {
+      logger.warn('收到卡片回调但无法解析 action');
+      return undefined;
+    }
+    if (action.operatorId !== opts.ownerOpenId) {
+      logger.info(`忽略非 owner 卡片回调（operator=${action.operatorId.slice(0, 10)}）`);
+      return undefined;
+    }
+    logger.info(`收到卡片回调 message=${action.messageId.slice(0, 12)} value=${compactJson(action.value)}`);
+    return await handler.onCardAction(action);
+  }
+
+  function normalizeCardAction(data: any) {
+    const event = data?.event ?? data;
+    const operatorId = event?.operator?.open_id
+      ?? event?.operator?.user_id
+      ?? event?.operator?.userId
+      ?? '';
+    const value = event?.action?.value ?? event?.action?.option ?? event?.action;
+    if (!operatorId || value === undefined) return undefined;
+    return {
+      messageId: event?.context?.open_message_id
+        ?? event?.context?.openMessageId
+        ?? event?.open_message_id
+        ?? event?.openMessageId
+        ?? '',
+      operatorId,
+      value,
+    };
+  }
+
+  function compactJson(value: unknown): string {
+    try {
+      return JSON.stringify(value).slice(0, 300);
+    } catch {
+      return String(value).slice(0, 300);
+    }
   }
 }

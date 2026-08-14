@@ -58,7 +58,7 @@ export interface ImEventHandler {
   /** 表情回复事件（阶段一 no-op；阶段三用于进度指示相关判定）。 */
   onReaction(reaction: ImReaction): Promise<void>;
   /** 交互卡片按钮回调。 */
-  onCardAction(action: ImCardAction): Promise<void>;
+  onCardAction(action: ImCardAction): Promise<unknown>;
 }
 
 export interface ImAdapter {

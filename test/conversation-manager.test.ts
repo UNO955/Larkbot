@@ -111,6 +111,41 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('能通过思考卡或回复卡 message_id 反查会话', async () => {
+    const session = route({
+      traceCardMessageId: 'om-trace-card',
+      answerCardMessageId: 'om-answer-card',
+    });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const manager = new ConversationManager({
+      cli: {
+        id: 'traex',
+        spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+        writeInput: vi.fn(async () => ({ submitted: true })),
+        findSessionId: () => undefined,
+        readyPattern: /❯/,
+      },
+      store,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      createTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    expect(manager.find('oc-1', 'om-other-root', undefined, 'om-trace-card')?.sessionId).toBe('lm-1');
+    expect(manager.find('oc-1', 'om-other-root', undefined, 'om-answer-card')?.sessionId).toBe('lm-1');
+  });
+
   it('定期清理会关闭闲置会话并删除过期关闭记录', async () => {
     const activeOld = route({
       sessionId: 'lm-active-old',
@@ -372,26 +407,30 @@ describe('ConversationManager', () => {
 
   it('停止思考只中断当前轮并更新思考卡，不关闭会话', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined, initialCardMessageId: 'trace-card-1' });
+    let saved: Session[] = [];
     const store: SessionStore = {
       loadBots: async () => [],
       saveBots: async () => undefined,
       loadSessions: async () => [],
-      saveSessions: async () => undefined,
+      saveSessions: async (sessions) => { saved = structuredClone(sessions); },
     };
+    const spawnSpec = vi.fn(() => ({ command: 'traex', args: [], cwd: '/repo' }));
     const cli: CliAdapter = {
       id: 'traex',
-      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      spawnSpec,
       writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
       findSessionId: () => undefined,
       readyPattern: /❯/,
     };
     const child = fakePty();
+    const fresh = fakePty();
+    const children = [child, fresh];
     const removeReaction = vi.fn(async () => undefined);
     const patchTrace = vi.fn(async () => undefined);
     const manager = new ConversationManager({
       cli,
       store,
-      spawnPty: () => child,
+      spawnPty: () => children.shift() ?? fakePty(),
       post: async () => 'card-1',
       patch: async () => undefined,
       postTrace: async () => 'trace-card-1',
@@ -409,10 +448,16 @@ describe('ConversationManager', () => {
     await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
     child.emitData('❯ ');
     await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+    child.emitData('\r\n仍在输出，已安排 working flush');
 
     const interrupted = await manager.interruptSession('lm-1');
     expect(interrupted?.status).toBe('active');
     expect(child.write).toHaveBeenCalledWith('\x03');
+    expect(child.kill).toHaveBeenCalled();
+    expect(interrupted?.hasHistory).toBe(true);
+    expect(interrupted?.cliSessionId).toBe('trae-new');
+    expect(saved.at(-1)?.hasHistory).toBe(true);
+    expect(saved.at(-1)?.cliSessionId).toBe('trae-new');
     expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1');
     expect(patchTrace).toHaveBeenCalledWith(
       'trace-card-1',
@@ -420,6 +465,13 @@ describe('ConversationManager', () => {
       'lm-1',
       'stopped',
     );
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(patchTrace.mock.calls.some((call) => call[3] === 'working')).toBe(false);
+
+    await manager.submit(session, 'OPENING-2', 'FOLLOW_UP-2', 'om-next-user');
+    expect(spawnSpec).toHaveBeenLastCalledWith('/repo', { resumeSessionId: 'trae-new' });
+    fresh.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenLastCalledWith(fresh, 'FOLLOW_UP-2'));
     manager.shutdownAll();
   });
 

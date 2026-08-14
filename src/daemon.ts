@@ -27,7 +27,7 @@ import type { Bot, Session } from './core/types.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd}`);
+  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`);
   const store = new JsonSessionStore();
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
@@ -41,11 +41,11 @@ async function main(): Promise<void> {
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
-    post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature, replyToId) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId }), replyAnchorMessageId);
     },
-    patch: async (messageId, text, status, _replyToName, replySignature) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature }));
+    patch: async (messageId, text, status, _replyToName, replySignature, replyToId) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId }));
     },
     postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer) => {
       return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }), replyAnchorMessageId);
@@ -118,10 +118,10 @@ async function main(): Promise<void> {
     // ① @机器人（尚无话题）→ 建话题 + 建会话 + 首条消息入队
     async onMention(msg: ImMessage): Promise<void> {
       try {
-        const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
+        const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
           return;
         }
 
@@ -148,7 +148,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, receivedReactionId);
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, receivedReactionId);
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -158,13 +158,14 @@ async function main(): Promise<void> {
     // ② 话题内新消息 → 入队（busy 不打断）
     async onThreadReply(msg: ImMessage): Promise<void> {
       try {
-        const session = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId);
+        const session = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (!session) {
+          logger.warn(`话题消息找不到会话 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId} quote=${msg.quotedMessageId ?? '-'}`);
           await im.reply(msg.threadId, '找不到这个话题对应的 larkbot 会话，无法恢复旧上下文。', 'text');
           return;
         }
         await sessions.touch(session, msg.senderId);
-        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');
@@ -177,11 +178,26 @@ async function main(): Promise<void> {
       /* no-op（阶段一） */
     },
 
-    async onCardAction(action): Promise<void> {
+    async onCardAction(action): Promise<unknown> {
       const payload = parseCardActionValue(action.value);
       if (payload.action !== 'interrupt_thinking' || typeof payload.sessionId !== 'string') return;
-      const session = await sessions.interruptSession(payload.sessionId);
-      if (!session) logger.warn(`停止思考失败，未找到 session=${payload.sessionId}`);
+      const sessionId = payload.sessionId;
+      void sessions.interruptSession(sessionId).then((session) => {
+        if (!session) logger.warn(`停止思考失败，未找到 session=${sessionId}`);
+      }).catch((error: any) => {
+        logger.warn(`停止思考失败 session=${sessionId}: ${error?.message ?? error}`);
+      });
+      return {
+        toast: { type: 'info', content: '已停止本轮思考' },
+        card: {
+          type: 'raw',
+          data: buildThinkingCard({
+            url: `${cfg.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(sessionId)}`,
+            interruptSessionId: sessionId,
+            status: 'stopped',
+          }).payload,
+        },
+      };
     },
   });
 

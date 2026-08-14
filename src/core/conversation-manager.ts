@@ -48,6 +48,7 @@ interface Runtime {
   currentReplyToName?: string;
   receivedReactionId?: string;
   doneReactionSent: boolean;
+  turnStopped: boolean;
   lastCardStatus?: CardStatus;
   turnFinalBaselineKey?: string;
   pendingFlushStatus?: CardStatus;
@@ -90,12 +91,18 @@ export class ConversationManager {
     return sessions;
   }
 
-  find(chatId: string, rootMessageId: string, threadId?: string): Session | undefined {
+  find(chatId: string, rootMessageId: string, threadId?: string, relatedMessageId?: string): Session | undefined {
     return [...this.sessions.values()].find((session) =>
       session.status === 'active'
       && session.chatId === chatId
       && (session.rootMessageId === rootMessageId
-        || (!!threadId && session.threadId === threadId)));
+        || (!!threadId && session.threadId === threadId)
+        || (!!relatedMessageId && (
+          session.anchorMessageId === relatedMessageId
+          || session.initialCardMessageId === relatedMessageId
+          || session.traceCardMessageId === relatedMessageId
+          || session.answerCardMessageId === relatedMessageId
+        ))));
   }
 
   async add(session: Session): Promise<void> {
@@ -134,7 +141,9 @@ export class ConversationManager {
     if (!runtime) return session;
     runtime.queue = [];
     this.clearFirstPromptFallback(runtime);
+    this.clearFlushTimer(runtime);
     runtime.pendingFlushStatus = undefined;
+    runtime.turnStopped = true;
     const wasBusy = runtime.status === 'busy' || runtime.draining;
     runtime.status = 'idle';
     runtime.draining = false;
@@ -143,7 +152,10 @@ export class ConversationManager {
       try { runtime.pty.write('\x03'); } catch { /* process may already be gone */ }
       await this.removeReceivedReaction(runtime);
     }
+    await this.waitForPosting(runtime);
     await this.patchTraceStopped(runtime);
+    this.disposeRuntime(runtime);
+    await this.persist();
     logger.info(`已停止本轮思考 session=${sessionId.slice(0, 8)}`);
     return session;
   }
@@ -270,6 +282,7 @@ export class ConversationManager {
       intentionalClose: false,
       streamingCardDisabled: false,
       doneReactionSent: false,
+      turnStopped: false,
       flushTimer: null,
       firstPromptTimer: null,
       posting: false,
@@ -284,7 +297,7 @@ export class ConversationManager {
     });
     child.onData((chunk) => this.onData(runtime, chunk));
     child.onExit(({ exitCode }) => void this.onExit(runtime, exitCode));
-    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} pid=${child.pid}`);
+    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} cli=${resumeSessionId ?? 'new'} pid=${child.pid}`);
     return runtime;
   }
 
@@ -318,7 +331,9 @@ export class ConversationManager {
     runtime.streamingCardDisabled = this.deps.isStreamingCardDisabled();
     if (!runtime.streamingCardDisabled && runtime.route.initialCardMessageId) {
       runtime.traceCardMessageId = runtime.route.initialCardMessageId;
+      runtime.route.traceCardMessageId = runtime.traceCardMessageId;
       runtime.route.initialCardMessageId = undefined;
+      await this.persist();
     }
     runtime.traceTurnId = runtime.route.sessionId;
     runtime.traceUrl = this.deps.traceUrl(runtime.route.sessionId);
@@ -329,6 +344,7 @@ export class ConversationManager {
     runtime.currentReplyToName = turn.replyToName;
     runtime.receivedReactionId = turn.receivedReactionId;
     runtime.doneReactionSent = false;
+    runtime.turnStopped = false;
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
@@ -363,6 +379,10 @@ export class ConversationManager {
   }
 
   private async finishTurn(runtime: Runtime): Promise<void> {
+    if (runtime.turnStopped) {
+      void this.drain(runtime);
+      return;
+    }
     await this.flushNow(runtime, 'completed');
     if (!runtime.doneReactionSent) {
       runtime.doneReactionSent = true;
@@ -409,6 +429,7 @@ export class ConversationManager {
   }
 
   private armFlush(runtime: Runtime): void {
+    if (runtime.turnStopped) return;
     if (runtime.flushTimer) return;
     runtime.flushTimer = setTimeout(() => {
       runtime.flushTimer = null;
@@ -435,8 +456,15 @@ export class ConversationManager {
     runtime.firstPromptTimer = null;
   }
 
+  private clearFlushTimer(runtime: Runtime): void {
+    if (!runtime.flushTimer) return;
+    clearTimeout(runtime.flushTimer);
+    runtime.flushTimer = null;
+  }
+
   private async flushNow(runtime: Runtime, status: CardStatus): Promise<void> {
     if (!runtime.route.threadId) return;
+    if (runtime.turnStopped) return;
     if (runtime.posting) {
       runtime.pendingFlushStatus = strongerStatus(runtime.pendingFlushStatus, status);
       return;
@@ -451,6 +479,7 @@ export class ConversationManager {
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
+      if (runtime.turnStopped) return;
       if (!runtime.streamingCardDisabled && runtime.traceUrl && runtime.interruptSessionId && (runtime.traceCardMessageId || traceBody || status === 'working' || !!footer)) {
         if (!runtime.traceCardMessageId) {
           runtime.traceCardMessageId = await this.deps.postTrace(
@@ -461,6 +490,8 @@ export class ConversationManager {
             runtime.currentReplyAnchorMessageId,
             footer,
           );
+          runtime.route.traceCardMessageId = runtime.traceCardMessageId;
+          await this.persist();
         } else {
           await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, status, footer);
         }
@@ -476,6 +507,8 @@ export class ConversationManager {
             runtime.currentReplySignature,
             runtime.currentReplyToId,
           );
+          runtime.route.answerCardMessageId = runtime.answerCardMessageId;
+          await this.persist();
         } else {
           await this.deps.patch(runtime.answerCardMessageId, answerBody, status, runtime.currentReplyToName, runtime.currentReplySignature, runtime.currentReplyToId);
         }
@@ -487,7 +520,7 @@ export class ConversationManager {
       runtime.posting = false;
       const pending = runtime.pendingFlushStatus;
       runtime.pendingFlushStatus = undefined;
-      if (pending) void this.flushNow(runtime, pending);
+      if (pending && !runtime.turnStopped) void this.flushNow(runtime, pending);
     }
   }
 
@@ -523,6 +556,13 @@ export class ConversationManager {
     }
   }
 
+  private async waitForPosting(runtime: Runtime): Promise<void> {
+    const deadline = Date.now() + 1_500;
+    while (runtime.posting && Date.now() < deadline) {
+      await delay(50);
+    }
+  }
+
   private async waitForSessionFinal(runtime: Runtime): Promise<{ key: string; text: string } | undefined> {
     const cliSessionId = runtime.route.cliSessionId;
     if (!cliSessionId || !this.deps.cli.getSessionFinal) return undefined;
@@ -536,11 +576,19 @@ export class ConversationManager {
   }
 
   private teardown(runtime: Runtime): void {
-    if (runtime.flushTimer) clearTimeout(runtime.flushTimer);
+    this.clearFlushTimer(runtime);
     this.clearFirstPromptFallback(runtime);
     runtime.detector.dispose();
     runtime.renderer.dispose();
     this.runtimes.delete(runtime.route.sessionId);
+  }
+
+  private disposeRuntime(runtime: Runtime): void {
+    if (this.runtimes.get(runtime.route.sessionId) !== runtime) return;
+    runtime.intentionalClose = true;
+    try { runtime.pty.kill(); } catch { /* already exited */ }
+    this.teardown(runtime);
+    this.deps.closeTerminal?.(runtime.route.sessionId);
   }
 
   private persist(): Promise<void> {

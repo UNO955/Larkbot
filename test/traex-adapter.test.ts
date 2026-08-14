@@ -22,6 +22,7 @@ describe('traex adapter spawnSpec', () => {
     expect(i).toBeGreaterThanOrEqual(0);
     expect(spec.args[i + 1]).toBe(`projects.${JSON.stringify(real)}.trust_level="trusted"`);
     expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(spec.args).toContain('--dangerously-bypass-hook-trust');
     expect(spec.args).toContain('--no-alt-screen');
   });
 
@@ -30,6 +31,7 @@ describe('traex adapter spawnSpec', () => {
     const spec = createTraexAdapter().spawnSpec(dir);
     expect(spec.args).not.toContain('-c');
     expect(spec.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(spec.args).not.toContain('--dangerously-bypass-hook-trust');
     expect(spec.args).toContain('--no-alt-screen');
   });
 

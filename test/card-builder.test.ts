@@ -18,12 +18,14 @@ describe('buildTerminalCard', () => {
       body: '处理完成',
       status: 'completed',
       replySignature: '只读排查助手',
+      replyToId: 'ou_123',
     }).payload;
     expect(card.header).toBeUndefined();
     expect(card.elements).toHaveLength(3);
     expect(card.elements[0].content).toBe('处理完成');
     expect(card.elements.at(-1).content).toContain('只读排查助手');
-    expect(card.elements.at(-1).content).not.toContain('发送给');
+    expect(card.elements.at(-1).content).toContain('发送给:');
+    expect(card.elements.at(-1).content).toContain('<at id="ou_123"></at>');
   });
 
   it('思考完成后停止按钮不可点击', () => {

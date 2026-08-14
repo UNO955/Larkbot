@@ -55,6 +55,7 @@ export function createTraexAdapter(): CliAdapter {
               '-c',
               `projects.${JSON.stringify(trustPath)}.trust_level="trusted"`,
               '--dangerously-bypass-approvals-and-sandbox',
+              '--dangerously-bypass-hook-trust',
             ]
           : []),
         // 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。

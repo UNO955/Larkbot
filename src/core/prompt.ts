@@ -8,8 +8,9 @@ export interface PromptOptions {
 
 const ROUTING = [
   '你运行在 larkbot 中。',
-  '用户在飞书话题中与你对话。',
-  '回复用户时直接输出最终答案，不需要解释桥接细节。',
+  '用户在飞书话题中与你对话；话题内后续消息不一定会 @ 机器人，只要被传入就是当前用户请求。',
+  '回复用户时只需要直接输出最终答案，larkbot 桥接层会负责把你的最终答案发回飞书。',
+  '禁止调用 botmux-send、lark-send、飞书发送类技能或任何额外回传机制；不要读取这些技能说明。',
   '如果消息包含 <quoted_message>，它只是用户引用的历史上下文；必须以最后的 <user_message> 作为当前请求。',
 ].join('\n');
 
@@ -25,10 +26,9 @@ export function buildOpeningPrompt(session: Session, message: ImMessage, opts: P
   ].filter(Boolean).join('\n\n');
 }
 
-export function buildFollowUpPrompt(message: ImMessage, opts: PromptOptions = {}): string {
+export function buildFollowUpPrompt(message: ImMessage): string {
   return [
-    '<larkbot_reminder>\n这是同一个飞书话题中的后续消息。请基于当前 traex 会话上下文继续处理。\n</larkbot_reminder>',
-    systemPromptBlock(opts),
+    '<larkbot_reminder>\n这是同一个飞书话题中的后续消息。请基于当前 traex 会话上下文继续处理；只回答最后的用户消息，不要调用任何发送类技能。\n</larkbot_reminder>',
     senderTag(message),
     quotedBlock(message.quotedMessageId, message.quotedMessage?.content),
     attachmentsBlock(message.attachments),
@@ -37,7 +37,7 @@ export function buildFollowUpPrompt(message: ImMessage, opts: PromptOptions = {}
 }
 
 function userMessageBlock(content: string): string {
-  return `<user_message>\n${content}\n</user_message>`;
+  return `<user_message>\n${xmlEscape(content)}\n</user_message>`;
 }
 
 function systemPromptBlock(opts: PromptOptions): string {
