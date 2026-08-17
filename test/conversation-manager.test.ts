@@ -475,6 +475,61 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('停止时兜底捕获尚未返回的 traex 原生会话 id', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined, initialCardMessageId: 'trace-card-1' });
+    let saved: Session[] = [];
+    let resolveWrite: ((value: { submitted: boolean; cliSessionId?: string }) => void) | undefined;
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async (sessions) => { saved = structuredClone(sessions); },
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: (_cwd, options) => ({
+        command: 'traex',
+        args: options?.resumeSessionId ? ['resume', options.resumeSessionId] : [],
+        cwd: '/repo',
+      }),
+      writeInput: vi.fn(() => new Promise((resolve) => { resolveWrite = resolve; })),
+      findSessionId: vi.fn(() => 'trae-late'),
+      readyPattern: /❯/,
+      completionPattern: /❯/,
+    };
+    const child = fakePty();
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    const interrupted = await manager.interruptSession('lm-1');
+    expect(cli.findSessionId).toHaveBeenCalledWith('lm-1');
+    expect(interrupted?.hasHistory).toBe(true);
+    expect(interrupted?.cliSessionId).toBe('trae-late');
+    expect(saved.at(-1)?.hasHistory).toBe(true);
+    expect(saved.at(-1)?.cliSessionId).toBe('trae-late');
+    resolveWrite?.({ submitted: true, cliSessionId: 'trae-late' });
+    manager.shutdownAll();
+  });
+
   it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡使用自定义落款', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {

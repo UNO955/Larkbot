@@ -12,6 +12,8 @@ const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
 const FINAL_MESSAGE_WAIT_MS = 1_500;
 const FINAL_MESSAGE_POLL_MS = 150;
+const INTERRUPT_SESSION_ID_WAIT_MS = 1_500;
+const INTERRUPT_SESSION_ID_POLL_MS = 150;
 const PTY_COLS = 100;
 const PTY_ROWS = 30;
 
@@ -73,6 +75,7 @@ export interface ConversationManagerDeps {
   createTrace(input: { id: string; sessionId: string; title: string }): void;
   updateTrace(id: string, trace: string, status: CardStatus): void;
   traceUrl(id: string): string;
+  redactTerminalInput?(sessionId: string, content: string): void;
   recordTerminalOutput?(sessionId: string, chunk: string): void;
   closeTerminal?(sessionId: string): void;
   isStreamingCardDisabled(): boolean;
@@ -153,6 +156,7 @@ export class ConversationManager {
       await this.removeReceivedReaction(runtime);
     }
     await this.waitForPosting(runtime);
+    await this.captureInterruptedCliSession(session);
     await this.patchTraceStopped(runtime);
     this.disposeRuntime(runtime);
     await this.persist();
@@ -356,6 +360,7 @@ export class ConversationManager {
       if (!runtime.receivedReactionId) {
         runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
       }
+      this.deps.redactTerminalInput?.(runtime.route.sessionId, turn.content);
       const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
       if (!result.submitted) throw new Error('traex 未确认接收输入');
       runtime.route.hasHistory = true;
@@ -561,6 +566,24 @@ export class ConversationManager {
     while (runtime.posting && Date.now() < deadline) {
       await delay(50);
     }
+  }
+
+  private async captureInterruptedCliSession(session: Session): Promise<void> {
+    if (session.cliSessionId) {
+      session.hasHistory = true;
+      return;
+    }
+    const deadline = Date.now() + INTERRUPT_SESSION_ID_WAIT_MS;
+    do {
+      const cliSessionId = this.deps.cli.findSessionId(session.sessionId);
+      if (cliSessionId) {
+        session.cliSessionId = cliSessionId;
+        session.hasHistory = true;
+        logger.info(`停止时捕获 traex session=${session.sessionId.slice(0, 8)} cli=${cliSessionId}`);
+        return;
+      }
+      await delay(INTERRUPT_SESSION_ID_POLL_MS);
+    } while (Date.now() < deadline);
   }
 
   private async waitForSessionFinal(runtime: Runtime): Promise<{ key: string; text: string } | undefined> {

@@ -68,19 +68,26 @@ export class TurnTraceStore {
 export class TerminalStreamStore {
   private buffers = new Map<string, string[]>();
   private subscribers = new Map<string, Set<ServerResponse>>();
+  private filters = new Map<string, TerminalPromptEchoFilter>();
 
   constructor(private maxChars = 200_000) {}
 
+  redactInput(sessionId: string, content: string): void {
+    this.filter(sessionId).redactInput(content);
+  }
+
   append(sessionId: string, chunk: string): void {
+    const filtered = this.filter(sessionId).push(chunk);
+    if (!filtered) return;
     const buffer = this.buffers.get(sessionId) ?? [];
-    buffer.push(chunk);
+    buffer.push(filtered);
     let size = buffer.reduce((sum, item) => sum + item.length, 0);
     while (size > this.maxChars && buffer.length > 1) {
       const removed = buffer.shift() ?? '';
       size -= removed.length;
     }
     this.buffers.set(sessionId, buffer);
-    this.publish(sessionId, 'data', { chunk });
+    this.publish(sessionId, 'data', { chunk: filtered });
   }
 
   close(sessionId: string): void {
@@ -109,6 +116,91 @@ export class TerminalStreamStore {
       writeSse(res, event, data);
     }
   }
+
+  private filter(sessionId: string): TerminalPromptEchoFilter {
+    let filter = this.filters.get(sessionId);
+    if (!filter) {
+      filter = new TerminalPromptEchoFilter();
+      this.filters.set(sessionId, filter);
+    }
+    return filter;
+  }
+}
+
+class TerminalPromptEchoFilter {
+  private hiddenBlock = false;
+  private sensitiveLines = new Set<string>();
+
+  redactInput(content: string): void {
+    for (const line of extractSensitiveLines(content)) {
+      this.sensitiveLines.add(line);
+    }
+  }
+
+  push(chunk: string): string {
+    const visible = stripTerminalControl(chunk);
+    if (!visible.trim()) return chunk;
+    const shouldHide = this.shouldHide(visible);
+    return shouldHide ? '' : chunk;
+  }
+
+  private shouldHide(visible: string): boolean {
+    const normalized = normalizeTerminalText(visible);
+    if (normalized && [...this.sensitiveLines].some((line) => normalized.includes(line))) return true;
+    if (this.hiddenBlock) {
+      if (HIDDEN_PROMPT_BLOCK_END_RE.test(visible)) this.hiddenBlock = false;
+      return true;
+    }
+    if (PROMPT_ECHO_LINE_RE.test(visible)) return true;
+    if (HIDDEN_PROMPT_SINGLE_RE.test(visible)) return true;
+    if (HIDDEN_PROMPT_BLOCK_START_RE.test(visible)) {
+      this.hiddenBlock = !HIDDEN_PROMPT_BLOCK_END_RE.test(visible);
+      return true;
+    }
+    return false;
+  }
+}
+
+const HIDDEN_PROMPT_BLOCK_START_RE = /<\/?(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)\b/i;
+const HIDDEN_PROMPT_BLOCK_END_RE = /<\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i;
+const HIDDEN_PROMPT_SINGLE_RE = /<\/?(?:session_id|sender|image|file)\b/i;
+const PROMPT_ECHO_LINE_RE = /^\s*▍/;
+
+function stripTerminalControl(value: string): string {
+  return value
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function extractSensitiveLines(content: string): string[] {
+  const lines = new Set<string>();
+  for (const raw of content.split(/\r?\n/)) {
+    addSensitiveLine(lines, raw);
+    addSensitiveLine(lines, xmlUnescape(raw));
+  }
+  return [...lines];
+}
+
+function addSensitiveLine(lines: Set<string>, raw: string): void {
+  const line = normalizeTerminalText(raw);
+  if (line.length >= 2) lines.add(line);
+}
+
+function normalizeTerminalText(value: string): string {
+  return stripTerminalControl(value)
+    .replace(/[─━│┌┐└┘├┤┬┴┼╭╮╯╰]/g, ' ')
+    .replace(/^\s*[›❯▍]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function xmlUnescape(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Server> {
@@ -775,7 +867,7 @@ function renderTerminalHtml(session: Session): string {
     .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; }
     .meta { color: #7c8199; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
     #terminal { flex: 1; min-height: 0; width: 100%; }
-    #terminal .xterm { height: 100%; padding: 8px 10px; }
+    #terminal .xterm { height: 100%; padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important; font-size: 13px !important; }
     #status { position: fixed; right: 12px; bottom: 10px; z-index: 10; padding: 3px 8px; border-radius: 999px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: rgba(26,27,38,.86); color: #e0af68; }
     #status.ok { color: #9ece6a; }
     #status.err { color: #f7768e; }
@@ -816,16 +908,42 @@ function renderTerminalHtml(session: Session): string {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(document.querySelector('#terminal'));
-    fit.fit();
-    window.addEventListener('resize', () => fit.fit());
+    const refit = () => requestAnimationFrame(() => fit.fit());
+    if (document.fonts?.ready) document.fonts.ready.then(refit).catch(refit);
+    refit();
+    window.addEventListener('resize', refit);
     function setStatus(text, cls) {
       status.textContent = text;
       status.className = cls || '';
     }
+    let hiddenPromptBlock = false;
+    function stripTerminalControl(value) {
+      return value
+        .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, '')
+        .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '');
+    }
+    function redactPromptEcho(chunk) {
+      const visible = stripTerminalControl(chunk);
+      if (!visible.trim()) return chunk;
+      if (hiddenPromptBlock) {
+        if (/<\\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible)) hiddenPromptBlock = false;
+        return '';
+      }
+      if (/^\\s*▍/.test(visible)) return '';
+      if (/<\\/?(?:session_id|sender|image|file)\\b/i.test(visible)) return '';
+      if (/<\\/?(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)\\b/i.test(visible)) {
+        hiddenPromptBlock = !/<\\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible);
+        return '';
+      }
+      return chunk;
+    }
     const events = new EventSource(${JSON.stringify(eventUrl)});
     events.addEventListener('data', (event) => {
       const payload = JSON.parse(event.data);
-      if (payload.chunk) term.write(payload.chunk);
+      if (payload.chunk) {
+        const chunk = redactPromptEcho(payload.chunk);
+        if (chunk) term.write(chunk);
+      }
       setStatus('live', 'ok');
     });
     events.addEventListener('status', (event) => {

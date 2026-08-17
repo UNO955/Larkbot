@@ -36,6 +36,10 @@ export function buildFollowUpPrompt(message: ImMessage): string {
   ].filter(Boolean).join('\n\n');
 }
 
+export function buildThreadPrompt(session: Session, message: ImMessage, opts: PromptOptions = {}): string {
+  return session.answerCardMessageId ? buildFollowUpPrompt(message) : buildOpeningPrompt(session, message, opts);
+}
+
 function userMessageBlock(content: string): string {
   return `<user_message>\n${xmlEscape(content)}\n</user_message>`;
 }

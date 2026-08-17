@@ -66,6 +66,29 @@ describe('console terminal page', () => {
     expect(html).toContain('@xterm/xterm');
     expect(html).toContain('/api/terminal/lm-1/events');
 
+    terminalStore.redactInput('lm-1', [
+      '<larkbot_reminder>',
+      '这是同一个飞书话题中的后续消息。',
+      '</larkbot_reminder>',
+      '<user_message>',
+      '你可以干嘛',
+      '</user_message>',
+    ].join('\n'));
+    terminalStore.append('lm-1', '\x1b[32m▍ <system_prompt_profile>\r\n');
+    terminalStore.append('lm-1', '▍ secret rule\r\n');
+    terminalStore.append('lm-1', '▍ </system_prompt_profile>\r\n');
+    terminalStore.append('lm-1', '▍ <larkbot_reminder>\r\n');
+    terminalStore.append('lm-1', '▍ 这是同一个飞书话题中的后续消息。\r\n');
+    terminalStore.append('lm-1', '▍ </larkbot_reminder>\r\n');
+    terminalStore.append('lm-1', '▍ <quoted_message message_id="om-1">\r\n');
+    terminalStore.append('lm-1', '▍ quoted prompt context\r\n');
+    terminalStore.append('lm-1', '▍ </quoted_message>\r\n');
+    terminalStore.append('lm-1', '▍ <user_message>\r\n');
+    terminalStore.append('lm-1', '▍ current user text\r\n');
+    terminalStore.append('lm-1', '▍ </user_message>\r\n');
+    terminalStore.append('lm-1', '▍ leaked prompt text without tag\r\n');
+    terminalStore.append('lm-1', '❯ 你可以干嘛\r\n');
+    terminalStore.append('lm-1', '你可以干嘛\r\n');
     terminalStore.append('lm-1', 'hello terminal');
     const events = await fetch(`${base}/api/terminal/lm-1/events`);
     expect(events.status).toBe(200);
@@ -77,6 +100,13 @@ describe('console terminal page', () => {
         text += new TextDecoder().decode(value);
       }
       expect(text).toContain('hello terminal');
+      expect(text).not.toContain('system_prompt_profile');
+      expect(text).not.toContain('secret rule');
+      expect(text).not.toContain('larkbot_reminder');
+      expect(text).not.toContain('quoted prompt context');
+      expect(text).not.toContain('current user text');
+      expect(text).not.toContain('leaked prompt text without tag');
+      expect(text).not.toContain('你可以干嘛');
     } finally {
       await reader.cancel();
     }

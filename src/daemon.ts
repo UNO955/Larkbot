@@ -18,7 +18,7 @@ import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
-import { buildFollowUpPrompt, buildOpeningPrompt } from './core/prompt.js';
+import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
@@ -69,6 +69,9 @@ async function main(): Promise<void> {
       void id; void trace; void status;
     },
     traceUrl: (id) => `${cfg.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(id)}`,
+    redactTerminalInput: (sessionId, content) => {
+      terminalStore.redactInput(sessionId, content);
+    },
     recordTerminalOutput: (sessionId, chunk) => {
       terminalStore.append(sessionId, chunk);
     },
@@ -121,7 +124,7 @@ async function main(): Promise<void> {
         const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildThreadPrompt(existing, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
           return;
         }
 
@@ -165,7 +168,7 @@ async function main(): Promise<void> {
           return;
         }
         await sessions.touch(session, msg.senderId);
-        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildThreadPrompt(session, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');

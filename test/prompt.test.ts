@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFollowUpPrompt, buildOpeningPrompt } from '../src/core/prompt.js';
+import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from '../src/core/prompt.js';
 import type { Session } from '../src/core/types.js';
 import type { ImMessage } from '../src/im/types.js';
 
@@ -64,6 +64,26 @@ describe('prompt envelope', () => {
   it('后续消息不重复注入系统提示词 profile', () => {
     const prompt = buildFollowUpPrompt(message);
     expect(prompt).toContain('不要调用任何发送类技能');
+    expect(prompt).not.toContain('<system_prompt_profile');
+  });
+
+  it('首轮未完成时后续消息继续注入完整 profile', () => {
+    const prompt = buildThreadPrompt(session, message, {
+      systemPromptName: '调试小助手',
+      systemPrompt: '只能做只读分析。',
+    });
+
+    expect(prompt).toContain('<larkbot_routing>');
+    expect(prompt).toContain('<system_prompt_profile name="调试小助手">\n只能做只读分析。\n</system_prompt_profile>');
+  });
+
+  it('已有最终回复后后续消息使用轻量 reminder', () => {
+    const prompt = buildThreadPrompt({ ...session, answerCardMessageId: 'om-answer' }, message, {
+      systemPromptName: '调试小助手',
+      systemPrompt: '只能做只读分析。',
+    });
+
+    expect(prompt).toContain('<larkbot_reminder>');
     expect(prompt).not.toContain('<system_prompt_profile');
   });
 
