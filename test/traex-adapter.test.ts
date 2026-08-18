@@ -47,6 +47,13 @@ describe('traex adapter spawnSpec', () => {
     expect(spec.args).toContain('--no-alt-screen');
   });
 
+  it('指定模型时追加 --model 参数', () => {
+    const spec = createTraexAdapter().spawnSpec(dir, { model: 'gpt-5.5' });
+    expect(spec.args).toContain('--model');
+    expect(spec.args[spec.args.indexOf('--model') + 1]).toBe('gpt-5.5');
+    expect(spec.args.indexOf('--model')).toBeLessThan(spec.args.indexOf('--no-alt-screen') + 3);
+  });
+
   it('从 traex rollout token_count 读取会话累计 token', () => {
     const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
     process.env.TRAE_HOME = home;

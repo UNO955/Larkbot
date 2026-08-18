@@ -265,7 +265,7 @@ export class ConversationManager {
 
   private spawn(session: Session, resumeSessionId?: string): Runtime {
     if (!session.threadId) throw new Error(`会话 ${session.sessionId} 缺少 threadId`);
-    const spec = this.deps.cli.spawnSpec(session.workingDir, { resumeSessionId });
+    const spec = this.deps.cli.spawnSpec(session.workingDir, { resumeSessionId, model: session.model });
     const child = (this.deps.spawnPty ?? pty.spawn)(spec.command, spec.args, {
       name: 'xterm-256color',
       cols: PTY_COLS,

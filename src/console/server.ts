@@ -1,5 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -269,6 +272,10 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { bot: toPublicBot(bot) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/models') {
+      sendJson(res, { models: await loadTraexModels() });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/api/sessions') {
       sendJson(res, { sessions: await listSessions(opts) });
       return;
@@ -369,6 +376,7 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
   if (typeof input.cwd === 'string') next.cwd = clean(input.cwd, 500);
   if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
   if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
+  if (typeof input.model === 'string') next.model = sanitizeModel(input.model) || undefined;
   if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
   if (typeof input.replySignature === 'string') next.replySignature = clean(input.replySignature, 80);
   if (Array.isArray(input.systemPromptProfiles)) {
@@ -418,6 +426,45 @@ function toPublicBot(bot: Bot): PublicBot {
 
 function clean(value: string, max: number): string {
   return value.trim().slice(0, max);
+}
+
+function sanitizeModel(value: string): string {
+  const model = value.trim().slice(0, 80);
+  return /^[A-Za-z0-9._:-]+$/.test(model) ? model : '';
+}
+
+async function loadTraexModels(): Promise<string[]> {
+  const candidates = [
+    process.env.TRAEX_BIN?.trim(),
+    'traex',
+    `${homedir()}/.local/share/traex/current/traex`,
+  ].filter(Boolean) as string[];
+  for (const bin of candidates) {
+    if (bin.includes('/') && !existsSync(bin)) continue;
+    try {
+      const { stdout } = await execFileText(bin, ['models'], 5_000);
+      const models = unique(stdout.split(/\r?\n/)
+        .map(sanitizeModel)
+        .filter(Boolean));
+      if (models.length > 0) return models;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return [];
+}
+
+function execFileText(file: string, args: string[], timeout: number): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout }, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else resolve({ stdout, stderr });
+    });
+  });
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function sanitizeSystemPromptProfiles(value: unknown[]): Bot['systemPromptProfiles'] {
@@ -542,6 +589,12 @@ function renderConsoleHtml(): string {
         <label>Owner Open ID
           <input name="ownerOpenId" type="text" autocomplete="off">
         </label>
+        <label>Trae 模型
+          <select name="model">
+            <option value="">使用 traex 默认模型</option>
+          </select>
+          <span class="hint">选项来自开发机执行的 traex models；保存后新建会话生效，已有会话保持原模型。</span>
+        </label>
         <label class="check">
           <input name="enabled" type="checkbox"> 启用 bot
         </label>
@@ -626,6 +679,19 @@ function renderConsoleHtml(): string {
       status.style.color = failed ? '#d93026' : '#646a73';
     }
 
+    async function loadModels() {
+      const selected = form.model.value;
+      const res = await fetch('/api/models');
+      if (!res.ok) throw new Error(await res.text());
+      const { models } = await res.json();
+      form.model.innerHTML = '<option value="">使用 traex 默认模型</option>';
+      for (const model of Array.isArray(models) ? models : []) {
+        ensureModelOption(model);
+      }
+      ensureModelOption(selected);
+      form.model.value = selected;
+    }
+
     async function loadBot() {
       const res = await fetch('/api/bot');
       if (!res.ok) throw new Error(await res.text());
@@ -635,6 +701,8 @@ function renderConsoleHtml(): string {
       form.appId.value = bot.appId || '';
       form.appSecret.value = '';
       form.ownerOpenId.value = bot.ownerOpenId || '';
+      ensureModelOption(bot.model || '');
+      form.model.value = bot.model || '';
       form.enabled.checked = !!bot.enabled;
       form.disableStreamingCard.checked = !!bot.disableStreamingCard;
         form.replySignature.value = bot.replySignature || '';
@@ -709,6 +777,16 @@ function renderConsoleHtml(): string {
       }[ch]));
     }
 
+    function ensureModelOption(value) {
+      const model = String(value || '').trim();
+      if (!model) return;
+      if ([...form.model.options].some((option) => option.value === model)) return;
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      form.model.appendChild(option);
+    }
+
     function compact(value, len = 32) {
       const text = String(value ?? '').trim();
       return text.length > len ? text.slice(0, len - 1) + '…' : text;
@@ -780,6 +858,7 @@ function renderConsoleHtml(): string {
         appId: form.appId.value,
         appSecret: form.appSecret.value,
         ownerOpenId: form.ownerOpenId.value,
+        model: form.model.value,
         enabled: form.enabled.checked,
         disableStreamingCard: form.disableStreamingCard.checked,
           replySignature: form.replySignature.value,
@@ -803,7 +882,9 @@ function renderConsoleHtml(): string {
       }
     });
 
-    loadBot().catch((error) => setStatus('加载失败：' + error.message, true));
+    loadModels()
+      .catch((error) => setStatus('模型列表加载失败：' + error.message, true))
+      .finally(() => loadBot().catch((error) => setStatus('加载失败：' + error.message, true)));
     loadSessions().catch((error) => {
       sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
     });

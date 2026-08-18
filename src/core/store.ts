@@ -83,6 +83,7 @@ function isBot(value: unknown): value is Bot {
     && typeof bot.cwd === 'string'
     && typeof bot.ownerOpenId === 'string'
     && typeof bot.enabled === 'boolean'
+    && (bot.model === undefined || typeof bot.model === 'string')
     && (bot.replySignature === undefined || typeof bot.replySignature === 'string')
     && (bot.systemPromptProfiles === undefined || (Array.isArray(bot.systemPromptProfiles) && bot.systemPromptProfiles.every(isSystemPromptProfile)))
     && (bot.activeSystemPromptProfileId === undefined || typeof bot.activeSystemPromptProfileId === 'string');
@@ -104,6 +105,7 @@ function isSession(value: unknown): value is Session {
     && typeof session.rootMessageId === 'string'
     && typeof session.workingDir === 'string'
     && session.cliId === 'traex'
+    && (session.model === undefined || typeof session.model === 'string')
     && session.scope === 'thread'
     && (session.status === 'active' || session.status === 'closed');
 }

@@ -8,6 +8,7 @@ export interface Bot {
   cwd: string;          // traex 执行工作目录
   ownerOpenId: string;  // 白名单：只响应这个 open_id
   enabled: boolean;
+  model?: string;       // traex 启动模型，留空表示使用 CLI 默认
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
   replySignature?: string;
   systemPromptProfiles?: SystemPromptProfile[];
@@ -37,6 +38,7 @@ export interface Session {
 
   workingDir: string;
   cliId: 'traex';
+  model?: string;
   cliSessionId?: string;
   hasHistory: boolean;
 

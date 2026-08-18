@@ -60,6 +60,7 @@ export function createTraexAdapter(): CliAdapter {
           : []),
         // 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
         '--no-alt-screen',
+        ...(options?.model ? ['--model', options.model] : []),
         ...(options?.resumeSessionId ? [options.resumeSessionId] : []),
       ];
 

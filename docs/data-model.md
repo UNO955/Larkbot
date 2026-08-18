@@ -13,11 +13,15 @@ interface Bot {
   cwd: string;          // traex 在开发机上的执行工作目录
   ownerOpenId: string;  // 白名单：只有这个 open_id 发的消息才响应
   enabled: boolean;
+  model?: string;       // traex 启动模型，留空使用 CLI 默认模型
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
 }
 ```
 
 > v1 只支持你自己（单 owner）。`ownerOpenId` 是唯一的权限边界，不做跨应用身份校验。
+>
+> `model` 是 **新会话启动参数**：保存后新建的 traex 会话会透传为 `--model <model>`；
+> 已存在的会话保持创建时的模型，不会被控制台后续修改静默切换。
 >
 > `disableStreamingCard` 是 **bot 级全局开关**：开启后该 bot 的所有会话都不发实时刷新的
 > 流式卡片，而是用表情回复指示进度（见 §6）。默认关闭（走流式卡片）。
@@ -33,6 +37,7 @@ interface Session {
   threadId: string;         // 飞书话题 id —— 会话身份
   chatId: string;           // 所在会话（群/单聊）id
   botId: string;            // 归属的 Bot
+  model?: string;           // 创建该会话时使用的 traex 模型
   pty: IPty;                // node-pty 进程句柄
   status: SessionStatus;
   queue: string[];          // 未处理的用户消息（FIFO，不打断当前 turn）

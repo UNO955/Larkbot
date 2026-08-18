@@ -17,6 +17,7 @@ export interface SpawnSpec {
 
 export interface SpawnOptions {
   resumeSessionId?: string;
+  model?: string;
 }
 
 export interface SubmitResult {

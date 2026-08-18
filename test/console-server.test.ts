@@ -134,6 +134,7 @@ describe('console terminal page', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         replySignature: '只读排查助手',
+        model: 'gpt-5.5',
         systemPromptProfiles: [
           { id: 'review', name: '代码审查', content: '先列风险。' },
           { id: 'brief', name: '简洁回答', content: '直接给结论。' },
@@ -146,6 +147,7 @@ describe('console terminal page', () => {
     const res = await fetch(`${base}/api/bot`);
     const { bot: publicBot } = await res.json();
     expect(publicBot.replySignature).toBe('只读排查助手');
+    expect(publicBot.model).toBe('gpt-5.5');
     expect(publicBot.systemPromptProfiles).toHaveLength(2);
     expect(publicBot.activeSystemPromptProfileId).toBe('review');
     expect(publicBot.systemPromptProfiles[0]).toMatchObject({ id: 'review', name: '代码审查', content: '先列风险。' });

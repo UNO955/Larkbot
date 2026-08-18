@@ -102,12 +102,53 @@ describe('ConversationManager', () => {
     expect(spawnSpec).not.toHaveBeenCalled();
 
     await manager.submit(session, 'OPENING', 'FOLLOW_UP');
-    expect(spawnSpec).toHaveBeenCalledWith('/repo', { resumeSessionId: 'trae-1' });
+    expect(spawnSpec).toHaveBeenCalledWith('/repo', { resumeSessionId: 'trae-1', model: undefined });
     expect(writeInput).not.toHaveBeenCalled();
 
     child.emitData('❯ ');
     await vi.waitFor(() => expect(writeInput).toHaveBeenCalledWith(child, 'FOLLOW_UP'));
     expect(saved[0].cliSessionId).toBe('trae-1');
+    manager.shutdownAll();
+  });
+
+  it('创建 traex 进程时透传 session 模型', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined, model: 'gpt-5.5' });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const spawnSpec = vi.fn(() => ({ command: 'traex', args: [], cwd: '/repo' }));
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec,
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      readyPattern: /❯/,
+    };
+    const child = fakePty();
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP');
+
+    expect(spawnSpec).toHaveBeenCalledWith('/repo', { resumeSessionId: undefined, model: 'gpt-5.5' });
     manager.shutdownAll();
   });
 
@@ -252,7 +293,7 @@ describe('ConversationManager', () => {
 
     resumed.emitExit(1);
     await vi.waitFor(() => expect(spawnSpec).toHaveBeenCalledTimes(2));
-    expect(spawnSpec.mock.calls[1][1]).toEqual({ resumeSessionId: undefined });
+    expect(spawnSpec.mock.calls[1][1]).toEqual({ resumeSessionId: undefined, model: undefined });
     expect(notify).toHaveBeenCalledWith('omt-1', expect.stringContaining('恢复失败'));
 
     fresh.emitData('❯ ');
@@ -469,7 +510,7 @@ describe('ConversationManager', () => {
     expect(patchTrace.mock.calls.some((call) => call[3] === 'working')).toBe(false);
 
     await manager.submit(session, 'OPENING-2', 'FOLLOW_UP-2', 'om-next-user');
-    expect(spawnSpec).toHaveBeenLastCalledWith('/repo', { resumeSessionId: 'trae-new' });
+    expect(spawnSpec).toHaveBeenLastCalledWith('/repo', { resumeSessionId: 'trae-new', model: undefined });
     fresh.emitData('❯ ');
     await vi.waitFor(() => expect(cli.writeInput).toHaveBeenLastCalledWith(fresh, 'FOLLOW_UP-2'));
     manager.shutdownAll();
