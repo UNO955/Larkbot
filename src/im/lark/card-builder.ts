@@ -17,6 +17,7 @@ export interface TerminalCardOpts {
   replySignature?: string;
   replyToId?: string;
   argosUrlTemplate?: string;
+  argosSource?: string;
 }
 
 export interface ThinkingCardOpts {
@@ -49,7 +50,7 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
   }
   if (opts.status === 'completed') {
     const signature = completedFooter(opts.replySignature, opts.replyToId);
-    const argosUrl = buildArgosUrl(opts.body, opts.argosUrlTemplate);
+    const argosUrl = buildArgosUrl(opts.argosSource ?? opts.body, opts.argosUrlTemplate);
     elements.push({ tag: 'hr' });
     elements.push(buildCompletedFooter(signature, argosUrl));
   }
@@ -107,20 +108,15 @@ function buildCompletedFooter(signature: string, argosUrl?: string): unknown {
         vertical_align: 'center',
         elements: [
           {
-            tag: 'action',
-            actions: [
-              {
-                tag: 'button',
-                text: { tag: 'plain_text', content: '一键跳转 Argos ↗' },
-                type: 'default',
-                multi_url: {
-                  url: argosUrl,
-                  pc_url: argosUrl,
-                  android_url: argosUrl,
-                  ios_url: argosUrl,
-                },
-              },
-            ],
+            tag: 'button',
+            text: { tag: 'plain_text', content: '一键跳转 Argos ↗' },
+            type: 'default',
+            multi_url: {
+              url: argosUrl,
+              pc_url: argosUrl,
+              android_url: argosUrl,
+              ios_url: argosUrl,
+            },
           },
         ],
       },
@@ -128,22 +124,35 @@ function buildCompletedFooter(signature: string, argosUrl?: string): unknown {
   };
 }
 
-const LABELLED_LOGID_RE = /`?(?:业务\s*)?(?:result_)?(?:logid|log_id|LogID|LogId)`?\s*[=:：为是]?\s*`?([A-Za-z][A-Za-z0-9_-]{15,127})`?/;
+const LABELLED_LOGID_RE = /`?(?:业务\s*)?(?:result_)?(?:logid|log_id|LogID|LogId)`?\s*[=:：为是]?\s*`?([A-Za-z0-9][A-Za-z0-9_-]{15,127})`?/;
 const TRACE_LOGID_RE = /\b(0[0-9A-Za-z][0-9A-Za-z_-]{24,127})\b/;
+const PSM_RE = /`?(?:PSM|psm)`?\s*[=:：为是]?\s*`?([a-z][a-z0-9_.-]{2,127})`?/;
+const BYTEDCLI_ARGOS_LINK_RE = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/;
 
 function buildArgosUrl(body: string, template?: string): string | undefined {
+  const bytedcliLink = body.match(BYTEDCLI_ARGOS_LINK_RE)?.[0];
+  if (bytedcliLink) return bytedcliLink;
   const trimmedTemplate = template?.trim();
   if (!trimmedTemplate) return undefined;
   const logId = extractTraceLogId(body);
   if (!logId) return undefined;
   const encoded = encodeURIComponent(logId);
-  if (trimmedTemplate.includes('{logid}')) return trimmedTemplate.replaceAll('{logid}', encoded);
+  const psm = extractPsm(body);
+  if (trimmedTemplate.includes('{logid}') || trimmedTemplate.includes('{psm}')) {
+    return trimmedTemplate
+      .replaceAll('{logid}', encoded)
+      .replaceAll('{psm}', encodeURIComponent(psm ?? ''));
+  }
   const separator = trimmedTemplate.includes('?') ? '&' : '?';
   return `${trimmedTemplate}${separator}log_id=${encoded}`;
 }
 
 function extractTraceLogId(body: string): string | undefined {
   return body.match(LABELLED_LOGID_RE)?.[1] ?? body.match(TRACE_LOGID_RE)?.[1];
+}
+
+function extractPsm(body: string): string | undefined {
+  return body.match(PSM_RE)?.[1];
 }
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {

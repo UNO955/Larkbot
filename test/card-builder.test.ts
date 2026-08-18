@@ -39,8 +39,42 @@ describe('buildTerminalCard', () => {
     const footer = card.elements.at(-1);
     expect(footer.tag).toBe('column_set');
     expect(footer.columns[0].elements[0].content).toContain('larkbot');
-    expect(footer.columns[1].elements[0].actions[0].text.content).toBe('一键跳转 Argos ↗');
-    expect(footer.columns[1].elements[0].actions[0].multi_url.url).toBe('https://argos.example/trace?log_id=021786939060271fdbddc0c00010106000000000000003625b880');
+    expect(footer.columns[1].elements[0].text.content).toBe('一键跳转 Argos ↗');
+    expect(footer.columns[1].elements[0].multi_url.url).toBe('https://argos.example/trace?log_id=021786939060271fdbddc0c00010106000000000000003625b880');
+  });
+
+  it('完成态识别显式标注的纯数字 logid 后展示 Argos 跳转', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：服务端发送成功。\n\n证据：logid=12345678901234567890',
+      status: 'completed',
+      replySignature: 'larkbot',
+      replyToId: 'ou_123',
+      argosUrlTemplate: 'https://argos.example/trace?log_id={logid}',
+    }).payload;
+    expect(card.elements.at(-1).columns[1].elements[0].multi_url.url).toBe('https://argos.example/trace?log_id=12345678901234567890');
+  });
+
+  it('完成态识别 logid 和 psm 后生成 Argos streamlog 链接', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：服务端发送成功。\n\n证据：logid=20260818103108CAFC9A59F03E1975EEA3，PSM=ad.tetris.scs_robot',
+      status: 'completed',
+      replySignature: 'larkbot',
+      replyToId: 'ou_123',
+      argosUrlTemplate: 'https://cloud.bytedance.net/argos/streamlog/info_overview/log_id_search?data_source_uid=&logId={logid}&log_search=false&psm={psm}&psmList=&region=China-North&x-bc-region-id=bytedance&x-resource-account=public',
+    }).payload;
+    expect(card.elements.at(-1).columns[1].elements[0].multi_url.url).toBe('https://cloud.bytedance.net/argos/streamlog/info_overview/log_id_search?data_source_uid=&logId=20260818103108CAFC9A59F03E1975EEA3&log_search=false&psm=ad.tetris.scs_robot&psmList=&region=China-North&x-bc-region-id=bytedance&x-resource-account=public');
+  });
+
+  it('完成态优先使用 bytedcli 输出里的 Argos 短链接', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：服务端发送成功。',
+      status: 'completed',
+      replySignature: 'larkbot',
+      replyToId: 'ou_123',
+      argosUrlTemplate: 'https://cloud.bytedance.net/argos/streamlog/info_overview/log_id_search?logId={logid}&psm={psm}',
+      argosSource: '{"status":"success","data":{"link":"http://aiops-argos.byted.org/agent_center/s/VMnnBG6P"}}',
+    }).payload;
+    expect(card.elements.at(-1).columns[1].elements[0].multi_url.url).toBe('http://aiops-argos.byted.org/agent_center/s/VMnnBG6P');
   });
 
   it('只有 msg_id 没有业务 logid 时不展示 Argos 跳转', () => {

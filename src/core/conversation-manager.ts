@@ -65,8 +65,8 @@ export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<void>;
   postTrace(threadId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
   patchTrace(messageId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, footer?: string): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
@@ -481,6 +481,9 @@ export class ConversationManager {
     const sourceAnswer = cleanAnswer(final?.text || answer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
+    const argosSource = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/.test(trace)
+      ? `${sourceAnswer}\n${trace}`
+      : undefined;
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
     const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
     try {
@@ -503,7 +506,7 @@ export class ConversationManager {
       }
       if (status !== 'working' && answerBody) {
         if (!runtime.answerCardMessageId) {
-          runtime.answerCardMessageId = await this.deps.post(
+          const postArgs: Parameters<ConversationManagerDeps['post']> = [
             runtime.route.threadId,
             answerBody,
             status,
@@ -511,11 +514,22 @@ export class ConversationManager {
             runtime.currentReplyToName,
             runtime.currentReplySignature,
             runtime.currentReplyToId,
-          );
+          ];
+          if (argosSource) postArgs.push(argosSource);
+          runtime.answerCardMessageId = await this.deps.post(...postArgs);
           runtime.route.answerCardMessageId = runtime.answerCardMessageId;
           await this.persist();
         } else {
-          await this.deps.patch(runtime.answerCardMessageId, answerBody, status, runtime.currentReplyToName, runtime.currentReplySignature, runtime.currentReplyToId);
+          const patchArgs: Parameters<ConversationManagerDeps['patch']> = [
+            runtime.answerCardMessageId,
+            answerBody,
+            status,
+            runtime.currentReplyToName,
+            runtime.currentReplySignature,
+            runtime.currentReplyToId,
+          ];
+          if (argosSource) patchArgs.push(argosSource);
+          await this.deps.patch(...patchArgs);
         }
       }
       runtime.lastCardStatus = status;
