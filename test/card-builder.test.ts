@@ -28,6 +28,33 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('<at id="ou_123"></at>');
   });
 
+  it('完成态识别 logid 后在底栏右侧展示 Argos 跳转', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：服务端发送成功。\n\n证据：msg_id=7674844825229837873 已反查到 result_logid=021786939060271fdbddc0c00010106000000000000003625b880',
+      status: 'completed',
+      replySignature: 'larkbot',
+      replyToId: 'ou_123',
+      argosUrlTemplate: 'https://argos.example/trace?log_id={logid}',
+    }).payload;
+    const footer = card.elements.at(-1);
+    expect(footer.tag).toBe('column_set');
+    expect(footer.columns[0].elements[0].content).toContain('larkbot');
+    expect(footer.columns[1].elements[0].actions[0].text.content).toBe('一键跳转 Argos ↗');
+    expect(footer.columns[1].elements[0].actions[0].multi_url.url).toBe('https://argos.example/trace?log_id=021786939060271fdbddc0c00010106000000000000003625b880');
+  });
+
+  it('只有 msg_id 没有业务 logid 时不展示 Argos 跳转', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：收到输入。\n\n证据：msg_id=7674844825229837873',
+      status: 'completed',
+      replySignature: 'larkbot',
+      replyToId: 'ou_123',
+      argosUrlTemplate: 'https://argos.example/trace?log_id={logid}',
+    }).payload;
+    expect(card.elements.at(-1).tag).toBe('markdown');
+    expect(card.elements.at(-1).content).toContain('larkbot');
+  });
+
   it('思考完成后停止按钮不可点击', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',

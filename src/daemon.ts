@@ -42,10 +42,10 @@ async function main(): Promise<void> {
     cli: createTraexAdapter(),
     store,
     post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature, replyToId) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId }), replyAnchorMessageId);
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate }), replyAnchorMessageId);
     },
     patch: async (messageId, text, status, _replyToName, replySignature, replyToId) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId }));
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate }));
     },
     postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer) => {
       return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }), replyAnchorMessageId);

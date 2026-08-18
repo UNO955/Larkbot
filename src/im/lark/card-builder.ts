@@ -16,6 +16,7 @@ export interface TerminalCardOpts {
   title?: string;
   replySignature?: string;
   replyToId?: string;
+  argosUrlTemplate?: string;
 }
 
 export interface ThinkingCardOpts {
@@ -48,12 +49,9 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
   }
   if (opts.status === 'completed') {
     const signature = completedFooter(opts.replySignature, opts.replyToId);
+    const argosUrl = buildArgosUrl(opts.body, opts.argosUrlTemplate);
     elements.push({ tag: 'hr' });
-    elements.push({
-      tag: 'markdown',
-      text_size: 'notation_small_v2',
-      content: `<font color='grey'>${signature}</font>`,
-    });
+    elements.push(buildCompletedFooter(signature, argosUrl));
   }
   const payload: Record<string, unknown> = {
     config: { wide_screen_mode: true },
@@ -82,6 +80,70 @@ function completedFooter(replySignature?: string, replyToId?: string): string {
   const signature = escapeMarkdownText(replySignature?.trim() || 'larkbot');
   const at = replyToId?.trim() ? ` 发送给: <at id="${escapeMarkdownText(replyToId.trim())}"></at>` : '';
   return `${signature}${at}`;
+}
+
+function buildCompletedFooter(signature: string, argosUrl?: string): unknown {
+  const signatureElement = {
+    tag: 'markdown',
+    text_size: 'notation_small_v2',
+    content: `<font color='grey'>${signature}</font>`,
+  };
+  if (!argosUrl) return signatureElement;
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    background_style: 'default',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        vertical_align: 'center',
+        elements: [signatureElement],
+      },
+      {
+        tag: 'column',
+        width: 'auto',
+        vertical_align: 'center',
+        elements: [
+          {
+            tag: 'action',
+            actions: [
+              {
+                tag: 'button',
+                text: { tag: 'plain_text', content: '一键跳转 Argos ↗' },
+                type: 'default',
+                multi_url: {
+                  url: argosUrl,
+                  pc_url: argosUrl,
+                  android_url: argosUrl,
+                  ios_url: argosUrl,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const LABELLED_LOGID_RE = /`?(?:业务\s*)?(?:result_)?(?:logid|log_id|LogID|LogId)`?\s*[=:：为是]?\s*`?([A-Za-z][A-Za-z0-9_-]{15,127})`?/;
+const TRACE_LOGID_RE = /\b(0[0-9A-Za-z][0-9A-Za-z_-]{24,127})\b/;
+
+function buildArgosUrl(body: string, template?: string): string | undefined {
+  const trimmedTemplate = template?.trim();
+  if (!trimmedTemplate) return undefined;
+  const logId = extractTraceLogId(body);
+  if (!logId) return undefined;
+  const encoded = encodeURIComponent(logId);
+  if (trimmedTemplate.includes('{logid}')) return trimmedTemplate.replaceAll('{logid}', encoded);
+  const separator = trimmedTemplate.includes('?') ? '&' : '?';
+  return `${trimmedTemplate}${separator}log_id=${encoded}`;
+}
+
+function extractTraceLogId(body: string): string | undefined {
+  return body.match(LABELLED_LOGID_RE)?.[1] ?? body.match(TRACE_LOGID_RE)?.[1];
 }
 
 export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
