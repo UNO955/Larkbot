@@ -3,7 +3,7 @@
  *
  * 屏幕层没有可靠的完成标记，只能靠启发式，核心是三重判据，缺一会误判：
  *   1) quiescence —— PTY 输出静默 ≥ QUIESCENCE_MS
- *   2) spinner guard —— 最近 SPINNER_GUARD_MS 内见过 spinner 就不判 idle（防思考期误判）
+ *   2) spinner guard —— 最近 SPINNER_GUARD_MS 内见过 spinner 就不判 idle（防分析期误判）
  *   3) readyPattern gate —— 设了提示符正则时，提示符出现前不判 idle（每轮 reset 重新等待）
  * 匹配前必须剥 ANSI，并只保留输出尾部 500 字符。
  *

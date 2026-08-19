@@ -1,136 +1,177 @@
 # 核心数据模型与状态机
 
-## 1. Bot（机器人配置）
+数据模型围绕一个核心问题设计：飞书里的话题如何稳定映射到开发机上的 traex 会话。
 
-由控制台创建 / 编辑，持久化在 `~/.larkbot/bots.json`。
+因此 larkbot 把状态拆成两层：
+- **持久路由状态**：Bot 和 Session，写入 JSON 文件，用来跨 daemon 重启恢复“这条飞书话题应该连回哪个会话”。
+- **运行时执行状态**：Runtime，只存在内存里，用来管理 PTY、队列、idle 检测和卡片更新。
+
+这避免了把不可序列化的 PTY 句柄落盘，同时保留了恢复 traex 原生会话所需的最小信息。
+
+## 1. Bot
+
+Bot 由控制台创建 / 编辑，持久化在 `~/.larkbot/bots.json`。
 
 ```typescript
 interface Bot {
-  id: string;           // 内部唯一 id
-  name: string;         // 展示名
-  appId: string;        // 飞书应用 App ID
-  appSecret: string;    // 飞书应用 App Secret
-  cwd: string;          // traex 在开发机上的执行工作目录
-  ownerOpenId: string;  // 白名单：只有这个 open_id 发的消息才响应
+  id: string;
+  name: string;
+  appId: string;
+  appSecret: string;
+  cwd: string;
+  ownerOpenId: string;
+  allowedOpenIds?: string[];
   enabled: boolean;
-  model?: string;       // traex 启动模型，留空使用 CLI 默认模型
-  disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
+  model?: string;
+  disableStreamingCard?: boolean;
+  replySignature?: string;
+  systemPromptProfiles?: SystemPromptProfile[];
+  activeSystemPromptProfileId?: string;
+}
+
+interface SystemPromptProfile {
+  id: string;
+  name: string;
+  content: string;
 }
 ```
 
-> v1 只支持你自己（单 owner）。`ownerOpenId` 是唯一的权限边界，不做跨应用身份校验。
->
-> `model` 是 **新会话启动参数**：保存后新建的 traex 会话会透传为 `--model <model>`；
-> 已存在的会话保持创建时的模型，不会被控制台后续修改静默切换。
->
-> `disableStreamingCard` 是 **bot 级全局开关**：开启后该 bot 的所有会话都不发实时刷新的
-> 流式卡片，而是用表情回复指示进度（见 §6）。默认关闭（走流式卡片）。
+字段说明：
+- `cwd`：traex 的执行目录。
+- `ownerOpenId`：管理者 open_id，默认具备提问和操作权限。
+- `allowedOpenIds`：额外授权用户列表，适合把 QA、客户端、前端同学加入群内直接提问。
+- `model`：新建 traex 会话时透传为 `--model <model>`；已有会话不被静默切换。
+- `disableStreamingCard`：关闭实时分析卡片时，改用 `Get` / `DONE` 表情指示进度。
+- `replySignature`：最终回复卡 footer 落款，默认 `larkbot`。
+- `systemPromptProfiles`：控制台维护的系统提示词集合。
+- `activeSystemPromptProfileId`：新消息包装 prompt 时使用的 profile。
 
-## 2. Session（会话 = 话题）
+## 2. Session
 
-内存对象，一个飞书话题（thread）唯一对应一个 Session。
+Session 是 larkbot 的会话路由，持久化在 `~/.larkbot/sessions.json`。它不保存 PTY 句柄；
+daemon 重启后只恢复路由，下一条消息再 lazy resume traex 原生会话。
 
 ```typescript
-type SessionStatus = 'idle' | 'busy' | 'closed';
+type SessionStatus = 'active' | 'closed';
 
 interface Session {
-  threadId: string;         // 飞书话题 id —— 会话身份
-  chatId: string;           // 所在会话（群/单聊）id
-  botId: string;            // 归属的 Bot
-  model?: string;           // 创建该会话时使用的 traex 模型
-  pty: IPty;                // node-pty 进程句柄
+  sessionId: string;
+  chatId: string;
+  rootMessageId: string;
+  threadId?: string;
+  anchorMessageId?: string;
+  initialCardMessageId?: string;
+  traceCardMessageId?: string;
+  answerCardMessageId?: string;
+  scope: 'thread';
+  title: string;
   status: SessionStatus;
-  queue: string[];          // 未处理的用户消息（FIFO，不打断当前 turn）
-  screenBuffer: string;     // 累积的 PTY 输出（供渲染 / idle 判定）
-  cardMessageId?: string;   // 当前流式卡片 message_id，用于增量 PATCH
-  currentTurnText?: string; // 当前轮的用户输入（卡片标题用）
-  lastDataAt: number;       // 最近一次 pty.onData 时间戳（idle 判定用）
-  spawnedAt: number;
-  // 表情进度指示（仅 disableStreamingCard 时使用，见 §6）：
-  pendingAckReactions?: Array<{ messageId: string; reactionId?: string }>;
+
+  workingDir: string;
+  cliId: 'traex';
+  model?: string;
+  cliSessionId?: string;
+  hasHistory: boolean;
+
+  ownerOpenId?: string;
+  lastCallerOpenId?: string;
+  lastMessageAt: string;
+  createdAt: string;
 }
 ```
 
-## 3. 状态机
+关键字段：
+- `rootMessageId` / `threadId`：飞书话题身份。
+- `anchorMessageId`：用于 reply_in_thread 的锚点。
+- `initialCardMessageId`：建话题时预发的首张分析卡；首轮输出直接 patch 它。
+- `traceCardMessageId`：最近一张分析卡，用于引用/按钮反查会话。
+- `answerCardMessageId`：最近一张最终回复卡，用于引用回复反查会话。
+- `cliSessionId`：traex 原生会话 id，用于 resume、token usage、final message 读取。
+- `model`：创建该 Session 时使用的模型。
 
-```
-          @机器人 / 首条消息
-   (none) ───────────────▶ idle
-                            │
-        queue 非空 & drain  │
-            ┌───────────────┘
-            ▼
-          busy ──── pty 输出流式 PATCH 卡片（或表情进度，见 §6）
-            │
-   idle-detector 判定一轮结束
-            │
-            ▼
-          idle ──── queue 还有 → 继续 drain；空 → 等待
-            │
-   卡片按钮 / 控制台 close
-            ▼
-         closed（pty.kill + 冻结卡片 + 从 map 删除）
-```
+## 3. Runtime
 
-状态转移规则：
-
-| 事件 | 前置状态 | 动作 | 后置状态 |
-|---|---|---|---|
-| @机器人建话题 | none | spawn PTY | idle |
-| 收到消息 | idle | `queue.push` + drain | busy |
-| 收到消息 | busy | `queue.push`（不打断） | busy |
-| idle-detector 触发 | busy | 冻结卡片；`queue` 非空则再 drain | idle / busy |
-| 卡片按钮 / 控制台 close | any | `pty.kill` | closed |
-| PTY 意外退出 | any | 通知 + 标记 | closed |
-
-> **关闭会话** 由卡片上的按钮或控制台触发，**不是表情**。表情另有用途，见 §6。
-
-## 4. 队列语义（核心卖点）
-
-- **不打断**：busy 时到达的消息一律入队，绝不 `pty.write` 打断当前 turn
-- **FIFO**：严格先进先出，一轮只发一条
-- **边界情况**：
-  - 空闲时连发 N 条 → 逐条按序执行（每条等上一条 idle）
-  - 会话关闭时队列直接丢弃
-  - 后续可扩展：合并相邻消息、优先级、`/stop` 强制打断（v1 不做）
-
-## 5. 持久化（SessionStore 抽象）
+Runtime 只存在于内存中，由 `ConversationManager` 管理。
 
 ```typescript
-interface SessionStore {
-  loadBots(): Promise<Bot[]>;
-  saveBots(bots: Bot[]): Promise<void>;
-  // v1：会话不持久化，daemon 重启即丢弃重开
-  // 预留：saveSessions / loadSessions 供后续 resume
+interface Runtime {
+  route: Session;
+  pty: IPty;
+  detector: IdleDetector;
+  renderer: TerminalRenderer;
+  queue: QueuedTurn[];
+  status: 'idle' | 'busy';
+  ready: boolean;
+  resumeAttempt: boolean;
+  intentionalClose: boolean;
+  streamingCardDisabled: boolean;
+  turnStartedAtMs?: number;
 }
 ```
 
-v1 用 JSON 文件实现。会话本身（含 PTY 句柄）不落盘，daemon 重启后活跃会话丢弃、下次 @ 重开。
+Runtime 负责：
+- 持有 PTY 进程。
+- 维护 FIFO turn 队列。
+- 通过 `IdleDetector` 判断 turn 完成。
+- 通过 `TerminalRenderer` 拆分分析过程和最终回复。
+- 记录 turn 开始时间，用于分析卡 footer 展示总耗时。
 
-## 6. 表情进度指示（关闭流式卡片时）
+## 4. 状态机
 
-当 bot 配置 `disableStreamingCard = true`，会话不再发实时刷新的流式卡片，而是用
-**表情回复**在触发消息上指示进度。只用两个表情：
+```
+无路由
+  │ @ bot / 首条消息
+  ▼
+active + runtime idle
+  │ turn 入队
+  ▼
+active + runtime busy
+  │ idle / rollout final
+  ▼
+active + runtime idle
+  │ 控制台关闭
+  ▼
+closed
+```
+
+规则：
+- busy 时新消息只入队，不打断当前 turn。
+- idle 后如果队列非空，继续 drain 下一条。
+- 停止本轮分析会杀掉当前 PTY，但 Session 仍为 `active`，下一条消息尝试 resume。
+- 关闭会话才会将 Session 标记为 `closed`。
+- 定期清理会关闭长时间闲置的活跃会话，并删除过期 closed 路由。
+
+## 5. 分析卡片状态
+
+分析卡片状态来自 `CardStatus`：
+
+| 状态 | 展示文案 | 含义 |
+|---|---|---|
+| `working` | 正在全力分析中… | turn 正在执行 |
+| `completed` | 分析完成 | turn 已完成 |
+| `stopped` | 已停止分析 | 当前 turn 被用户停止 |
+| `failed` | 分析失败 | traex 或链路失败 |
+
+完成或停止状态的 footer 包含：
+- `⏱️ 总耗时：xx`
+- 当前 traex 会话累计 token（如果能从 rollout 读取）
+
+## 6. 模型选择
+
+控制台通过 `GET /api/models` 执行 `traex models` 动态获取可用模型。
+
+保存 bot 的 `model` 后：
+- 新建 Session 时透传为 `--model <model>`。
+- 已存在 Session 保持创建时的模型。
+- 空模型表示使用 traex CLI 默认模型。
+
+## 7. 表情进度指示
+
+当 `disableStreamingCard = true` 时，不发送实时分析卡片，改用触发消息上的表情表示进度。
 
 | 阶段 | emoji_type | 含义 |
 |---|---|---|
-| 收到活儿 / 进行中 | `Get` | 已接收，开始处理 |
-| 一轮做完 | `DONE` | ✅ 完成 |
+| 收到 / 进行中 | `Get` | 已接收，开始处理 |
+| 完成 | `DONE` | 一轮完成 |
 
-流转：
-
-- **收到活儿**：给用户那条触发消息 `addReaction` 一个 `Get`，并把
-  `{ messageId, reactionId }` 记入 `session.pendingAckReactions`
-- **一轮做完**（busy → idle 的边沿）：对每条待确认消息先 `removeReaction` 删掉 `Get`，
-  再 `addReaction` 一个 `DONE`——两次独立 API，不是原地替换
-
-```
-用户消息 ──收到──▶ +Get（记 reactionId）
-                     │
-              一轮结束(busy→idle)
-                     ▼
-                -Get，+DONE
-```
-
-> 只保留 `Get` / `DONE` 两个表情，不引入更多中间状态。
-> 这套逻辑属阶段三卡片体系的一部分；阶段一只打通纯文本闭环，不实现表情。
+一轮完成时会先删除 `Get`，再添加 `DONE`。

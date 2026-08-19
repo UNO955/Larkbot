@@ -82,6 +82,7 @@ function isBot(value: unknown): value is Bot {
     && typeof bot.appSecret === 'string'
     && typeof bot.cwd === 'string'
     && typeof bot.ownerOpenId === 'string'
+    && (bot.allowedOpenIds === undefined || (Array.isArray(bot.allowedOpenIds) && bot.allowedOpenIds.every((item) => typeof item === 'string')))
     && typeof bot.enabled === 'boolean'
     && (bot.model === undefined || typeof bot.model === 'string')
     && (bot.replySignature === undefined || typeof bot.replySignature === 'string')

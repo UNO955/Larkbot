@@ -161,7 +161,7 @@ export class ConversationManager {
     await this.patchTraceStopped(runtime);
     this.disposeRuntime(runtime);
     await this.persist();
-    logger.info(`已停止本轮思考 session=${sessionId.slice(0, 8)}`);
+    logger.info(`已停止本轮分析 session=${sessionId.slice(0, 8)}`);
     return session;
   }
 
@@ -584,7 +584,7 @@ export class ConversationManager {
       );
       runtime.lastCardStatus = 'stopped';
     } catch (error: any) {
-      logger.warn(`更新停止思考卡失败 session=${runtime.route.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+      logger.warn(`更新停止分析卡失败 session=${runtime.route.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
     }
   }
 

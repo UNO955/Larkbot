@@ -375,6 +375,8 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
   if (typeof input.appSecret === 'string' && input.appSecret.trim()) next.appSecret = input.appSecret.trim();
   if (typeof input.cwd === 'string') next.cwd = clean(input.cwd, 500);
   if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
+  if (Array.isArray(input.allowedOpenIds)) next.allowedOpenIds = sanitizeOpenIds(input.allowedOpenIds);
+  if (typeof input.allowedOpenIds === 'string') next.allowedOpenIds = sanitizeOpenIds(input.allowedOpenIds.split(/[\s,;]+/));
   if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
   if (typeof input.model === 'string') next.model = sanitizeModel(input.model) || undefined;
   if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
@@ -431,6 +433,13 @@ function clean(value: string, max: number): string {
 function sanitizeModel(value: string): string {
   const model = value.trim().slice(0, 80);
   return /^[A-Za-z0-9._:-]+$/.test(model) ? model : '';
+}
+
+function sanitizeOpenIds(values: unknown[]): string[] {
+  return unique(values
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => clean(item, 128))
+    .filter(Boolean));
 }
 
 async function loadTraexModels(): Promise<string[]> {
@@ -588,6 +597,11 @@ function renderConsoleHtml(): string {
         </div>
         <label>Owner Open ID
           <input name="ownerOpenId" type="text" autocomplete="off">
+          <span class="hint">管理者 open_id，默认也具备提问和操作权限。</span>
+        </label>
+        <label>授权用户 Open IDs
+          <textarea name="allowedOpenIds" rows="3" autocomplete="off" placeholder="每行一个 open_id，也支持用逗号分隔"></textarea>
+          <span class="hint">允许 QA、客户端、前端同学在群里直接提问或操作卡片；Owner 不需要重复填写。</span>
         </label>
         <label>Trae 模型
           <select name="model">
@@ -701,6 +715,7 @@ function renderConsoleHtml(): string {
       form.appId.value = bot.appId || '';
       form.appSecret.value = '';
       form.ownerOpenId.value = bot.ownerOpenId || '';
+      form.allowedOpenIds.value = Array.isArray(bot.allowedOpenIds) ? bot.allowedOpenIds.join('\\n') : '';
       ensureModelOption(bot.model || '');
       form.model.value = bot.model || '';
       form.enabled.checked = !!bot.enabled;
@@ -858,6 +873,7 @@ function renderConsoleHtml(): string {
         appId: form.appId.value,
         appSecret: form.appSecret.value,
         ownerOpenId: form.ownerOpenId.value,
+        allowedOpenIds: form.allowedOpenIds.value,
         model: form.model.value,
         enabled: form.enabled.checked,
         disableStreamingCard: form.disableStreamingCard.checked,
@@ -899,7 +915,7 @@ function renderTraceHtml(trace: TurnTrace): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(trace.title)} · 思考过程</title>
+  <title>${escapeHtml(trace.title)} · 分析过程</title>
   <style>
     :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; background: #f6f7fb; color: #1f2329; }
@@ -916,7 +932,7 @@ function renderTraceHtml(trace: TurnTrace): string {
   <main>
     <section class="card">
       <header>
-        <h1>${escapeHtml(trace.title || '思考过程')}</h1>
+        <h1>${escapeHtml(trace.title || '分析过程')}</h1>
         <div class="meta">
           <span>状态：${escapeHtml(trace.status)}</span>
           <span>创建：${escapeHtml(trace.createdAt)}</span>
@@ -924,7 +940,7 @@ function renderTraceHtml(trace: TurnTrace): string {
           <span>Turn：${escapeHtml(trace.id)}</span>
         </div>
       </header>
-      <pre class="${trace.content.trim() ? '' : 'empty'}">${escapeHtml(trace.content.trim() || '暂无思考过程。')}</pre>
+      <pre class="${trace.content.trim() ? '' : 'empty'}">${escapeHtml(trace.content.trim() || '暂无分析过程。')}</pre>
     </section>
   </main>
 </body>
@@ -938,7 +954,7 @@ function renderTerminalHtml(session: Session): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(session.title || '思考过程')} · 只读终端</title>
+  <title>${escapeHtml(session.title || '分析过程')} · 只读终端</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
   <style>
     * { box-sizing: border-box; }
@@ -956,7 +972,7 @@ function renderTerminalHtml(session: Session): string {
 </head>
 <body>
   <header>
-    <div class="title">${escapeHtml(session.title || '思考过程')}</div>
+    <div class="title">${escapeHtml(session.title || '分析过程')}</div>
     <div class="meta">只读 · ${escapeHtml(session.sessionId.slice(0, 8))}</div>
   </header>
   <div id="terminal"></div>
@@ -1043,7 +1059,7 @@ function renderSessionInterruptedHtml(session: Session): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>思考已停止</title>
+  <title>分析已停止</title>
   <style>
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f7f8fa; color: #1f2329; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { width: min(420px, calc(100vw - 32px)); border: 1px solid #dee0e3; border-radius: 14px; background: #fff; padding: 24px; box-shadow: 0 12px 32px rgba(31,35,41,.08); }
@@ -1054,7 +1070,7 @@ function renderSessionInterruptedHtml(session: Session): string {
 </head>
 <body>
   <main>
-    <h1>思考已停止</h1>
+    <h1>分析已停止</h1>
     <p>会话 <code>${escapeHtml(session.sessionId)}</code> 仍会保留，可以继续发送新消息。</p>
   </main>
 </body>

@@ -1,69 +1,78 @@
-# 分阶段实现路线图
+# 当前状态与路线图
 
-按里程碑推进，而非按固定工期。优先把精力投在有技术含量的部分
-（idle 检测、队列调度、流式渲染），把体力活（控制台 UI、配置项）压到最小。
+larkbot 的 MVP 主链路已经打通：飞书群内触发、开发机执行、共享知识库辅助判断、过程可观察、
+结果可回传、当前轮可停止、会话可恢复。后续工作重点不是继续堆功能，而是清理早期实现遗留、
+增强控制台可用性，以及提升“知识库 + 日志 + 代码”排查链路的稳定性和可解释性。
 
-## 阶段一 · 打通命脉 ✅
+## 已完成
 
-- 脚手架：TS + node-pty + lark sdk，`bots.json` 读取，daemon 启动 / 退出
-- 飞书 WSClient 长连接，订阅 `im.message.receive_v1`，识别 @ 到 bot 的消息
-- `spawn(traex)` PTY，把消息写进 stdin，`pty.onData` 原样回贴飞书（纯文本）
+### 1. 远程入口
 
-**里程碑 M1**：飞书 @ 一句 → 开发机 traex 跑 → 结果回飞书，端到端跑通。
+- 飞书 WSClient 长连接。
+- mention 触发、owner + 授权用户校验、话题内后续消息识别。
+- 文本、卡片、表情、附件下载基础能力。
 
-## 阶段二 · 会话模型（核心）✅
+### 2. 本地执行代理
 
-- `reply_in_thread` 建话题，`SessionManager` 建立 threadId ↔ Session 映射
-- **状态机 + 队列**：idle/busy，busy 入队不打断，idle drain 出队
-- **idle 检测**（最难）：quiescence（静默 2s）+ spinner guard（3s）+ readyPattern gate
-  + 每轮 reset + ANSI 剥离。traex 无完成标记，屏幕层纯靠这套启发式；保留 `fireIdle`
-  外部权威通道供后续接 rollout task_complete。
+- 飞书话题到 larkbot Session 的路由。
+- node-pty 拉起 traex。
+- FIFO 队列，不打断当前 turn。
+- IdleDetector 判定一轮完成。
+- traex 原生 session id 捕获、usage/final message 读取。
+- daemon 重启后恢复路由，下一条消息 lazy resume。
 
-**里程碑 M2**：话题 = 会话、连发不乱、一轮一轮有序执行。
-产出：IdleDetector + 状态机队列，13 个单测覆盖核心边沿（静默判定 / spinner 抑制 /
-readyPattern gate / reset 重新武装 / 中途停顿不误判 / 外部信号幂等）。
+### 3. 可观察和可控制
 
-## 阶段三 · 流式卡片 + 交互
+- 分析卡片：正在全力分析中 / 分析完成 / 已停止分析 / 分析失败。
+- footer 展示总耗时和 token。
+- 最终回复卡。
+- 卡片按钮停止当前 turn。
+- 本地控制台配置 bot、prompt profiles、模型、落款、流式卡片开关。
+- `/api/models` 动态读取 `traex models`。
+- 活跃/历史会话列表、关闭会话、只读终端页面。
 
-- interactive card 构建 + 节流 PATCH（每轮一张实时刷新卡片）
-- headless xterm 截图渲染（先文本兜底，截图作增强）
-- 关闭流式卡片时用表情指示进度（收到 `Get` → 完成 `DONE`）
-- 会话关闭：卡片按钮 / 控制台触发（非表情）
-- 主动命令注入（本地 HTTP `POST /inject`）
+### 4. Prompt 与排查质量
 
-**里程碑 M3**：实时卡片 + 表情进度。
+- larkbot routing/reminder prompt 包装。
+- 终端 prompt echo 隐藏。
+- QA 日志排查 Bot prompt 文档和 Golden Case 截图沉淀。
+- 强化“知识库判定口径 + 代码执行顺序 + 日志证据”的排查规则。
+- 明确 public 知识库是排查前置输入，而不是事后引用材料。
 
-## 阶段四 · 控制台 + 韧性 + 收尾
+## 当前技术债
 
-- Web 控制台（建 / 编辑 bot、列活跃会话、注入命令、关闭会话）——原生 HTML + fetch
-- 韧性：PTY 崩溃重启、断线重连、daemon 重启会话丢弃重开（v1 不做 resume）
-- 测试（idle 检测、队列调度）+ 日志
-- 文档收尾：架构图、README
+- `src/core/session-manager.ts` 是早期阶段遗留实现，当前 daemon 不使用；后续可删除或迁移测试覆盖后移除。
+- 少量 traex 终端内容本身仍可能出现“thinking/思考”类字样，larkbot 用户可见口径统一为“分析”。
+- 控制台是原生 HTML，功能够用但组件化程度低。
 
-**里程碑 M4**：完整可用 + 完整文档。
+## 后续优先级
 
-## 风险提示（最可能翻车处）
+1. **清理遗留代码**
+   - 删除未使用的 `src/core/session-manager.ts`。
+   - 更新内部注释中的旧阶段口径。
 
-1. **idle 检测** — 唯一可能拖期的点。已用 quiescence + spinner guard + readyPattern gate
-   三重启发式解决；traex 屏幕层无完成标记，后续接 rollout task_complete
-   （`fireIdle` external 通道）作权威信号进一步降误判。
-2. **截图渲染** — `@napi-rs/canvas` 装原生依赖偶尔踩坑。缓解：文本卡片兜底，
-   截图是加分项，做不完不影响主线。
-3. **飞书应用权限** — 建 bot、发卡、收 reaction 需对应 scope。缓解：动手前先把
-   应用建好、权限开齐。
+2. **完善控制台**
+   - 增加配置校验提示。
+   - 更清晰地管理授权用户列表。
+   - 展示当前会话模型、cliSessionId、最后活跃时间。
+   - 为 prompt profiles 增加导入/导出。
 
-## commit 节奏
+3. **增强恢复能力**
+   - 更明确地区分 resume 成功、resume 失败降级、新会话创建。
+   - 控制台展示恢复状态和失败原因。
 
-按里程碑切成有逻辑的一串 commit，让历史读起来是清晰、有规划的开发过程：
+4. **部署与运维**
+   - 固化开发机部署脚本。
+   - 增加 daemon 健康检查和日志路径说明。
 
-- `chore: 初始化项目脚手架与 TypeScript 配置`
-- `feat(lark): 接入飞书长连接并订阅消息事件`
-- `feat(cli): 用 node-pty 拉起 traex 并桥接输入输出`
-- `feat(session): 实现话题 ↔ 会话映射`
-- `feat(session): 实现 idle/busy 状态机与 FIFO 队列`
-- `feat(idle): 实现 IdleDetector 驱动队列流转`
-- `feat(card): 实现流式卡片增量 PATCH`
-- `feat(card): 关闭卡片时用 Get/DONE 表情指示进度`
-- `feat(console): 实现建 / 管 bot 的本地控制台`
+5. **质量保障**
+   - 为控制台模型列表、prompt profiles、停止当前 turn 增加更多边界测试。
+   - 为 owner + 授权用户的消息和卡片操作补充权限测试。
+   - 为 QA prompt 文档增加示例检查清单。
 
-规范：Conventional Commits（英文 type/scope + 中文描述）；杜绝 `wip`/`update` 等空洞提交。
+## 判断标准
+
+后续每个迭代都按三个问题判断是否值得做：
+- 是否让“开发机替身”更可靠，例如恢复更稳、停止更可控、状态更准确。
+- 是否让远程使用更清晰，例如控制台能解释当前会话、模型、上下文和失败原因。
+- 是否保持单开发机代理主线，不引入复杂多租户、复杂编排或云端执行这类会稀释 MVP 的问题。

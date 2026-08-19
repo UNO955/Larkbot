@@ -7,7 +7,7 @@
  * 有意做薄：具体逻辑在 im/lark 与 core/session-manager，这里只负责编排与生命周期。
  *
  * 说明（阶段一范围）：
- *   - 停止思考由「卡片按钮 / 控制台」触发（阶段三/四实现），不是表情。
+ *   - 停止分析由「卡片按钮 / 控制台」触发，不是表情。
  *   - 表情是「关闭流式卡片」后的轻量进度指示（收到→GoGoGo，完成→DONE），
  *     属阶段三卡片体系的一部分，阶段一不实现。
  */
@@ -36,6 +36,7 @@ async function main(): Promise<void> {
     appId: activeBot.appId,
     appSecret: activeBot.appSecret,
     ownerOpenId: activeBot.ownerOpenId,
+    allowedOpenIds: activeBot.allowedOpenIds,
   });
 
   const sessions = new ConversationManager({
@@ -187,9 +188,9 @@ async function main(): Promise<void> {
       if (payload.action !== 'interrupt_thinking' || typeof payload.sessionId !== 'string') return;
       const sessionId = payload.sessionId;
       void sessions.interruptSession(sessionId).then((session) => {
-        if (!session) logger.warn(`停止思考失败，未找到 session=${sessionId}`);
+        if (!session) logger.warn(`停止分析失败，未找到 session=${sessionId}`);
       }).catch((error: any) => {
-        logger.warn(`停止思考失败 session=${sessionId}: ${error?.message ?? error}`);
+        logger.warn(`停止分析失败 session=${sessionId}: ${error?.message ?? error}`);
       });
       return {
         toast: { type: 'info', content: '已停止本轮分析' },
@@ -236,6 +237,7 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
     appSecret: cfg.larkAppSecret,
     cwd: cfg.traexCwd,
     ownerOpenId: cfg.ownerOpenId,
+    allowedOpenIds: cfg.allowedOpenIds,
     enabled: true,
     model: process.env.TRAEX_MODEL?.trim() || undefined,
     disableStreamingCard: false,

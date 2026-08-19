@@ -152,7 +152,7 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('能通过思考卡或回复卡 message_id 反查会话', async () => {
+  it('能通过分析卡或回复卡 message_id 反查会话', async () => {
     const session = route({
       traceCardMessageId: 'om-trace-card',
       answerCardMessageId: 'om-answer-card',
@@ -446,7 +446,7 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('停止思考只中断当前轮并更新思考卡，不关闭会话', async () => {
+  it('停止分析只中断当前轮并更新分析卡，不关闭会话', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined, initialCardMessageId: 'trace-card-1' });
     let saved: Session[] = [];
     const store: SessionStore = {
@@ -572,7 +572,7 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
-  it('思考卡 footer 展示当前 traex 会话累计 token，完成回复卡使用自定义落款', async () => {
+  it('分析卡 footer 展示当前 traex 会话累计 token，完成回复卡使用自定义落款', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {
       loadBots: async () => [],

@@ -89,7 +89,7 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('larkbot');
   });
 
-  it('思考完成后停止按钮不可点击', () => {
+  it('分析完成后停止按钮不可点击', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
       interruptSessionId: 'lm-1',
@@ -109,7 +109,7 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
 
-  it('思考中可停止，停止后按钮不可点击', () => {
+  it('分析中可停止，停止后按钮不可点击', () => {
     const working: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
       interruptSessionId: 'lm-1',

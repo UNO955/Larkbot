@@ -14,11 +14,13 @@ import { logger } from '../../utils/logger.js';
 export interface LarkClientOpts {
   appId: string;
   appSecret: string;
-  ownerOpenId: string;   // 白名单：只响应这个 open_id
+  ownerOpenId: string;   // 管理者 open_id，默认也具备使用权限
+  allowedOpenIds?: string[]; // 额外允许直接提问 / 操作卡片的用户 open_id
 }
 
 export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret });
+  const allowedOpenIds = new Set([opts.ownerOpenId, ...(opts.allowedOpenIds ?? [])].filter(Boolean));
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
   const userNameCache = new Map<string, string | undefined>();
@@ -143,9 +145,8 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
           const msg = parseMessageEvent(data);
           if (!msg) return;
 
-          // 白名单：只响应 owner 本人
-          if (msg.senderOpenId !== opts.ownerOpenId) {
-            logger.info(`忽略非 owner 消息（sender=${msg.senderOpenId.slice(0, 10)}）`);
+          if (!allowedOpenIds.has(msg.senderOpenId)) {
+            logger.info(`忽略未授权用户消息（sender=${msg.senderOpenId.slice(0, 10)}）`);
             return;
           }
 
@@ -165,7 +166,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
         'im.message.reaction.created_v1': async (data: any) => {
           const operatorId = data?.operator_id?.open_id ?? '';
-          if (operatorId !== opts.ownerOpenId) return;
+          if (!allowedOpenIds.has(operatorId)) return;
           await handler.onReaction({
             messageId: data?.message_id ?? '',
             emoji: data?.reaction_type?.emoji_type ?? '',
@@ -325,8 +326,8 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       logger.warn('收到卡片回调但无法解析 action');
       return undefined;
     }
-    if (action.operatorId !== opts.ownerOpenId) {
-      logger.info(`忽略非 owner 卡片回调（operator=${action.operatorId.slice(0, 10)}）`);
+    if (!allowedOpenIds.has(action.operatorId)) {
+      logger.info(`忽略未授权用户卡片回调（operator=${action.operatorId.slice(0, 10)}）`);
       return undefined;
     }
     logger.info(`收到卡片回调 message=${action.messageId.slice(0, 12)} value=${compactJson(action.value)}`);

@@ -124,7 +124,7 @@ describe('TerminalRenderer', () => {
     r.dispose();
   });
 
-  it('过滤 traex 暴露出的英文自述思考段，只保留最终回复', async () => {
+  it('过滤 traex 暴露出的英文自述分析段，只保留最终回复', async () => {
     const r = new TerminalRenderer(100, 20);
     r.markNewTurn();
     await r.writeAndFlush([
@@ -141,7 +141,7 @@ describe('TerminalRenderer', () => {
     r.dispose();
   });
 
-  it('把工具轨迹和思考拆到 trace，最终回复单独作为 answer', async () => {
+  it('把工具轨迹和分析过程拆到 trace，最终回复单独作为 answer', async () => {
     const r = new TerminalRenderer(120, 30);
     r.markNewTurn();
     await r.writeAndFlush([

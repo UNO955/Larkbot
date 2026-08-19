@@ -6,7 +6,8 @@ export interface Bot {
   appId: string;
   appSecret: string;
   cwd: string;          // traex 执行工作目录
-  ownerOpenId: string;  // 白名单：只响应这个 open_id
+  ownerOpenId: string;  // 管理者 open_id，默认也具备使用权限
+  allowedOpenIds?: string[]; // 额外允许直接提问 / 操作卡片的用户 open_id
   enabled: boolean;
   model?: string;       // traex 启动模型，留空表示使用 CLI 默认
   disableStreamingCard?: boolean; // bot 级：关闭流式卡片，改用表情进度指示（默认 false）
@@ -30,7 +31,7 @@ export interface Session {
   threadId?: string;
   anchorMessageId?: string; // 话题内用于 reply_in_thread 的锚点消息
   initialCardMessageId?: string; // 建话题时发出的首张运行中卡片，首轮输出直接 patch 它
-  traceCardMessageId?: string; // 最近一张思考卡 message_id，用于引用/回复卡片时反查会话
+  traceCardMessageId?: string; // 最近一张分析卡 message_id，用于引用/回复卡片时反查会话
   answerCardMessageId?: string; // 最近一张最终回复卡 message_id，用于引用/回复卡片时反查会话
   scope: 'thread';
   title: string;

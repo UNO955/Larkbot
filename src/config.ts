@@ -4,7 +4,8 @@ import 'dotenv/config';
 export interface Config {
   larkAppId: string;
   larkAppSecret: string;
-  ownerOpenId: string;   // 白名单：只响应这个 open_id
+  ownerOpenId: string;   // 管理者 open_id，默认也具备使用权限
+  allowedOpenIds: string[]; // 额外允许直接提问 / 操作卡片的用户 open_id
   traexCwd: string;      // traex 执行工作目录
   consoleHost: string;
   consolePort: number;
@@ -26,6 +27,7 @@ export function loadConfig(): Config {
     larkAppId: required('LARK_APP_ID'),
     larkAppSecret: required('LARK_APP_SECRET'),
     ownerOpenId: required('OWNER_OPEN_ID'),
+    allowedOpenIds: parseList(process.env.ALLOWED_OPEN_IDS),
     traexCwd: process.env.TRAEX_CWD?.trim() || process.cwd(),
     consoleHost: process.env.CONSOLE_HOST?.trim() || '127.0.0.1',
     consolePort: Number(process.env.CONSOLE_PORT) || 8787,
@@ -35,6 +37,11 @@ export function loadConfig(): Config {
     sessionClosedRetentionMs: readDurationMs('SESSION_CLOSED_RETENTION_DAYS', 7, 24 * 60 * 60 * 1000),
     sessionCleanupIntervalMs: readDurationMs('SESSION_CLEANUP_INTERVAL_MINUTES', 10, 60 * 1000),
   };
+}
+
+function parseList(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  return [...new Set(value.split(/[\s,;]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
 function readDurationMs(name: string, defaultValue: number, unitMs: number): number {

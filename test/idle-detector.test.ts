@@ -35,7 +35,7 @@ describe('IdleDetector', () => {
   it('readyPattern gate：提示符未出现则永不判 idle', () => {
     const d = new IdleDetector(mkCli({ readyPattern: /❯/ }));
     const fires = attach(d);
-    d.feed('正在思考...');        // 没有提示符
+    d.feed('正在分析...');        // 没有提示符
     vi.advanceTimersByTime(10_000);
     expect(fires).toHaveLength(0);
   });

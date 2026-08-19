@@ -135,6 +135,7 @@ describe('console terminal page', () => {
       body: JSON.stringify({
         replySignature: '只读排查助手',
         model: 'gpt-5.5',
+        allowedOpenIds: 'ou_qa\nou_client,ou_qa',
         systemPromptProfiles: [
           { id: 'review', name: '代码审查', content: '先列风险。' },
           { id: 'brief', name: '简洁回答', content: '直接给结论。' },
@@ -148,6 +149,7 @@ describe('console terminal page', () => {
     const { bot: publicBot } = await res.json();
     expect(publicBot.replySignature).toBe('只读排查助手');
     expect(publicBot.model).toBe('gpt-5.5');
+    expect(publicBot.allowedOpenIds).toEqual(['ou_qa', 'ou_client']);
     expect(publicBot.systemPromptProfiles).toHaveLength(2);
     expect(publicBot.activeSystemPromptProfileId).toBe('review');
     expect(publicBot.systemPromptProfiles[0]).toMatchObject({ id: 'review', name: '代码审查', content: '先列风险。' });
@@ -155,7 +157,7 @@ describe('console terminal page', () => {
     expect(publicBot.appSecretSet).toBe(true);
   });
 
-  it('卡片停止入口只中断本轮思考，不关闭会话', async () => {
+  it('卡片停止入口只中断本轮分析，不关闭会话', async () => {
     const interrupted = structuredClone(session);
     const interruptSession = vi.fn(async () => interrupted);
     const store: SessionStore = {
@@ -181,7 +183,7 @@ describe('console terminal page', () => {
 
     const interrupt = await fetch(`${base}/sessions/lm-1/interrupt`);
     expect(interrupt.status).toBe(200);
-    expect(await interrupt.text()).toContain('思考已停止');
+    expect(await interrupt.text()).toContain('分析已停止');
 
     expect(interruptSession).toHaveBeenCalledWith('lm-1');
     expect(interrupted.status).toBe('active');
