@@ -318,11 +318,10 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     try {
       let pageToken: string | undefined;
       for (let page = 0; page < 10; page += 1) {
-        const params: Record<string, string | number> = { member_id_type: 'open_id', page_size: 100 };
+        const params: Record<string, string | number> = { member_id_type: 'open_id', page_size: 50 };
         if (pageToken) params.page_token = pageToken;
-        const res: any = await client.request({
-          method: 'GET',
-          url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
+        const res: any = await client.im.v1.chatMembers.get({
+          path: { chat_id: chatId },
           params,
         });
         if (res?.code && res.code !== 0) throw new Error(`${res.msg ?? 'unknown'} (code ${res.code})`);
