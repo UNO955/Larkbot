@@ -25,6 +25,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
   const userNameCache = new Map<string, string | undefined>();
+  const chatMemberNameCache = new Map<string, string | undefined>();
   const chatNameCache = new Map<string, string | undefined>();
   // threadId(omt_) -> 话题内锚点 messageId。回贴时 reply 到锚点并 reply_in_thread，
   // 消息即落进该话题（message.create 不支持 receive_id_type='thread_id'）。
@@ -254,6 +255,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     removeReaction,
     getBotOpenId: () => botOpenId,
     getChatName: resolveChatName,
+    getUserName: resolveUserName,
   };
 
   async function toImMessage(m: ParsedMessage) {
@@ -265,7 +267,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       chatType: m.chatType,
       senderId: m.senderOpenId,
       senderType: 'user' as const,
-      senderName: m.senderName ?? await resolveUserName(m.senderOpenId),
+      senderName: m.senderName ?? await resolveUserName(m.senderOpenId, m.chatId),
       content: m.text,
       attachments: await downloadAttachments(m),
       quotedMessageId: m.replyToMessageId,
@@ -274,27 +276,80 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     };
   }
 
-  async function resolveUserName(openId: string): Promise<string | undefined> {
+  async function resolveUserName(openId: string, chatId?: string): Promise<string | undefined> {
     if (!openId) return undefined;
-    if (userNameCache.has(openId)) return userNameCache.get(openId);
+    const cached = userNameCache.get(openId);
+    if (cached) return cached;
     try {
       const res: any = await client.request({
         method: 'GET',
         url: `/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
       });
+      if (res?.code && res.code !== 0) throw new Error(`${res.msg ?? 'unknown'} (code ${res.code})`);
       const user = res?.data?.user ?? res?.user;
       const name = pickUserName(user);
-      userNameCache.set(openId, name);
-      return name;
+      if (name) {
+        userNameCache.set(openId, name);
+        return name;
+      }
     } catch (error: any) {
       logger.warn(`查询发送人名称失败 open_id=${openId.slice(0, 12)}: ${error?.message ?? error}`);
-      userNameCache.set(openId, undefined);
-      return undefined;
     }
+    const memberName = chatId ? await resolveChatMemberName(chatId, openId) : undefined;
+    if (memberName) {
+      userNameCache.set(openId, memberName);
+      return memberName;
+    }
+    userNameCache.set(openId, undefined);
+    return undefined;
   }
 
   function pickUserName(user: any): string | undefined {
-    const candidates = [user?.name, user?.en_name, user?.nickname, user?.email];
+    const candidates = [user?.name, user?.en_name, user?.nickname, user?.email, user?.display_name];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return undefined;
+  }
+
+  async function resolveChatMemberName(chatId: string, openId: string): Promise<string | undefined> {
+    const cacheKey = `${chatId}:${openId}`;
+    if (chatMemberNameCache.has(cacheKey)) return chatMemberNameCache.get(cacheKey);
+    try {
+      let pageToken: string | undefined;
+      for (let page = 0; page < 10; page += 1) {
+        const params: Record<string, string | number> = { member_id_type: 'open_id', page_size: 100 };
+        if (pageToken) params.page_token = pageToken;
+        const res: any = await client.request({
+          method: 'GET',
+          url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
+          params,
+        });
+        if (res?.code && res.code !== 0) throw new Error(`${res.msg ?? 'unknown'} (code ${res.code})`);
+        const members: any[] = res?.data?.items ?? res?.items ?? [];
+        const member = members.find((item) => pickMemberOpenId(item) === openId);
+        const name = pickUserName(member);
+        if (name) {
+          chatMemberNameCache.set(cacheKey, name);
+          return name;
+        }
+        if (!res?.data?.has_more || !res?.data?.page_token) break;
+        pageToken = res.data.page_token;
+      }
+    } catch (error: any) {
+      logger.warn(`查询群成员名称失败 chat=${chatId.slice(0, 12)} open_id=${openId.slice(0, 12)}: ${error?.message ?? error}`);
+    }
+    chatMemberNameCache.set(cacheKey, undefined);
+    return undefined;
+  }
+
+  function pickMemberOpenId(member: any): string | undefined {
+    const candidates = [
+      member?.member_id,
+      member?.open_id,
+      member?.user_id?.open_id,
+      member?.member_id?.open_id,
+    ];
     for (const candidate of candidates) {
       if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
     }

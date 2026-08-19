@@ -97,4 +97,5 @@ export interface ImAdapter {
 
   getBotOpenId(): string | undefined;
   getChatName(chatId: string): Promise<string | undefined>;
+  getUserName(openId: string, chatId?: string): Promise<string | undefined>;
 }

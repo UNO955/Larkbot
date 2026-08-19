@@ -96,6 +96,9 @@ async function main(): Promise<void> {
       logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`);
     },
   });
+  await backfillSessionUserNames(store, im).catch((error: any) => {
+    logger.warn(`回填会话发起人名称失败: ${error?.message ?? error}`);
+  });
   const restored = await sessions.restore();
   for (const session of restored) {
     if (session.status === 'active' && session.threadId && session.anchorMessageId) {
@@ -179,7 +182,7 @@ async function main(): Promise<void> {
           const closed = sessions.findClosed(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
           if (closed) {
             logger.info(`话题会话已关闭 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId}`);
-            await im.reply(msg.threadId, '这个会话已关闭，请重新@bot发起新会话', 'text', msg.id);
+            await im.reply(msg.threadId, '这个会话已关闭，请重新@bot发起新话题', 'text', msg.id);
             return;
           }
           const expired = await sessions.findExpired(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
@@ -187,7 +190,7 @@ async function main(): Promise<void> {
             logger.info(`话题会话已过期清理 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId}`);
             await im.reply(
               msg.threadId,
-              `这个 larkbot 会话已因超过 7 天未活跃被清理，无法继续恢复上下文。请重新 @ bot 发起一个新会话。\n\n原会话：${expired.title || expired.sessionId}\n最后活跃：${formatDateTime(expired.lastMessageAt)}`,
+              `这个 larkbot 会话已因超过 7 天未活跃被清理，无法继续恢复上下文。请重新 @ bot 发起一个新话题。\n\n原会话：${expired.title || expired.sessionId}\n最后活跃：${formatDateTime(expired.lastMessageAt)}`,
               'text',
               msg.id,
             );
@@ -343,6 +346,21 @@ async function backfillKnownChatNames(store: JsonSessionStore, activeBot: Bot, i
   await store.saveBots(bots);
   logger.info(`已回填群聊名称 ${knownChats.filter((chat) => chat.name?.trim()).length}/${knownChats.length}`);
   return bot;
+}
+
+async function backfillSessionUserNames(store: JsonSessionStore, im: ImAdapter): Promise<void> {
+  const sessions = await store.loadSessions();
+  let changed = false;
+  for (const session of sessions) {
+    if (session.createdByName?.trim() || !session.createdByOpenId) continue;
+    const name = await im.getUserName(session.createdByOpenId, session.chatId);
+    if (!name) continue;
+    session.createdByName = name;
+    changed = true;
+  }
+  if (!changed) return;
+  await store.saveSessions(sessions);
+  logger.info(`已回填会话发起人名称 ${sessions.filter((session) => session.createdByName?.trim()).length}/${sessions.length}`);
 }
 
 function promptOptions(bot: Bot): { systemPrompt?: string; systemPromptName?: string } {
