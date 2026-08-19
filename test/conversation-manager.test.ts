@@ -505,6 +505,7 @@ describe('ConversationManager', () => {
       'http://console/trace/lm-1',
       'lm-1',
       'stopped',
+      expect.stringContaining('⏱️ 总耗时：'),
     );
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(patchTrace.mock.calls.some((call) => call[3] === 'working')).toBe(false);
@@ -642,8 +643,9 @@ describe('ConversationManager', () => {
       'lm-1',
       'completed',
       'om-current-user',
-      '🪙 累计 Token ↑15K ↓3.5K · gpt-5.5',
+      expect.stringContaining('🪙 累计 Token ↑15K ↓3.5K · gpt-5.5'),
     ), { timeout: 1500 });
+    expect(postTrace.mock.calls[0]?.[5]).toContain('⏱️ 总耗时：');
     expect(patchTrace).not.toHaveBeenCalled();
     manager.shutdownAll();
   });

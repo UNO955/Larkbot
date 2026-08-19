@@ -160,26 +160,26 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
   const stopped = opts.status === 'stopped';
   const buttonDisabled = opts.status !== 'working';
   const buttonText = opts.status === 'completed'
-    ? '思考已完成'
+    ? '分析已完成'
     : stopped
-    ? '思考已停止'
-    : '停止思考';
+    ? '分析已停止'
+    : '停止分析';
   const interruptValue = { action: 'interrupt_thinking', sessionId: opts.interruptSessionId };
   const elements: unknown[] = [
     {
       tag: 'markdown',
       content: stopped
-        ? "<font color='grey'>本轮思考已停止，会话仍可继续使用。</font>"
+        ? "<font color='grey'>本轮分析已停止，会话仍可继续使用。</font>"
         : opts.status === 'working'
-        ? "<font color='grey'>正在思考和调用工具，可打开只读终端查看实时过程。</font>"
-        : "<font color='grey'>思考过程可在只读终端中查看。</font>",
+        ? "<font color='grey'>正在全力分析中，可打开只读终端查看实时过程。</font>"
+        : "<font color='grey'>分析过程可在只读终端中查看。</font>",
     },
     {
       tag: 'action',
       actions: [
         {
           tag: 'button',
-          text: { tag: 'plain_text', content: '打开思考过程' },
+          text: { tag: 'plain_text', content: '打开分析过程' },
           type: 'default',
           multi_url: {
             url: opts.url,
@@ -214,7 +214,7 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
         template: meta.template,
         title: {
           tag: 'plain_text',
-          content: `${opts.status === 'completed' ? '✅ 思考完成' : opts.status === 'stopped' ? '⏹️ 已停止思考' : opts.status === 'failed' ? '⚠️ 思考失败' : '🧠 思考中'}`,
+          content: `${opts.status === 'completed' ? '✅ 分析完成' : opts.status === 'stopped' ? '⏹️ 已停止分析' : opts.status === 'failed' ? '⚠️ 分析失败' : '🔎 正在全力分析中'}`,
         },
       },
       elements,

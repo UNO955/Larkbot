@@ -97,9 +97,9 @@ describe('buildTerminalCard', () => {
       footer: '🪙 累计 Token ↑15K ↓3.5K',
     }).payload;
     expect(card.header.template).toBe('green');
-    expect(card.elements[1].actions[0].text.content).toBe('打开思考过程');
+    expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
     expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
-    expect(card.elements[1].actions[1].text.content).toBe('思考已完成');
+    expect(card.elements[1].actions[1].text.content).toBe('分析已完成');
     expect(card.elements[1].actions[1].disabled).toBe(true);
     expect(card.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
     expect(card.elements[1].actions[1].behaviors).toEqual([
@@ -115,7 +115,7 @@ describe('buildTerminalCard', () => {
       interruptSessionId: 'lm-1',
       status: 'working',
     }).payload;
-    expect(working.elements[1].actions[1].text.content).toBe('停止思考');
+    expect(working.elements[1].actions[1].text.content).toBe('停止分析');
     expect(working.elements[1].actions[1].type).toBe('danger');
     expect(working.elements[1].actions[1].disabled).toBe(false);
     expect(working.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
@@ -129,8 +129,8 @@ describe('buildTerminalCard', () => {
       interruptSessionId: 'lm-1',
       status: 'stopped',
     }).payload;
-    expect(stopped.header.title.content).toBe('⏹️ 已停止思考');
-    expect(stopped.elements[1].actions[1].text.content).toBe('思考已停止');
+    expect(stopped.header.title.content).toBe('⏹️ 已停止分析');
+    expect(stopped.elements[1].actions[1].text.content).toBe('分析已停止');
     expect(stopped.elements[1].actions[1].disabled).toBe(true);
   });
 });

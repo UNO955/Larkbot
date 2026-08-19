@@ -192,7 +192,7 @@ async function main(): Promise<void> {
         logger.warn(`停止思考失败 session=${sessionId}: ${error?.message ?? error}`);
       });
       return {
-        toast: { type: 'info', content: '已停止本轮思考' },
+        toast: { type: 'info', content: '已停止本轮分析' },
         card: {
           type: 'raw',
           data: buildThinkingCard({

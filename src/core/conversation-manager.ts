@@ -51,6 +51,7 @@ interface Runtime {
   receivedReactionId?: string;
   doneReactionSent: boolean;
   turnStopped: boolean;
+  turnStartedAtMs?: number;
   lastCardStatus?: CardStatus;
   turnFinalBaselineKey?: string;
   pendingFlushStatus?: CardStatus;
@@ -349,6 +350,7 @@ export class ConversationManager {
     runtime.receivedReactionId = turn.receivedReactionId;
     runtime.doneReactionSent = false;
     runtime.turnStopped = false;
+    runtime.turnStartedAtMs = Date.now();
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
@@ -485,7 +487,9 @@ export class ConversationManager {
       ? `${sourceAnswer}\n${trace}`
       : undefined;
     const usage = runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined;
-    const footer = status === 'working' ? undefined : sessionUsageFooter(usage);
+    const footer = status === 'working'
+      ? undefined
+      : traceFooter(usage, elapsedMs(runtime.turnStartedAtMs));
     try {
       if (runtime.turnStopped) return;
       if (!runtime.streamingCardDisabled && runtime.traceUrl && runtime.interruptSessionId && (runtime.traceCardMessageId || traceBody || status === 'working' || !!footer)) {
@@ -568,7 +572,16 @@ export class ConversationManager {
   private async patchTraceStopped(runtime: Runtime): Promise<void> {
     if (runtime.streamingCardDisabled || !runtime.traceUrl || !runtime.interruptSessionId || !runtime.traceCardMessageId) return;
     try {
-      await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, 'stopped');
+      await this.deps.patchTrace(
+        runtime.traceCardMessageId,
+        runtime.traceUrl,
+        runtime.interruptSessionId,
+        'stopped',
+        traceFooter(
+          runtime.route.cliSessionId ? this.deps.cli.getSessionUsage?.(runtime.route.cliSessionId) : undefined,
+          elapsedMs(runtime.turnStartedAtMs),
+        ),
+      );
       runtime.lastCardStatus = 'stopped';
     } catch (error: any) {
       logger.warn(`更新停止思考卡失败 session=${runtime.route.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
@@ -647,6 +660,14 @@ function sessionTimestamp(session: Session): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function traceFooter(usage: SessionTokenUsage | undefined, elapsed: number | undefined): string | undefined {
+  const parts = [
+    elapsed === undefined ? undefined : `⏱️ 总耗时：${formatDuration(elapsed)}`,
+    sessionUsageFooter(usage),
+  ].filter((part): part is string => !!part);
+  return parts.length ? parts.join('\n') : undefined;
+}
+
 function sessionUsageFooter(usage: SessionTokenUsage | undefined): string | undefined {
   if (!usage) return undefined;
   const input = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreateTokens;
@@ -654,6 +675,25 @@ function sessionUsageFooter(usage: SessionTokenUsage | undefined): string | unde
   if (input <= 0 && output <= 0) return undefined;
   const model = usage.model ? ` · ${usage.model}` : '';
   return `🪙 累计 Token ↑${formatTokenCount(input)} ↓${formatTokenCount(output)}${model}`;
+}
+
+function elapsedMs(startedAtMs: number | undefined): number | undefined {
+  if (!startedAtMs) return undefined;
+  return Math.max(0, Date.now() - startedAtMs);
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}小时${pad2(minutes)}分${pad2(seconds)}秒`;
+  if (minutes > 0) return `${minutes}分${pad2(seconds)}秒`;
+  return `${seconds}秒`;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function cleanAnswer(answer: string): string {
