@@ -13,7 +13,6 @@ export interface Config {
   argosUrlTemplate: string;
   sessionIdleCloseMs: number;
   sessionClosedRetentionMs: number;
-  sessionCleanupIntervalMs: number;
 }
 
 function required(name: string): string {
@@ -33,9 +32,8 @@ export function loadConfig(): Config {
     consolePort: Number(process.env.CONSOLE_PORT) || 8787,
     consolePublicUrl: process.env.CONSOLE_PUBLIC_URL?.trim() || `http://127.0.0.1:${Number(process.env.CONSOLE_PORT) || 8787}`,
     argosUrlTemplate: process.env.ARGOS_URL_TEMPLATE?.trim() || 'https://cloud.bytedance.net/argos/streamlog/info_overview/log_id_search?data_source_uid=&logId={logid}&log_search=false&psm={psm}&psmList=&region=China-North&x-bc-region-id=bytedance&x-resource-account=public',
-    sessionIdleCloseMs: readDurationMs('SESSION_IDLE_CLOSE_HOURS', 24, 60 * 60 * 1000),
+    sessionIdleCloseMs: readDurationMs('SESSION_IDLE_CLOSE_HOURS', 48, 60 * 60 * 1000),
     sessionClosedRetentionMs: readDurationMs('SESSION_CLOSED_RETENTION_DAYS', 7, 24 * 60 * 60 * 1000),
-    sessionCleanupIntervalMs: readDurationMs('SESSION_CLEANUP_INTERVAL_MINUTES', 10, 60 * 1000),
   };
 }
 

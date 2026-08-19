@@ -140,7 +140,8 @@ traex 是交互式全屏 CLI，会依赖 TTY、光标控制、备用屏和 ready
 | 文件 | 内容 |
 |---|---|
 | `bots.json` | bot 配置、模型、prompt profiles、落款、流式卡片开关 |
-| `sessions.json` | 会话路由、thread/root/card message id、模型、cliSessionId |
+| `sessions.json` | 会话路由、发起人、群聊、thread/root/card message id、模型、cliSessionId |
+| `expired-sessions.json` | 被 7 天清理策略删除的路由墓碑，用于旧话题过期提示和清理审计 |
 
 可以通过 `LARKBOT_STATE_DIR` 覆盖状态目录。
 

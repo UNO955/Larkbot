@@ -204,11 +204,14 @@ describe('ConversationManager', () => {
       status: 'closed',
     });
     let saved: Session[] = [];
+    let expired: any[] = [];
     const store: SessionStore = {
       loadBots: async () => [],
       saveBots: async () => undefined,
       loadSessions: async () => [activeOld, activeFresh, closedOld],
       saveSessions: async (sessions) => { saved = structuredClone(sessions); },
+      loadExpiredSessions: async () => expired,
+      saveExpiredSessions: async (sessions) => { expired = structuredClone(sessions); },
     };
     const cli: CliAdapter = {
       id: 'traex',
@@ -240,11 +243,17 @@ describe('ConversationManager', () => {
       now: new Date('2026-01-02T00:00:00.000Z'),
     });
 
-    expect(result).toEqual({ closed: 1, deleted: 1 });
+    expect(result.closed).toBe(1);
+    expect(result.deleted).toBe(1);
+    expect(result.closedSessions.map((session) => session.sessionId)).toEqual(['lm-active-old']);
+    expect(result.deletedSessions.map((session) => session.sessionId)).toEqual(['lm-closed-old']);
     expect(saved.map((session) => [session.sessionId, session.status])).toEqual([
       ['lm-active-old', 'closed'],
       ['lm-active-fresh', 'active'],
     ]);
+    expect(saved[0].closedAt).toBe('2026-01-02T00:00:00.000Z');
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({ sessionId: 'lm-closed-old', reason: 'retention_expired' });
   });
 
   it('resume 在 composer 前失败时提示并用 opening 降级为新会话', async () => {

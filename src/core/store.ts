@@ -2,24 +2,29 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, KnownChat, Session, SystemPromptProfile } from './types.js';
+import type { Bot, ExpiredSession, KnownChat, Session, SystemPromptProfile } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
   saveBots(bots: Bot[]): Promise<void>;
   loadSessions(): Promise<Session[]>;
   saveSessions(sessions: Session[]): Promise<void>;
+  loadExpiredSessions?(): Promise<ExpiredSession[]>;
+  saveExpiredSessions?(sessions: ExpiredSession[]): Promise<void>;
 }
 
 export class JsonSessionStore implements SessionStore {
   readonly sessionsPath: string;
   readonly botsPath: string;
+  readonly expiredSessionsPath: string;
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
+  private pendingExpiredSessionWrite: Promise<void> = Promise.resolve();
 
-  constructor(sessionsPath = defaultSessionsPath(), botsPath = defaultBotsPath()) {
+  constructor(sessionsPath = defaultSessionsPath(), botsPath = defaultBotsPath(), expiredSessionsPath = defaultExpiredSessionsPath()) {
     this.sessionsPath = sessionsPath;
     this.botsPath = botsPath;
+    this.expiredSessionsPath = expiredSessionsPath;
   }
 
   async loadBots(): Promise<Bot[]> {
@@ -53,6 +58,24 @@ export class JsonSessionStore implements SessionStore {
     this.pendingSessionWrite = this.pendingSessionWrite.catch(() => undefined).then(() => writeJsonAtomic(this.sessionsPath, sessions));
     await this.pendingSessionWrite;
   }
+
+  async loadExpiredSessions(): Promise<ExpiredSession[]> {
+    try {
+      const parsed = JSON.parse(await readFile(this.expiredSessionsPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isExpiredSession);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  async saveExpiredSessions(sessions: ExpiredSession[]): Promise<void> {
+    this.pendingExpiredSessionWrite = this.pendingExpiredSessionWrite
+      .catch(() => undefined)
+      .then(() => writeJsonAtomic(this.expiredSessionsPath, sessions));
+    await this.pendingExpiredSessionWrite;
+  }
 }
 
 function defaultSessionsPath(): string {
@@ -63,6 +86,11 @@ function defaultSessionsPath(): string {
 function defaultBotsPath(): string {
   const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'bots.json');
+}
+
+function defaultExpiredSessionsPath(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'expired-sessions.json');
 }
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
@@ -120,4 +148,17 @@ function isSession(value: unknown): value is Session {
     && (session.model === undefined || typeof session.model === 'string')
     && session.scope === 'thread'
     && (session.status === 'active' || session.status === 'closed');
+}
+
+function isExpiredSession(value: unknown): value is ExpiredSession {
+  if (!value || typeof value !== 'object') return false;
+  const session = value as Partial<ExpiredSession>;
+  return typeof session.sessionId === 'string'
+    && typeof session.chatId === 'string'
+    && typeof session.rootMessageId === 'string'
+    && typeof session.title === 'string'
+    && typeof session.lastMessageAt === 'string'
+    && typeof session.createdAt === 'string'
+    && typeof session.deletedAt === 'string'
+    && session.reason === 'retention_expired';
 }

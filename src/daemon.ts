@@ -23,7 +23,9 @@ import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
 import type { ImAdapter, ImChat, ImMessage, ImReaction } from './im/types.js';
-import type { Bot, KnownChat, Session } from './core/types.js';
+import type { Bot, ExpiredSession, KnownChat, Session } from './core/types.js';
+
+const DAILY_CLEANUP_HOUR = 3;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -108,16 +110,13 @@ async function main(): Promise<void> {
       });
       if (result.closed || result.deleted) {
         logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`);
+        await notifyCleanupResult(im, activeBot, result);
       }
     } catch (error: any) {
       logger.warn(`会话清理失败: ${error?.message ?? error}`);
     }
   };
-  await cleanupSessions();
-  const cleanupTimer = cfg.sessionCleanupIntervalMs > 0
-    ? setInterval(() => void cleanupSessions(), cfg.sessionCleanupIntervalMs)
-    : undefined;
-  cleanupTimer?.unref?.();
+  const cleanupTimer = scheduleDailyCleanup(cleanupSessions, DAILY_CLEANUP_HOUR);
 
   await im.start({
     async onChatObserved(chat: ImChat): Promise<void> {
@@ -156,7 +155,10 @@ async function main(): Promise<void> {
           model: activeBot.model,
           hasHistory: false,
           ownerOpenId: activeBot.ownerOpenId,
+          createdByOpenId: msg.senderId,
+          createdByName: replyToName(msg),
           lastCallerOpenId: msg.senderId,
+          chatName: chatName(activeBot, msg.chatId),
           lastMessageAt: now,
           createdAt: now,
         };
@@ -174,6 +176,17 @@ async function main(): Promise<void> {
       try {
         const session = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (!session) {
+          const expired = await sessions.findExpired(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
+          if (expired) {
+            logger.info(`话题会话已过期清理 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId}`);
+            await im.reply(
+              msg.threadId,
+              `这个 larkbot 会话已因超过 7 天未活跃被清理，无法继续恢复上下文。请重新 @ bot 发起一个新会话。\n\n原会话：${expired.title || expired.sessionId}\n最后活跃：${formatDateTime(expired.lastMessageAt)}`,
+              'text',
+              msg.id,
+            );
+            return;
+          }
           logger.warn(`话题消息找不到会话 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId} quote=${msg.quotedMessageId ?? '-'}`);
           await im.reply(msg.threadId, '找不到这个话题对应的 larkbot 会话，无法恢复旧上下文。', 'text');
           return;
@@ -223,7 +236,7 @@ async function main(): Promise<void> {
   // 优雅退出
   const shutdown = () => {
     logger.info('收到退出信号，关闭所有会话…');
-    if (cleanupTimer) clearInterval(cleanupTimer);
+    cleanupTimer.cancel();
     sessions.shutdownAll();
     consoleServer.close();
     im.stop().finally(() => process.exit(0));
@@ -339,6 +352,75 @@ function replyToName(message: ImMessage): string {
 
 function replySignature(bot: Bot): string {
   return bot.replySignature?.trim() || 'larkbot';
+}
+
+function chatName(bot: Bot, chatId: string): string | undefined {
+  return bot.knownChats?.find((chat) => chat.chatId === chatId)?.name;
+}
+
+function scheduleDailyCleanup(task: () => Promise<void>, hour: number): { cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelled = false;
+  const scheduleNext = (): void => {
+    if (cancelled) return;
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(hour, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+    const delayMs = next.getTime() - now.getTime();
+    timer = setTimeout(() => {
+      void task().finally(() => {
+        scheduleNext();
+      });
+    }, delayMs);
+    timer.unref?.();
+    logger.info(`会话清理任务已调度到 ${formatDateTime(next.toISOString())}`);
+  };
+  scheduleNext();
+  return {
+    cancel() {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+async function notifyCleanupResult(
+  im: ImAdapter,
+  bot: Bot,
+  result: { closedSessions: Session[]; deletedSessions: ExpiredSession[] },
+): Promise<void> {
+  if (!result.closedSessions.length && !result.deletedSessions.length) return;
+  const lines = [
+    'larkbot 会话清理完成',
+    '',
+    `关闭会话：${result.closedSessions.length} 个`,
+    ...result.closedSessions.slice(0, 20).map((session) => `- ${sessionSummary(session)}`),
+    '',
+    `删除路由：${result.deletedSessions.length} 个`,
+    ...result.deletedSessions.slice(0, 20).map((session) => `- ${expiredSessionSummary(session)}`),
+  ];
+  if (result.closedSessions.length > 20 || result.deletedSessions.length > 20) {
+    lines.push('', '仅展示前 20 条，完整记录可查看状态文件。');
+  }
+  try {
+    await im.sendDirect(bot.ownerOpenId, lines.join('\n'));
+  } catch (error: any) {
+    logger.warn(`发送会话清理私聊失败 owner=${bot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
+  }
+}
+
+function sessionSummary(session: Session): string {
+  return `${session.title || session.sessionId}｜${session.createdByName || session.createdByOpenId || '未知发起人'}｜${session.chatName || session.chatId}｜最后活跃 ${formatDateTime(session.lastMessageAt)}｜${session.sessionId}`;
+}
+
+function expiredSessionSummary(session: ExpiredSession): string {
+  return `${session.title || session.sessionId}｜${session.createdByName || session.createdByOpenId || '未知发起人'}｜${session.chatName || session.chatId}｜最后活跃 ${formatDateTime(session.lastMessageAt)}｜${session.sessionId}`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
 }
 
 async function addReceivedReactionBeforeThread(im: ImAdapter, messageId: string): Promise<string | undefined> {

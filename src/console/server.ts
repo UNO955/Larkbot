@@ -327,9 +327,18 @@ async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
 }
 
 async function listSessions(opts: ConsoleServerOpts): Promise<Session[]> {
-  if (opts.sessionManager) return opts.sessionManager.listSessions();
-  return (await opts.store.loadSessions())
+  const bot = await requireBot(opts).catch(() => undefined);
+  const sessions = opts.sessionManager
+    ? opts.sessionManager.listSessions()
+    : await opts.store.loadSessions();
+  return sessions
+    .map((session) => enrichSessionChatName(session, bot))
     .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+}
+
+function enrichSessionChatName(session: Session, bot: Bot | undefined): Session {
+  const name = bot?.knownChats?.find((chat) => chat.chatId === session.chatId)?.name;
+  return name && name !== session.chatName ? { ...session, chatName: name } : session;
 }
 
 async function listChats(opts: ConsoleServerOpts): Promise<PublicChat[]> {
@@ -368,6 +377,7 @@ async function closeStoredSession(store: SessionStore, sessionId: string): Promi
   const session = sessions.find((item) => item.sessionId === sessionId);
   if (!session) return undefined;
   session.status = 'closed';
+  session.closedAt = new Date().toISOString();
   await store.saveSessions(sessions);
   return session;
 }
@@ -742,6 +752,8 @@ function renderConsoleHtml(): string {
             <tr>
               <th>会话</th>
               <th>状态</th>
+              <th>发起人</th>
+              <th>群聊</th>
               <th>CLI</th>
               <th>位置</th>
               <th>时间</th>
@@ -749,7 +761,7 @@ function renderConsoleHtml(): string {
             </tr>
           </thead>
           <tbody id="sessions-body">
-            <tr><td colspan="6" class="muted">加载中…</td></tr>
+            <tr><td colspan="8" class="muted">加载中…</td></tr>
           </tbody>
         </table>
       </div>
@@ -901,7 +913,7 @@ function renderConsoleHtml(): string {
       if (!res.ok) throw new Error(await res.text());
       const { sessions } = await res.json();
       if (!sessions.length) {
-        sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">暂无会话</td></tr>';
+        sessionsBody.innerHTML = '<tr><td colspan="8" class="muted">暂无会话</td></tr>';
         return;
       }
       sessionsBody.innerHTML = sessions.map((s) => {
@@ -909,6 +921,8 @@ function renderConsoleHtml(): string {
         return '<tr>' +
           '<td><strong>' + esc(compact(s.title || s.sessionId, 48)) + '</strong><br><span class="muted"><code>' + esc(compact(s.sessionId, 18)) + '</code></span></td>' +
           '<td><span class="status ' + esc(s.status) + '">' + esc(s.status) + '</span></td>' +
+          '<td>' + esc(compact(s.createdByName || s.createdByOpenId || '-', 24)) + '<br><span class="muted">' + esc(compact(s.lastCallerOpenId || '-', 18)) + '</span></td>' +
+          '<td>' + esc(compact(s.chatName || s.chatId || '-', 28)) + '<br><span class="muted">' + esc(compact(s.chatId || '-', 18)) + '</span></td>' +
           '<td>' + esc(s.cliId || '-') + '<br><span class="muted">' + esc(compact(s.cliSessionId || 'no cli session', 22)) + '</span></td>' +
           '<td><span class="muted">' + esc(compact(s.workingDir || '-', 42)) + '</span><br><span class="muted">' + esc(compact(s.threadId || s.rootMessageId || '-', 24)) + '</span></td>' +
           '<td><span class="muted">创建 ' + esc(formatTime(s.createdAt)) + '</span><br><span class="muted">最后 ' + esc(formatTime(s.lastMessageAt)) + '</span></td>' +
@@ -1029,7 +1043,7 @@ function renderConsoleHtml(): string {
       .catch((error) => setStatus('模型列表加载失败：' + error.message, true))
       .finally(() => loadBot().catch((error) => setStatus('加载失败：' + error.message, true)));
     loadSessions().catch((error) => {
-      sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
+      sessionsBody.innerHTML = '<tr><td colspan="8" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
     });
     loadChats().catch((error) => {
       chatsBody.innerHTML = '<tr><td colspan="5" class="muted">加载失败：' + esc(error.message) + '</td></tr>';

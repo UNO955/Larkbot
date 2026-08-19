@@ -85,7 +85,11 @@ interface Session {
   hasHistory: boolean;
 
   ownerOpenId?: string;
+  createdByOpenId?: string;
+  createdByName?: string;
   lastCallerOpenId?: string;
+  chatName?: string;
+  closedAt?: string;
   lastMessageAt: string;
   createdAt: string;
 }
@@ -99,6 +103,9 @@ interface Session {
 - `answerCardMessageId`：最近一张最终回复卡，用于引用回复反查会话。
 - `cliSessionId`：traex 原生会话 id，用于 resume、token usage、final message 读取。
 - `model`：创建该 Session 时使用的模型。
+- `createdByOpenId / createdByName`：会话发起人，用于控制台追踪是谁开启的会话。
+- `chatName`：建会话时记录的群聊快照；控制台展示时优先用 `knownChats` 中回填后的最新群名。
+- `closedAt`：会话被控制台或清理任务关闭的时间。
 
 ## 3. Runtime
 
@@ -150,9 +157,38 @@ closed
 - idle 后如果队列非空，继续 drain 下一条。
 - 停止本轮分析会杀掉当前 PTY，但 Session 仍为 `active`，下一条消息尝试 resume。
 - 关闭会话才会将 Session 标记为 `closed`。
-- 定期清理会关闭长时间闲置的活跃会话，并删除过期 closed 路由。
+- 每天凌晨 3 点执行生命周期清理：关闭 2 天以上未活跃的会话，删除 7 天以上未活跃的路由。
+- 被删除的路由会写入 `expired-sessions.json`，旧话题再次 @ bot 时会得到“会话已过期清理，请重新发起”的明确提示。
+- 清理任务只在实际关闭或删除会话时私聊 Owner 汇总明细，不做空跑打扰。
 
-## 5. 分析卡片状态
+## 5. ExpiredSession
+
+`ExpiredSession` 是被清理路由的最小墓碑记录，持久化在 `~/.larkbot/expired-sessions.json`。
+它不保存对话内容，只保存识别旧话题和审计清理结果所需的信息。
+
+```typescript
+interface ExpiredSession {
+  sessionId: string;
+  chatId: string;
+  chatName?: string;
+  rootMessageId: string;
+  threadId?: string;
+  anchorMessageId?: string;
+  traceCardMessageId?: string;
+  answerCardMessageId?: string;
+  title: string;
+  createdByOpenId?: string;
+  createdByName?: string;
+  lastCallerOpenId?: string;
+  lastMessageAt: string;
+  createdAt: string;
+  closedAt?: string;
+  deletedAt: string;
+  reason: 'retention_expired';
+}
+```
+
+## 6. 分析卡片状态
 
 分析卡片状态来自 `CardStatus`：
 
@@ -167,7 +203,7 @@ closed
 - `⏱️ 总耗时：xx`
 - 当前 traex 会话累计 token（如果能从 rollout 读取）
 
-## 6. 模型选择
+## 7. 模型选择
 
 控制台通过 `GET /api/models` 执行 `traex models` 动态获取可用模型。
 
@@ -176,7 +212,7 @@ closed
 - 已存在 Session 保持创建时的模型。
 - 空模型表示使用 traex CLI 默认模型。
 
-## 7. 表情进度指示
+## 8. 表情进度指示
 
 当 `disableStreamingCard = true` 时，不发送实时分析卡片，改用触发消息上的表情表示进度。
 

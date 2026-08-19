@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { Session } from './types.js';
+import type { ExpiredSession, Session } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -61,6 +61,13 @@ interface Runtime {
 }
 
 type CardStatus = 'working' | 'completed' | 'failed' | 'stopped';
+
+export interface SessionCleanupResult {
+  closed: number;
+  deleted: number;
+  closedSessions: Session[];
+  deletedSessions: ExpiredSession[];
+}
 
 export interface ConversationManagerDeps {
   cli: CliAdapter;
@@ -128,6 +135,7 @@ export class ConversationManager {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
     session.status = 'closed';
+    session.closedAt = new Date().toISOString();
     const runtime = this.runtimes.get(sessionId);
     if (runtime) {
       runtime.intentionalClose = true;
@@ -183,39 +191,65 @@ export class ConversationManager {
     idleCloseMs: number;
     closedRetentionMs: number;
     now?: Date;
-  }): Promise<{ closed: number; deleted: number }> {
-    const nowMs = opts.now?.getTime() ?? Date.now();
-    let closed = 0;
-    let deleted = 0;
+  }): Promise<SessionCleanupResult> {
+    const now = opts.now ?? new Date();
+    const nowMs = now.getTime();
+    const deletedAt = now.toISOString();
+    const closedSessions: Session[] = [];
+    const deletedSessions: ExpiredSession[] = [];
     for (const session of [...this.sessions.values()]) {
       const idleMs = nowMs - sessionTimestamp(session);
-      if (session.status === 'active' && opts.idleCloseMs > 0 && idleMs >= opts.idleCloseMs) {
-        const runtime = this.runtimes.get(session.sessionId);
-        if (runtime && (runtime.status === 'busy' || runtime.draining)) continue;
-        session.status = 'closed';
-        if (runtime) {
-          runtime.intentionalClose = true;
-          try { runtime.pty.kill(); } catch { /* already exited */ }
-          this.teardown(runtime);
-          this.deps.closeTerminal?.(session.sessionId);
-        }
-        closed += 1;
-        continue;
-      }
-      if (session.status === 'closed' && opts.closedRetentionMs > 0 && idleMs >= opts.closedRetentionMs) {
+      if (opts.closedRetentionMs > 0 && idleMs >= opts.closedRetentionMs) {
         const runtime = this.runtimes.get(session.sessionId);
         if (runtime) {
+          if (runtime.status === 'busy' || runtime.draining) continue;
           runtime.intentionalClose = true;
           try { runtime.pty.kill(); } catch { /* already exited */ }
           this.teardown(runtime);
           this.deps.closeTerminal?.(session.sessionId);
         }
         this.sessions.delete(session.sessionId);
-        deleted += 1;
+        deletedSessions.push(toExpiredSession(session, deletedAt));
+        continue;
+      }
+      if (session.status === 'active' && opts.idleCloseMs > 0 && idleMs >= opts.idleCloseMs) {
+        const runtime = this.runtimes.get(session.sessionId);
+        if (runtime && (runtime.status === 'busy' || runtime.draining)) continue;
+        session.status = 'closed';
+        session.closedAt = deletedAt;
+        if (runtime) {
+          runtime.intentionalClose = true;
+          try { runtime.pty.kill(); } catch { /* already exited */ }
+          this.teardown(runtime);
+          this.deps.closeTerminal?.(session.sessionId);
+        }
+        closedSessions.push(structuredClone(session));
       }
     }
-    if (closed || deleted) await this.persist();
-    return { closed, deleted };
+    if (closedSessions.length || deletedSessions.length) {
+      await this.persist();
+      if (deletedSessions.length) await this.persistExpiredSessions(deletedSessions, nowMs);
+    }
+    return {
+      closed: closedSessions.length,
+      deleted: deletedSessions.length,
+      closedSessions,
+      deletedSessions,
+    };
+  }
+
+  async findExpired(chatId: string, rootMessageId: string, threadId?: string, relatedMessageId?: string): Promise<ExpiredSession | undefined> {
+    if (!this.deps.store.loadExpiredSessions) return undefined;
+    const sessions = await this.deps.store.loadExpiredSessions();
+    return sessions.find((session) =>
+      session.chatId === chatId
+      && (session.rootMessageId === rootMessageId
+        || (!!threadId && session.threadId === threadId)
+        || (!!relatedMessageId && (
+          session.anchorMessageId === relatedMessageId
+          || session.traceCardMessageId === relatedMessageId
+          || session.answerCardMessageId === relatedMessageId
+        ))));
   }
 
   async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string): Promise<void> {
@@ -644,6 +678,40 @@ export class ConversationManager {
   private persist(): Promise<void> {
     return this.deps.store.saveSessions([...this.sessions.values()]);
   }
+
+  private async persistExpiredSessions(deleted: ExpiredSession[], nowMs: number): Promise<void> {
+    if (!this.deps.store.loadExpiredSessions || !this.deps.store.saveExpiredSessions) return;
+    const cutoffMs = nowMs - 30 * 24 * 60 * 60 * 1000;
+    const existing = await this.deps.store.loadExpiredSessions();
+    const byId = new Map<string, ExpiredSession>();
+    for (const session of existing) {
+      if (Date.parse(session.deletedAt) >= cutoffMs) byId.set(session.sessionId, session);
+    }
+    for (const session of deleted) byId.set(session.sessionId, session);
+    await this.deps.store.saveExpiredSessions([...byId.values()].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)));
+  }
+}
+
+function toExpiredSession(session: Session, deletedAt: string): ExpiredSession {
+  return {
+    sessionId: session.sessionId,
+    chatId: session.chatId,
+    chatName: session.chatName,
+    rootMessageId: session.rootMessageId,
+    threadId: session.threadId,
+    anchorMessageId: session.anchorMessageId,
+    traceCardMessageId: session.traceCardMessageId,
+    answerCardMessageId: session.answerCardMessageId,
+    title: session.title,
+    createdByOpenId: session.createdByOpenId,
+    createdByName: session.createdByName,
+    lastCallerOpenId: session.lastCallerOpenId,
+    lastMessageAt: session.lastMessageAt,
+    createdAt: session.createdAt,
+    closedAt: session.closedAt,
+    deletedAt,
+    reason: 'retention_expired',
+  };
 }
 
 async function delay(ms: number): Promise<void> {

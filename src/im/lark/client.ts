@@ -112,6 +112,19 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     if (res.code !== 0) throw new Error(`更新卡片失败: ${res.msg} (code ${res.code})`);
   }
 
+  async function sendDirect(openId: string, content: string): Promise<string> {
+    const res: any = await client.im.v1.message.create({
+      params: { receive_id_type: 'open_id' },
+      data: {
+        receive_id: openId,
+        msg_type: 'text',
+        content: JSON.stringify({ text: content }),
+      },
+    });
+    if (res.code !== 0) throw new Error(`私聊发送失败: ${res.msg} (code ${res.code})`);
+    return res.data?.message_id ?? '';
+  }
+
   async function addReaction(messageId: string, emojiType: string): Promise<string> {
     const res: any = await client.im.v1.messageReaction.create({
       path: { message_id: messageId },
@@ -222,6 +235,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     },
     sendCard,
     updateCard,
+    sendDirect,
     addReaction,
     removeReaction,
     getBotOpenId: () => botOpenId,

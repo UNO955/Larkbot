@@ -53,7 +53,31 @@ export interface Session {
   hasHistory: boolean;
 
   ownerOpenId?: string;
+  createdByOpenId?: string;
+  createdByName?: string;
+  lastCallerOpenId?: string;
+  chatName?: string;
+  closedAt?: string;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface ExpiredSession {
+  sessionId: string;
+  chatId: string;
+  chatName?: string;
+  rootMessageId: string;
+  threadId?: string;
+  anchorMessageId?: string;
+  traceCardMessageId?: string;
+  answerCardMessageId?: string;
+  title: string;
+  createdByOpenId?: string;
+  createdByName?: string;
   lastCallerOpenId?: string;
   lastMessageAt: string;
   createdAt: string;
+  closedAt?: string;
+  deletedAt: string;
+  reason: 'retention_expired';
 }
