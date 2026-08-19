@@ -27,6 +27,16 @@ export interface ThinkingCardOpts {
   footer?: string;
 }
 
+export interface MaintenanceCardOpts {
+  title?: string;
+  status: string;
+  version: string;
+  unfinishedSessions: number;
+  dashboardUrl: string;
+  cleanupPolicy?: string;
+  details?: string[];
+}
+
 const STATUS_META = {
   working: { icon: '⏳', label: '正在处理', template: 'blue' },
   completed: { icon: '✅', label: '已完成', template: 'green' },
@@ -215,6 +225,58 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
         title: {
           tag: 'plain_text',
           content: `${opts.status === 'completed' ? '✅ 分析完成' : opts.status === 'stopped' ? '⏹️ 已停止分析' : opts.status === 'failed' ? '⚠️ 分析失败' : '🔎 正在全力分析中'}`,
+        },
+      },
+      elements,
+    },
+  };
+}
+
+export function buildMaintenanceCard(opts: MaintenanceCardOpts): ImCard {
+  const dashboardUrl = opts.dashboardUrl.trim();
+  const content = [
+    `**${escapeMarkdownText(opts.status)}**`,
+    `版本：${escapeMarkdownText(opts.version)}`,
+    `未结束会话：${opts.unfinishedSessions} 个`,
+    opts.cleanupPolicy ? `会话清理：${escapeMarkdownText(opts.cleanupPolicy)}` : undefined,
+    dashboardUrl ? `Dashboard：[${escapeMarkdownText(dashboardUrl)}](${dashboardUrl})` : undefined,
+  ].filter((line): line is string => !!line).join('\n');
+  const elements: unknown[] = [{ tag: 'markdown', content }];
+  if (dashboardUrl) {
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '打开 Dashboard' },
+          type: 'primary',
+          multi_url: {
+            url: dashboardUrl,
+            pc_url: dashboardUrl,
+            android_url: dashboardUrl,
+            ios_url: dashboardUrl,
+          },
+        },
+      ],
+    });
+  }
+  const details = opts.details?.map((line) => line.trim()).filter(Boolean) ?? [];
+  if (details.length) {
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: `<font color='grey'>${details.map(escapeMarkdownText).join('\n')}</font>`,
+    });
+  }
+  return {
+    payload: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: 'blue',
+        title: {
+          tag: 'plain_text',
+          content: opts.title?.trim() || 'larkbot 维护通知',
         },
       },
       elements,

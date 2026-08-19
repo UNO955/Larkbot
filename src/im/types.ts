@@ -88,6 +88,7 @@ export interface ImAdapter {
   sendCard(threadId: string, card: ImCard, replyAnchorMessageId?: string): Promise<string>;
   updateCard(messageId: string, card: ImCard): Promise<void>;
   sendDirect(openId: string, content: string): Promise<string>;
+  sendDirectCard(openId: string, card: ImCard): Promise<string>;
 
   /** 给某条消息加表情，返回 reactionId（用于后续删除）。阶段三进度指示用。 */
   addReaction(messageId: string, emojiType: string): Promise<string>;

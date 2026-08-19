@@ -20,7 +20,7 @@ import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
-import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
+import { buildMaintenanceCard, buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
 import type { ImAdapter, ImChat, ImMessage, ImReaction } from './im/types.js';
 import type { Bot, ExpiredSession, KnownChat, Session } from './core/types.js';
@@ -232,6 +232,9 @@ async function main(): Promise<void> {
   }).catch((error: any) => {
     logger.warn(`回填群聊名称失败: ${error?.message ?? error}`);
   });
+  await notifyStartup(im, activeBot, cfg, restored).catch((error: any) => {
+    logger.warn(`发送重启私聊失败 owner=${activeBot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
+  });
 
   // 优雅退出
   const shutdown = () => {
@@ -408,6 +411,37 @@ async function notifyCleanupResult(
   } catch (error: any) {
     logger.warn(`发送会话清理私聊失败 owner=${bot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
   }
+}
+
+async function notifyStartup(
+  im: ImAdapter,
+  bot: Bot,
+  cfg: ReturnType<typeof loadConfig>,
+  restored: Session[],
+): Promise<void> {
+  const activeCount = restored.filter((session) => session.status === 'active').length;
+  const closedCount = restored.filter((session) => session.status === 'closed').length;
+  const lines = [
+    `恢复路由：${restored.length} 个（active ${activeCount} / closed ${closedCount}）`,
+    `执行目录：${bot.cwd}`,
+  ];
+  const card = buildMaintenanceCard({
+    status: '🔄 larkbot 已重启',
+    version: `v${process.env.npm_package_version || '0.1.0'}`,
+    unfinishedSessions: activeCount,
+    dashboardUrl: cfg.consolePublicUrl,
+    cleanupPolicy: `每天 03:00，${formatRetention(cfg.sessionIdleCloseMs)}未活跃关闭，${formatRetention(cfg.sessionClosedRetentionMs)}未活跃删除路由`,
+    details: lines,
+  });
+  await im.sendDirectCard(bot.ownerOpenId, card);
+}
+
+function formatRetention(ms: number): string {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const hourMs = 60 * 60 * 1000;
+  if (ms > 0 && ms % dayMs === 0) return `${ms / dayMs} 天以上`;
+  if (ms > 0 && ms % hourMs === 0) return `${ms / hourMs} 小时以上`;
+  return `${Math.round(ms / 1000)} 秒以上`;
 }
 
 function sessionSummary(session: Session): string {
