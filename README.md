@@ -88,6 +88,7 @@ chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper
 ## 文档
 
 - [docs/architecture.md](docs/architecture.md) — 架构设计与模块拆分
+- [docs/agent-runtime.md](docs/agent-runtime.md) — Agent Runtime、会话路由、PTY 编排与安全治理
 - [docs/data-model.md](docs/data-model.md) — 核心数据模型与状态机
 - [docs/roadmap.md](docs/roadmap.md) — 当前状态与后续路线图
 - [docs/scope.md](docs/scope.md) — 明确做什么 / 不做什么
