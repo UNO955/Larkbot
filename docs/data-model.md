@@ -21,12 +21,21 @@ interface Bot {
   cwd: string;
   ownerOpenId: string;
   allowedOpenIds?: string[];
+  allowedChatIds?: string[];
+  knownChats?: KnownChat[];
   enabled: boolean;
   model?: string;
   disableStreamingCard?: boolean;
   replySignature?: string;
   systemPromptProfiles?: SystemPromptProfile[];
   activeSystemPromptProfileId?: string;
+}
+
+interface KnownChat {
+  chatId: string;
+  name?: string;
+  lastSeenAt: string;
+  source: 'message' | 'bot_added';
 }
 
 interface SystemPromptProfile {
@@ -39,7 +48,9 @@ interface SystemPromptProfile {
 字段说明：
 - `cwd`：traex 的执行目录。
 - `ownerOpenId`：管理者 open_id，默认具备提问和操作权限。
-- `allowedOpenIds`：额外授权用户列表，适合把 QA、客户端、前端同学加入群内直接提问。
+- `allowedChatIds`：已启用的群聊列表。群聊启用后，群内成员可以直接 @ bot 提问或操作卡片。
+- `knownChats`：bot 已感知到的群聊列表，来自入群事件或群消息，用于控制台展示和启用。
+- `allowedOpenIds`：额外授权用户列表，适合单聊或临时放开某个用户；团队群使用优先走群聊授权。
 - `model`：新建 traex 会话时透传为 `--model <model>`；已有会话不被静默切换。
 - `disableStreamingCard`：关闭实时分析卡片时，改用 `Get` / `DONE` 表情指示进度。
 - `replySignature`：最终回复卡 footer 落款，默认 `larkbot`。

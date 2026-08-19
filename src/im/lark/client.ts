@@ -16,11 +16,12 @@ export interface LarkClientOpts {
   appSecret: string;
   ownerOpenId: string;   // 管理者 open_id，默认也具备使用权限
   allowedOpenIds?: string[]; // 额外允许直接提问 / 操作卡片的用户 open_id
+  isAuthorized?(input: { openId: string; chatId?: string }): boolean;
 }
 
 export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret });
-  const allowedOpenIds = new Set([opts.ownerOpenId, ...(opts.allowedOpenIds ?? [])].filter(Boolean));
+  const staticAllowedOpenIds = new Set([opts.ownerOpenId, ...(opts.allowedOpenIds ?? [])].filter(Boolean));
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
   const userNameCache = new Map<string, string | undefined>();
@@ -145,7 +146,9 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
           const msg = parseMessageEvent(data);
           if (!msg) return;
 
-          if (!allowedOpenIds.has(msg.senderOpenId)) {
+          await observeMessageChat(handler, msg);
+
+          if (!isAuthorized(msg.senderOpenId, msg.chatId)) {
             logger.info(`忽略未授权用户消息（sender=${msg.senderOpenId.slice(0, 10)}）`);
             return;
           }
@@ -166,11 +169,24 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
         'im.message.reaction.created_v1': async (data: any) => {
           const operatorId = data?.operator_id?.open_id ?? '';
-          if (!allowedOpenIds.has(operatorId)) return;
+          const chatId = data?.chat_id ?? data?.event?.chat_id;
+          if (!isAuthorized(operatorId, chatId)) return;
           await handler.onReaction({
             messageId: data?.message_id ?? '',
             emoji: data?.reaction_type?.emoji_type ?? '',
             operatorId,
+          });
+        },
+
+        'im.chat.member.bot.added_v1': async (data: any) => {
+          const event = data?.event ?? data;
+          const chatId = event?.chat_id ?? event?.chat?.chat_id ?? '';
+          if (!chatId) return;
+          await handler.onChatObserved?.({
+            chatId,
+            name: event?.chat?.name ?? event?.chat_name,
+            chatType: 'group',
+            source: 'bot_added',
           });
         },
 
@@ -216,6 +232,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       threadId: m.threadId ?? m.messageId,   // 建话题前用 messageId 占位
       rootMessageId: m.rootId ?? m.messageId,
       chatId: m.chatId,
+      chatType: m.chatType,
       senderId: m.senderOpenId,
       senderType: 'user' as const,
       senderName: m.senderName ?? await resolveUserName(m.senderOpenId),
@@ -326,7 +343,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       logger.warn('收到卡片回调但无法解析 action');
       return undefined;
     }
-    if (!allowedOpenIds.has(action.operatorId)) {
+    if (!isAuthorized(action.operatorId, action.chatId)) {
       logger.info(`忽略未授权用户卡片回调（operator=${action.operatorId.slice(0, 10)}）`);
       return undefined;
     }
@@ -349,8 +366,26 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         ?? event?.openMessageId
         ?? '',
       operatorId,
+      chatId: event?.context?.open_chat_id
+        ?? event?.context?.chat_id
+        ?? event?.open_chat_id
+        ?? event?.chat_id
+        ?? undefined,
       value,
     };
+  }
+
+  async function observeMessageChat(handler: ImEventHandler, msg: ParsedMessage): Promise<void> {
+    if (msg.chatType === 'p2p') return;
+    await handler.onChatObserved?.({
+      chatId: msg.chatId,
+      chatType: msg.chatType,
+      source: 'message',
+    });
+  }
+
+  function isAuthorized(openId: string, chatId?: string): boolean {
+    return opts.isAuthorized?.({ openId, chatId }) ?? staticAllowedOpenIds.has(openId);
   }
 
   function compactJson(value: unknown): string {

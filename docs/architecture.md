@@ -7,7 +7,7 @@ larkbot 的本质是一个“开发机替身”：飞书负责接收意图和展
 读取开发机上的共享 public 知识库，再把会话状态和结论映射回飞书话题。
 
 这个架构有三个核心约束：
-- **远程入口**：授权用户可以在飞书群里发起、继续、停止任务。
+- **远程入口**：启用后的飞书群成员可以发起、继续、停止任务，Owner 始终可用。
 - **本地执行**：所有 traex、代码仓库、共享知识库、状态文件都留在开发机。
 - **可观察性**：用户能看到当前分析状态、最终回复和完整只读终端过程。
 
@@ -89,7 +89,7 @@ traex 是交互式全屏 CLI，会依赖 TTY、光标控制、备用屏和 ready
 ### 4.1 首次 @ 机器人
 
 1. `LarkClient` 通过 WSClient 收到 `im.message.receive_v1`。
-2. `daemon` 校验 bot、授权用户和消息触发规则。
+2. `daemon` 校验 bot、Owner、群聊授权 / 用户授权和消息触发规则。
 3. 发送首张“正在全力分析中…”卡片，并用 `reply_in_thread` 建话题。
 4. 创建 `Session` 路由，持久化到 `~/.larkbot/sessions.json`。
 5. `ConversationManager` spawn traex PTY，等待 ready prompt 后写入用户消息。

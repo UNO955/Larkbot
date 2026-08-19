@@ -34,6 +34,8 @@ function bot(): Bot {
     appSecret: 'secret',
     cwd: '/repo',
     ownerOpenId: 'ou_xxx',
+    allowedChatIds: ['oc_team'],
+    knownChats: [{ chatId: 'oc_team', name: '项目群', lastSeenAt: '2026-01-01T00:00:00.000Z', source: 'message' }],
     enabled: true,
     disableStreamingCard: false,
   };

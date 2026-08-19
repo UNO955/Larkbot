@@ -22,8 +22,8 @@ import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './co
 import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
-import type { ImAdapter, ImMessage, ImReaction } from './im/types.js';
-import type { Bot, Session } from './core/types.js';
+import type { ImAdapter, ImChat, ImMessage, ImReaction } from './im/types.js';
+import type { Bot, KnownChat, Session } from './core/types.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -37,6 +37,7 @@ async function main(): Promise<void> {
     appSecret: activeBot.appSecret,
     ownerOpenId: activeBot.ownerOpenId,
     allowedOpenIds: activeBot.allowedOpenIds,
+    isAuthorized: ({ openId, chatId }) => isAuthorized(activeBot, openId, chatId),
   });
 
   const sessions = new ConversationManager({
@@ -119,6 +120,14 @@ async function main(): Promise<void> {
   cleanupTimer?.unref?.();
 
   await im.start({
+    async onChatObserved(chat: ImChat): Promise<void> {
+      await rememberChat(store, activeBot, chat).then((bot) => {
+        if (bot) activeBot = bot;
+      }).catch((error: any) => {
+        logger.warn(`记录群聊失败 chat=${chat.chatId}: ${error?.message ?? error}`);
+      });
+    },
+
     // ① @机器人（尚无话题）→ 建话题 + 建会话 + 首条消息入队
     async onMention(msg: ImMessage): Promise<void> {
       try {
@@ -238,6 +247,8 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
     cwd: cfg.traexCwd,
     ownerOpenId: cfg.ownerOpenId,
     allowedOpenIds: cfg.allowedOpenIds,
+    allowedChatIds: [],
+    knownChats: [],
     enabled: true,
     model: process.env.TRAEX_MODEL?.trim() || undefined,
     disableStreamingCard: false,
@@ -245,6 +256,41 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
     systemPromptProfiles: [],
   };
   await store.saveBots([bot]);
+  return bot;
+}
+
+function isAuthorized(bot: Bot, openId: string, chatId?: string): boolean {
+  if (!openId) return false;
+  if (openId === bot.ownerOpenId) return true;
+  if (bot.allowedOpenIds?.includes(openId)) return true;
+  return !!chatId && !!bot.allowedChatIds?.includes(chatId);
+}
+
+async function rememberChat(store: JsonSessionStore, activeBot: Bot, chat: ImChat): Promise<Bot | undefined> {
+  if (!chat.chatId || chat.chatType === 'p2p') return undefined;
+  const bots = await store.loadBots();
+  const index = bots.findIndex((bot) => bot.id === activeBot.id);
+  if (index < 0) return undefined;
+  const bot = { ...bots[index] };
+  const now = new Date().toISOString();
+  const knownChats = [...(bot.knownChats ?? [])];
+  const existing = knownChats.find((item) => item.chatId === chat.chatId);
+  if (existing) {
+    existing.name = chat.name || existing.name;
+    existing.lastSeenAt = now;
+    existing.source = chat.source;
+  } else {
+    const next: KnownChat = {
+      chatId: chat.chatId,
+      name: chat.name,
+      lastSeenAt: now,
+      source: chat.source,
+    };
+    knownChats.push(next);
+  }
+  bot.knownChats = knownChats;
+  bots[index] = bot;
+  await store.saveBots(bots);
   return bot;
 }
 

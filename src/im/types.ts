@@ -23,6 +23,7 @@ export interface ImMessage {
   threadId: string;
   rootMessageId: string;
   chatId: string;
+  chatType?: 'group' | 'p2p' | string;
   senderId: string;
   senderType: 'user' | 'bot';
   senderName?: string;
@@ -31,6 +32,13 @@ export interface ImMessage {
   quotedMessageId?: string;
   quotedMessage?: ImQuotedMessage;
   createTime: string;
+}
+
+export interface ImChat {
+  chatId: string;
+  name?: string;
+  chatType?: 'group' | 'p2p' | string;
+  source: 'message' | 'bot_added';
 }
 
 export interface ImReaction {
@@ -42,6 +50,7 @@ export interface ImReaction {
 export interface ImCardAction {
   messageId: string;
   operatorId: string;
+  chatId?: string;
   value: unknown;
 }
 
@@ -51,6 +60,8 @@ export interface ImCard {
 
 /** 编排层向 IM 层注册的事件回调。 */
 export interface ImEventHandler {
+  /** bot 已感知到一个会话/群聊，可用于控制台授权。 */
+  onChatObserved?(chat: ImChat): Promise<void>;
   /** 用户 @ 机器人（尚无话题）—— 触发建话题 + 建会话。 */
   onMention(msg: ImMessage): Promise<void>;
   /** 已存在的话题内收到新消息 —— 入队。 */

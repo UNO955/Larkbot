@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { SessionStore } from '../core/store.js';
-import type { Bot, Session, SystemPromptProfile } from '../core/types.js';
+import type { Bot, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -280,6 +280,19 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { sessions: await listSessions(opts) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/chats') {
+      sendJson(res, { chats: await listChats(opts) });
+      return;
+    }
+    const chatMatch = url.pathname.match(/^\/api\/chats\/([^/]+)$/);
+    if (chatMatch && req.method === 'PATCH') {
+      const chatId = decodeURIComponent(chatMatch[1]);
+      const patch = await readJsonBody(req);
+      const bot = await updateChatAuthorization(opts, chatId, patch);
+      opts.onBotUpdated?.(bot);
+      sendJson(res, { bot: toPublicBot(bot), chats: toPublicChats(bot) });
+      return;
+    }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
     if (sessionMatch && req.method === 'PATCH') {
       const sessionId = decodeURIComponent(sessionMatch[1]);
@@ -317,6 +330,11 @@ async function listSessions(opts: ConsoleServerOpts): Promise<Session[]> {
   if (opts.sessionManager) return opts.sessionManager.listSessions();
   return (await opts.store.loadSessions())
     .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+}
+
+async function listChats(opts: ConsoleServerOpts): Promise<PublicChat[]> {
+  const bot = await requireBot(opts);
+  return toPublicChats(bot);
 }
 
 async function updateSession(opts: ConsoleServerOpts, sessionId: string, patch: unknown): Promise<Session> {
@@ -377,6 +395,7 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
   if (typeof input.ownerOpenId === 'string') next.ownerOpenId = clean(input.ownerOpenId, 128);
   if (Array.isArray(input.allowedOpenIds)) next.allowedOpenIds = sanitizeOpenIds(input.allowedOpenIds);
   if (typeof input.allowedOpenIds === 'string') next.allowedOpenIds = sanitizeOpenIds(input.allowedOpenIds.split(/[\s,;]+/));
+  if (Array.isArray(input.allowedChatIds)) next.allowedChatIds = sanitizeChatIds(input.allowedChatIds);
   if (typeof input.enabled === 'boolean') next.enabled = input.enabled;
   if (typeof input.model === 'string') next.model = sanitizeModel(input.model) || undefined;
   if (typeof input.disableStreamingCard === 'boolean') next.disableStreamingCard = input.disableStreamingCard;
@@ -398,6 +417,24 @@ async function updateBot(opts: ConsoleServerOpts, patch: unknown): Promise<Bot> 
     next.activeSystemPromptProfileId = undefined;
   }
 
+  bots[index] = next;
+  await opts.store.saveBots(bots);
+  return next;
+}
+
+async function updateChatAuthorization(opts: ConsoleServerOpts, chatId: string, patch: unknown): Promise<Bot> {
+  if (!chatId) throw httpError(400, 'chat_id_required');
+  if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
+  const input = patch as Record<string, unknown>;
+  if (typeof input.enabled !== 'boolean') throw httpError(400, 'enabled_required');
+  const bots = await opts.store.loadBots();
+  const index = bots.findIndex((item) => item.id === opts.botId);
+  if (index < 0) throw httpError(404, 'bot_not_found');
+  const next = { ...bots[index] };
+  const allowed = new Set(next.allowedChatIds ?? []);
+  if (input.enabled) allowed.add(chatId);
+  else allowed.delete(chatId);
+  next.allowedChatIds = [...allowed];
   bots[index] = next;
   await opts.store.saveBots(bots);
   return next;
@@ -426,6 +463,17 @@ function toPublicBot(bot: Bot): PublicBot {
   return { ...rest, appSecretSet: !!bot.appSecret };
 }
 
+interface PublicChat extends KnownChat {
+  enabled: boolean;
+}
+
+function toPublicChats(bot: Bot): PublicChat[] {
+  const enabled = new Set(bot.allowedChatIds ?? []);
+  return [...(bot.knownChats ?? [])]
+    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))
+    .map((chat) => ({ ...chat, enabled: enabled.has(chat.chatId) }));
+}
+
 function clean(value: string, max: number): string {
   return value.trim().slice(0, max);
 }
@@ -439,6 +487,13 @@ function sanitizeOpenIds(values: unknown[]): string[] {
   return unique(values
     .filter((item): item is string => typeof item === 'string')
     .map((item) => clean(item, 128))
+    .filter(Boolean));
+}
+
+function sanitizeChatIds(values: unknown[]): string[] {
+  return unique(values
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => clean(item, 160))
     .filter(Boolean));
 }
 
@@ -556,6 +611,7 @@ function renderConsoleHtml(): string {
     .ghost { background: #f2f3f5; color: #1f2329; }
     .danger { background: #f54a45; }
     .sessions { padding: 0 28px 24px; }
+    .empty { padding: 18px 28px 24px; color: #8f959e; font-size: 14px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; border-bottom: 1px solid #eff0f1; padding: 12px 8px; vertical-align: top; }
     th { color: #646a73; font-weight: 700; }
@@ -650,6 +706,31 @@ function renderConsoleHtml(): string {
     <section class="card">
       <div class="toolbar">
         <div>
+          <h2>群聊授权</h2>
+          <div class="sub">展示 bot 已感知到的群聊。启用后，该群内成员可直接 @ bot 提问；Owner 始终可用。</div>
+        </div>
+        <button id="refresh-chats" type="button" class="ghost">刷新</button>
+      </div>
+      <div class="sessions">
+        <table>
+          <thead>
+            <tr>
+              <th>群聊</th>
+              <th>状态</th>
+              <th>来源</th>
+              <th>最近感知</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="chats-body">
+            <tr><td colspan="5" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
           <h2>会话管理</h2>
           <div class="sub">查看飞书话题到 traex 原生会话的路由。关闭会杀掉正在运行的 runtime，删除会移除路由记录。</div>
         </div>
@@ -680,6 +761,8 @@ function renderConsoleHtml(): string {
     const save = document.querySelector('#save');
     const sessionsBody = document.querySelector('#sessions-body');
     const refreshSessions = document.querySelector('#refresh-sessions');
+    const chatsBody = document.querySelector('#chats-body');
+    const refreshChats = document.querySelector('#refresh-chats');
       const promptSelect = document.querySelector('#prompt-select');
       const promptName = document.querySelector('#prompt-name');
       const promptContent = document.querySelector('#prompt-content');
@@ -837,6 +920,25 @@ function renderConsoleHtml(): string {
       }).join('');
     }
 
+    async function loadChats() {
+      const res = await fetch('/api/chats');
+      if (!res.ok) throw new Error(await res.text());
+      const { chats } = await res.json();
+      if (!chats.length) {
+        chatsBody.innerHTML = '<tr><td colspan="5" class="muted">暂无群聊。把 bot 拉进群，或在群里 @ bot 一次后会出现在这里。</td></tr>';
+        return;
+      }
+      chatsBody.innerHTML = chats.map((chat) => (
+        '<tr>' +
+          '<td><strong>' + esc(chat.name || '未命名群聊') + '</strong><br><span class="muted"><code>' + esc(compact(chat.chatId, 32)) + '</code></span></td>' +
+          '<td><span class="status ' + (chat.enabled ? 'active' : 'closed') + '">' + (chat.enabled ? '已启用' : '未启用') + '</span></td>' +
+          '<td><span class="muted">' + esc(chat.source === 'bot_added' ? '入群事件' : '群消息') + '</span></td>' +
+          '<td><span class="muted">' + esc(formatTime(chat.lastSeenAt)) + '</span></td>' +
+          '<td><div class="actions"><button type="button" class="' + (chat.enabled ? 'danger' : 'ghost') + '" data-chat="' + esc(chat.chatId) + '" data-enabled="' + (chat.enabled ? 'false' : 'true') + '">' + (chat.enabled ? '停用' : '启用') + '</button></div></td>' +
+        '</tr>'
+      )).join('');
+    }
+
     sessionsBody.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
@@ -860,6 +962,31 @@ function renderConsoleHtml(): string {
 
     refreshSessions.addEventListener('click', () => {
       loadSessions().catch((error) => alert('刷新失败：' + error.message));
+    });
+
+    chatsBody.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-chat]');
+      if (!button) return;
+      const chatId = button.dataset.chat;
+      const enabled = button.dataset.enabled === 'true';
+      if (!enabled && !confirm('停用这个群聊？群内非 Owner 用户将不能继续使用 bot。')) return;
+      button.disabled = true;
+      try {
+        const res = await fetch('/api/chats/' + encodeURIComponent(chatId), {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await loadChats();
+      } catch (error) {
+        alert('操作失败：' + error.message);
+        button.disabled = false;
+      }
+    });
+
+    refreshChats.addEventListener('click', () => {
+      loadChats().catch((error) => alert('刷新失败：' + error.message));
     });
 
     form.addEventListener('submit', async (event) => {
@@ -903,6 +1030,9 @@ function renderConsoleHtml(): string {
       .finally(() => loadBot().catch((error) => setStatus('加载失败：' + error.message, true)));
     loadSessions().catch((error) => {
       sessionsBody.innerHTML = '<tr><td colspan="6" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
+    });
+    loadChats().catch((error) => {
+      chatsBody.innerHTML = '<tr><td colspan="5" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
     });
   </script>
 </body>

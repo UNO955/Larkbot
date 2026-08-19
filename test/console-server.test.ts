@@ -157,6 +157,47 @@ describe('console terminal page', () => {
     expect(publicBot.appSecretSet).toBe(true);
   });
 
+  it('展示并切换群聊授权', async () => {
+    let savedBots: Bot[] = [{
+      ...structuredClone(bot),
+      knownChats: [{ chatId: 'oc_team', name: '项目群', lastSeenAt: '2026-01-01T00:00:00.000Z', source: 'message' }],
+      allowedChatIds: [],
+    }];
+    const store: SessionStore = {
+      loadBots: async () => savedBots,
+      saveBots: async (bots) => { savedBots = structuredClone(bots); },
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const onBotUpdated = vi.fn();
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+      onBotUpdated,
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const before = await fetch(`${base}/api/chats`);
+    expect(await before.json()).toEqual({
+      chats: [{ chatId: 'oc_team', name: '项目群', lastSeenAt: '2026-01-01T00:00:00.000Z', source: 'message', enabled: false }],
+    });
+
+    const patch = await fetch(`${base}/api/chats/oc_team`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(patch.status).toBe(200);
+    expect(savedBots[0].allowedChatIds).toEqual(['oc_team']);
+    expect(onBotUpdated).toHaveBeenCalledWith(expect.objectContaining({ allowedChatIds: ['oc_team'] }));
+
+    const after = await fetch(`${base}/api/chats`);
+    expect((await after.json()).chats[0].enabled).toBe(true);
+  });
+
   it('卡片停止入口只中断本轮分析，不关闭会话', async () => {
     const interrupted = structuredClone(session);
     const interruptSession = vi.fn(async () => interrupted);

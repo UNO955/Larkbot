@@ -3,6 +3,7 @@
 export interface ParsedMessage {
   messageId: string;
   chatId: string;
+  chatType?: 'group' | 'p2p' | string;
   threadId?: string;
   rootId?: string;
   replyToMessageId?: string;
@@ -56,6 +57,7 @@ export function parseMessageEvent(data: any): ParsedMessage | null {
   return {
     messageId: msg.message_id,
     chatId: msg.chat_id,
+    chatType: msg.chat_type || undefined,
     threadId: msg.thread_id || undefined,
     rootId: msg.root_id || undefined,
     replyToMessageId: msg.parent_id || undefined,

@@ -11,6 +11,7 @@ function evt(over: Record<string, any> = {}): any {
     message: {
       message_id: 'om_1',
       chat_id: 'oc_1',
+      chat_type: over.chatType,
       message_type: over.messageType ?? 'text',
       content: over.content ?? JSON.stringify({ text: 'hello' }),
       mentions: over.mentions,
@@ -28,6 +29,11 @@ describe('parseMessageEvent', () => {
     expect(r!.text).toBe('hello');
     expect(r!.senderOpenId).toBe('ou_owner');
     expect(r!.chatId).toBe('oc_1');
+  });
+
+  it('解析群聊类型', () => {
+    const r = parseMessageEvent(evt({ chatType: 'group' }));
+    expect(r!.chatType).toBe('group');
   });
 
   it('解析发送人展示名', () => {
