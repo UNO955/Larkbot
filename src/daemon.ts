@@ -176,6 +176,12 @@ async function main(): Promise<void> {
       try {
         const session = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (!session) {
+          const closed = sessions.findClosed(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
+          if (closed) {
+            logger.info(`话题会话已关闭 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId}`);
+            await im.reply(msg.threadId, '这个会话已关闭，请重新@bot发起新会话', 'text', msg.id);
+            return;
+          }
           const expired = await sessions.findExpired(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
           if (expired) {
             logger.info(`话题会话已过期清理 chat=${msg.chatId} root=${msg.rootMessageId} thread=${msg.threadId}`);

@@ -116,6 +116,20 @@ export class ConversationManager {
         ))));
   }
 
+  findClosed(chatId: string, rootMessageId: string, threadId?: string, relatedMessageId?: string): Session | undefined {
+    return [...this.sessions.values()].find((session) =>
+      session.status === 'closed'
+      && session.chatId === chatId
+      && (session.rootMessageId === rootMessageId
+        || (!!threadId && session.threadId === threadId)
+        || (!!relatedMessageId && (
+          session.anchorMessageId === relatedMessageId
+          || session.initialCardMessageId === relatedMessageId
+          || session.traceCardMessageId === relatedMessageId
+          || session.answerCardMessageId === relatedMessageId
+        ))));
+  }
+
   async add(session: Session): Promise<void> {
     this.sessions.set(session.sessionId, session);
     await this.persist();
