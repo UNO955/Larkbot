@@ -25,6 +25,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
   const userNameCache = new Map<string, string | undefined>();
+  const chatNameCache = new Map<string, string | undefined>();
   // threadId(omt_) -> 话题内锚点 messageId。回贴时 reply 到锚点并 reply_in_thread，
   // 消息即落进该话题（message.create 不支持 receive_id_type='thread_id'）。
   const threadAnchors = new Map<string, string>();
@@ -184,7 +185,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
           if (!chatId) return;
           await handler.onChatObserved?.({
             chatId,
-            name: event?.chat?.name ?? event?.chat_name,
+            name: event?.chat?.name ?? event?.chat_name ?? await resolveChatName(chatId),
             chatType: 'group',
             source: 'bot_added',
           });
@@ -224,6 +225,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     addReaction,
     removeReaction,
     getBotOpenId: () => botOpenId,
+    getChatName: resolveChatName,
   };
 
   async function toImMessage(m: ParsedMessage) {
@@ -265,6 +267,33 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
   function pickUserName(user: any): string | undefined {
     const candidates = [user?.name, user?.en_name, user?.nickname, user?.email];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return undefined;
+  }
+
+  async function resolveChatName(chatId: string): Promise<string | undefined> {
+    if (!chatId) return undefined;
+    if (chatNameCache.has(chatId)) return chatNameCache.get(chatId);
+    try {
+      const res: any = await client.request({
+        method: 'GET',
+        url: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}`,
+      });
+      const chat = res?.data?.chat ?? res?.data ?? res?.chat;
+      const name = pickChatName(chat);
+      chatNameCache.set(chatId, name);
+      return name;
+    } catch (error: any) {
+      logger.warn(`查询群聊名称失败 chat=${chatId.slice(0, 12)}: ${error?.message ?? error}`);
+      chatNameCache.set(chatId, undefined);
+      return undefined;
+    }
+  }
+
+  function pickChatName(chat: any): string | undefined {
+    const candidates = [chat?.name, chat?.chat_name, chat?.title, chat?.avatar?.name];
     for (const candidate of candidates) {
       if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
     }
@@ -379,6 +408,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
     if (msg.chatType === 'p2p') return;
     await handler.onChatObserved?.({
       chatId: msg.chatId,
+      name: await resolveChatName(msg.chatId),
       chatType: msg.chatType,
       source: 'message',
     });

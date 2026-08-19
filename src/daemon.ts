@@ -214,6 +214,11 @@ async function main(): Promise<void> {
       };
     },
   });
+  await backfillKnownChatNames(store, activeBot, im).then((bot) => {
+    if (bot) activeBot = bot;
+  }).catch((error: any) => {
+    logger.warn(`回填群聊名称失败: ${error?.message ?? error}`);
+  });
 
   // 优雅退出
   const shutdown = () => {
@@ -291,6 +296,30 @@ async function rememberChat(store: JsonSessionStore, activeBot: Bot, chat: ImCha
   bot.knownChats = knownChats;
   bots[index] = bot;
   await store.saveBots(bots);
+  return bot;
+}
+
+async function backfillKnownChatNames(store: JsonSessionStore, activeBot: Bot, im: ImAdapter): Promise<Bot | undefined> {
+  const missing = (activeBot.knownChats ?? []).filter((chat) => !chat.name?.trim());
+  if (missing.length === 0) return undefined;
+  const bots = await store.loadBots();
+  const index = bots.findIndex((bot) => bot.id === activeBot.id);
+  if (index < 0) return undefined;
+  const bot = { ...bots[index] };
+  const knownChats = [...(bot.knownChats ?? [])];
+  let changed = false;
+  for (const chat of knownChats) {
+    if (chat.name?.trim()) continue;
+    const name = await im.getChatName(chat.chatId);
+    if (!name) continue;
+    chat.name = name;
+    changed = true;
+  }
+  if (!changed) return undefined;
+  bot.knownChats = knownChats;
+  bots[index] = bot;
+  await store.saveBots(bots);
+  logger.info(`已回填群聊名称 ${knownChats.filter((chat) => chat.name?.trim()).length}/${knownChats.length}`);
   return bot;
 }
 

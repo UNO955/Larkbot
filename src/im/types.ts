@@ -94,4 +94,5 @@ export interface ImAdapter {
   removeReaction(messageId: string, reactionId: string): Promise<void>;
 
   getBotOpenId(): string | undefined;
+  getChatName(chatId: string): Promise<string | undefined>;
 }
