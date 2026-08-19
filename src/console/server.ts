@@ -326,19 +326,34 @@ async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
   return bot;
 }
 
-async function listSessions(opts: ConsoleServerOpts): Promise<Session[]> {
+type PublicSession = Session & { createdByDisplayName?: string; lastCallerDisplayName?: string };
+
+async function listSessions(opts: ConsoleServerOpts): Promise<PublicSession[]> {
   const bot = await requireBot(opts).catch(() => undefined);
   const sessions = opts.sessionManager
     ? opts.sessionManager.listSessions()
     : await opts.store.loadSessions();
   return sessions
     .map((session) => enrichSessionChatName(session, bot))
+    .map((session) => enrichSessionUserNames(session, bot))
     .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
 }
 
 function enrichSessionChatName(session: Session, bot: Bot | undefined): Session {
   const name = bot?.knownChats?.find((chat) => chat.chatId === session.chatId)?.name;
   return name && name !== session.chatName ? { ...session, chatName: name } : session;
+}
+
+function enrichSessionUserNames(session: Session, bot: Bot | undefined): PublicSession {
+  const createdByDisplayName = displayUserName(session.createdByName, session.createdByOpenId, bot);
+  const lastCallerDisplayName = displayUserName(undefined, session.lastCallerOpenId, bot);
+  return { ...session, createdByDisplayName, lastCallerDisplayName };
+}
+
+function displayUserName(name: string | undefined, openId: string | undefined, bot: Bot | undefined): string | undefined {
+  if (name?.trim()) return name.trim();
+  if (openId && bot?.ownerOpenId === openId) return 'Owner';
+  return openId;
 }
 
 async function listChats(opts: ConsoleServerOpts): Promise<PublicChat[]> {
@@ -921,7 +936,7 @@ function renderConsoleHtml(): string {
         return '<tr>' +
           '<td><strong>' + esc(compact(s.title || s.sessionId, 48)) + '</strong><br><span class="muted"><code>' + esc(compact(s.sessionId, 18)) + '</code></span></td>' +
           '<td><span class="status ' + esc(s.status) + '">' + esc(s.status) + '</span></td>' +
-          '<td>' + esc(compact(s.createdByName || s.createdByOpenId || '-', 24)) + '<br><span class="muted">' + esc(compact(s.lastCallerOpenId || '-', 18)) + '</span></td>' +
+          '<td>' + esc(compact(s.createdByDisplayName || s.createdByName || s.createdByOpenId || '-', 24)) + '<br><span class="muted">' + esc(compact(s.lastCallerDisplayName || s.lastCallerOpenId || '-', 18)) + '</span></td>' +
           '<td>' + esc(compact(s.chatName || s.chatId || '-', 28)) + '<br><span class="muted">' + esc(compact(s.chatId || '-', 18)) + '</span></td>' +
           '<td>' + esc(s.cliId || '-') + '<br><span class="muted">' + esc(compact(s.cliSessionId || 'no cli session', 22)) + '</span></td>' +
           '<td><span class="muted">' + esc(compact(s.workingDir || '-', 42)) + '</span><br><span class="muted">' + esc(compact(s.threadId || s.rootMessageId || '-', 24)) + '</span></td>' +
