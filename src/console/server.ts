@@ -393,12 +393,17 @@ async function listFeedbacks(opts: ConsoleServerOpts): Promise<FeedbackRecord[]>
 async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
   if (!opts.store.loadFeedbacks || !opts.store.saveFeedbacks) throw httpError(404, 'feedback_store_not_available');
   if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
-  const status = (patch as Record<string, unknown>).status;
-  if (!isFeedbackStatus(status)) throw httpError(400, 'unsupported_feedback_update');
+  const input = patch as Record<string, unknown>;
+  const status = input.status;
+  const reviewNote = input.reviewNote;
+  if (status !== undefined && !isFeedbackStatus(status)) throw httpError(400, 'unsupported_feedback_status');
+  if (reviewNote !== undefined && typeof reviewNote !== 'string') throw httpError(400, 'invalid_review_note');
+  if (status === undefined && reviewNote === undefined) throw httpError(400, 'unsupported_feedback_update');
   const feedbacks = await opts.store.loadFeedbacks();
   const feedback = feedbacks.find((item) => item.id === feedbackId);
   if (!feedback) throw httpError(404, 'feedback_not_found');
-  feedback.status = status;
+  if (status !== undefined) feedback.status = status;
+  if (typeof reviewNote === 'string') feedback.reviewNote = clean(reviewNote, 1000);
   feedback.updatedAt = new Date().toISOString();
   await opts.store.saveFeedbacks(feedbacks);
   return feedback;
@@ -747,6 +752,15 @@ function renderConsoleHtml(): string {
     .muted { color: var(--text-muted); }
     .line { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.55; }
     .line strong { font-weight: 700; }
+    .context-lines { display: grid; gap: 5px; }
+    .context-line { color: var(--text-soft); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .context-line strong { color: var(--text); font-weight: 800; }
+    .feedback-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .feedback-controls select { width: auto; min-width: 124px; height: 34px; }
+    .feedback-stats { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 28px 16px; }
+    .feedback-stat { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: var(--surface-tint); color: var(--text-soft); border: 1px solid var(--border); padding: 5px 10px; font-size: 12px; font-weight: 800; }
+    .feedback-stat.negative { background: var(--danger-soft); color: var(--danger); border-color: oklch(62% 0.19 24 / .22); }
+    .review-note { min-width: 190px; min-height: 58px; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 8px 10px; resize: vertical; font: inherit; font-size: 13px; line-height: 1.45; }
     .session-table th:last-child,
     .session-table td:last-child { position: sticky; right: 0; background: inherit; box-shadow: -12px 0 18px oklch(100% 0 0 / .94); }
     .session-table th:last-child { z-index: 2; }
@@ -938,29 +952,39 @@ function renderConsoleHtml(): string {
             <span class="title-icon"><svg class="icon"><use href="#i-thumbs"></use></svg></span>
             <h2>反馈中心</h2>
           </div>
-          <div class="sub">查看群成员对分析质量的反馈，支持标记处理状态和删除。</div>
+          <div class="sub">查看群成员对分析质量的反馈，支持筛选、复盘备注、状态标记和删除。</div>
         </div>
-        <button id="refresh-feedbacks" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        <div class="feedback-controls">
+          <select id="feedback-filter" aria-label="反馈状态筛选">
+            <option value="">全部状态</option>
+            <option value="open">未处理</option>
+            <option value="reviewing">处理中</option>
+            <option value="resolved">已处理</option>
+            <option value="ignored">忽略</option>
+          </select>
+          <button id="refresh-feedbacks" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        </div>
       </div>
+      <div id="feedback-stats" class="feedback-stats"></div>
       <div class="sessions">
         <table class="feedback-table">
           <colgroup>
             <col style="width: 120px">
             <col style="width: 110px">
-            <col style="width: 230px">
+            <col style="width: 330px">
             <col style="width: 180px">
             <col style="width: 150px">
+            <col style="width: 260px">
             <col style="width: 230px">
-            <col style="width: 190px">
           </colgroup>
           <thead>
             <tr>
               <th>评价</th>
               <th>状态</th>
-              <th>问题</th>
+              <th>问题 / 回答 / 知识库</th>
               <th>群聊 / 点击人</th>
               <th>原因</th>
-              <th>补充说明</th>
+              <th>复盘备注</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -1022,6 +1046,8 @@ function renderConsoleHtml(): string {
     const refreshChats = document.querySelector('#refresh-chats');
     const feedbacksBody = document.querySelector('#feedbacks-body');
     const refreshFeedbacks = document.querySelector('#refresh-feedbacks');
+    const feedbackFilter = document.querySelector('#feedback-filter');
+    const feedbackStats = document.querySelector('#feedback-stats');
       const summaryBot = document.querySelector('#summary-bot');
       const summaryChats = document.querySelector('#summary-chats');
       const summarySessions = document.querySelector('#summary-sessions');
@@ -1195,6 +1221,35 @@ function renderConsoleHtml(): string {
       return value === 'positive' ? '👍 有帮助' : '👎 拉完了';
     }
 
+    function oneLine(value, len = 90) {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      return text.length > len ? text.slice(0, len - 1) + '…' : text;
+    }
+
+    function knowledgeText(item) {
+      const knowledge = item.knowledge;
+      if (!knowledge) return '知识库：暂无记录';
+      if (Array.isArray(knowledge.references) && knowledge.references.length) {
+        return '知识库：' + knowledge.references.slice(0, 3).map((ref) => ref.path).join('、');
+      }
+      return '知识库：' + (knowledge.noReferenceReason || '未检测到知识库引用');
+    }
+
+    function feedbackStatsHtml(feedbacks) {
+      const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recentNegatives = feedbacks.filter((item) => item.rating === 'negative' && Date.parse(item.createdAt) >= since);
+      const reasons = new Map();
+      for (const item of recentNegatives) {
+        const key = item.reason || '未补充原因';
+        reasons.set(key, (reasons.get(key) || 0) + 1);
+      }
+      const parts = ['<span class="feedback-stat negative">近 7 天差评 ' + recentNegatives.length + '</span>'];
+      for (const [reason, count] of [...reasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
+        parts.push('<span class="feedback-stat">' + esc(reason) + ' × ' + count + '</span>');
+      }
+      return parts.join('');
+    }
+
     async function loadSessions() {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(await res.text());
@@ -1249,18 +1304,29 @@ function renderConsoleHtml(): string {
       if (!res.ok) throw new Error(await res.text());
       const { feedbacks } = await res.json();
       latestFeedbacks = Array.isArray(feedbacks) ? feedbacks : [];
-      if (!latestFeedbacks.length) {
+      feedbackStats.innerHTML = feedbackStatsHtml(latestFeedbacks);
+      const statusFilter = feedbackFilter.value;
+      const visibleFeedbacks = statusFilter
+        ? latestFeedbacks.filter((item) => item.status === statusFilter)
+        : latestFeedbacks;
+      if (!visibleFeedbacks.length) {
         feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无反馈</span></td></tr>';
         return;
       }
-      feedbacksBody.innerHTML = latestFeedbacks.map((item) => (
+      feedbacksBody.innerHTML = visibleFeedbacks.map((item) => (
         '<tr>' +
           '<td><span class="status ' + esc(item.rating) + '">' + esc(ratingText(item.rating)) + '</span><span class="line muted">' + esc(formatTime(item.createdAt)) + '</span></td>' +
           '<td><span class="status ' + esc(item.status) + '">' + esc(feedbackStatusText(item.status)) + '</span></td>' +
-          '<td><span class="line"><strong>' + esc(item.sessionTitle || item.sessionId) + '</strong></span><span class="line muted"><code>' + esc(item.sessionId) + '</code></span></td>' +
+          '<td><div class="context-lines">' +
+            '<span class="context-line"><strong>' + esc(item.sessionTitle || item.sessionId) + '</strong></span>' +
+            '<span class="context-line">问：' + esc(oneLine(item.question || item.sessionTitle || '-', 110)) + '</span>' +
+            '<span class="context-line">答：' + esc(oneLine(item.answer || '-', 130)) + '</span>' +
+            '<span class="context-line">' + esc(oneLine(knowledgeText(item), 130)) + '</span>' +
+            '<span class="line muted"><code>' + esc(item.sessionId) + '</code></span>' +
+          '</div></td>' +
           '<td><span class="line">' + esc(item.chatName || item.chatId || '未知群聊') + '</span><span class="line muted">' + esc(item.operatorName || item.operatorId || '-') + '</span></td>' +
-          '<td><span class="line">' + esc(item.reason || '-') + '</span></td>' +
-          '<td><span class="line">' + esc(item.note || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(item.reason || '-') + '</span><span class="line muted">' + esc(item.note || '') + '</span></td>' +
+          '<td><textarea class="review-note" data-feedback-note="' + esc(item.id) + '" placeholder="记录复盘结论">' + esc(item.reviewNote || '') + '</textarea></td>' +
           '<td><div class="actions">' +
             '<select class="feedback-status-select ' + esc(item.status) + '" data-feedback-status="' + esc(item.id) + '" aria-label="反馈状态">' +
               '<option value="open"' + (item.status === 'open' ? ' selected' : '') + '>未处理</option>' +
@@ -1268,6 +1334,7 @@ function renderConsoleHtml(): string {
               '<option value="resolved"' + (item.status === 'resolved' ? ' selected' : '') + '>已处理</option>' +
               '<option value="ignored"' + (item.status === 'ignored' ? ' selected' : '') + '>忽略</option>' +
             '</select>' +
+            '<button class="ghost" type="button" data-feedback-save-note="' + esc(item.id) + '"><svg class="icon sm"><use href="#i-check"></use></svg>保存备注</button>' +
             '<a href="' + esc(item.terminalUrl || ('/terminal/' + encodeURIComponent(item.sessionId))) + '" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-message"></use></svg>过程</button></a>' +
             '<button class="danger" type="button" data-feedback-delete="' + esc(item.id) + '"><svg class="icon sm"><use href="#i-trash"></use></svg>删除</button>' +
           '</div></td>' +
@@ -1344,6 +1411,26 @@ function renderConsoleHtml(): string {
     });
 
     feedbacksBody.addEventListener('click', async (event) => {
+      const saveNote = event.target.closest('button[data-feedback-save-note]');
+      if (saveNote) {
+        const feedbackId = saveNote.dataset.feedbackSaveNote;
+        const textarea = [...feedbacksBody.querySelectorAll('textarea[data-feedback-note]')]
+          .find((item) => item.dataset.feedbackNote === feedbackId);
+        saveNote.disabled = true;
+        try {
+          const res = await fetch('/api/feedbacks/' + encodeURIComponent(feedbackId), {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ reviewNote: textarea ? textarea.value : '' }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          await loadFeedbacks();
+        } catch (error) {
+          alert('保存复盘备注失败：' + error.message);
+          saveNote.disabled = false;
+        }
+        return;
+      }
       const button = event.target.closest('button[data-feedback-delete]');
       if (!button) return;
       if (!confirm('删除这条反馈记录？')) return;
@@ -1360,6 +1447,10 @@ function renderConsoleHtml(): string {
 
     refreshFeedbacks.addEventListener('click', () => {
       loadFeedbacks().catch((error) => alert('刷新反馈失败：' + error.message));
+    });
+
+    feedbackFilter.addEventListener('change', () => {
+      loadFeedbacks().catch((error) => alert('筛选反馈失败：' + error.message));
     });
 
     form.addEventListener('submit', async (event) => {

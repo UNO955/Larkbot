@@ -212,6 +212,12 @@ describe('console terminal page', () => {
       terminalUrl: 'http://console/terminal/lm-1',
       reason: '证据不足',
       note: '没说为什么',
+      question: '为什么猜答手机号按钮未下发？',
+      answer: '结论：猜答手机号按钮未下发。',
+      knowledge: {
+        references: [{ path: 'docs/playbook.md', source: 'trace' }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     }];
@@ -243,6 +249,14 @@ describe('console terminal page', () => {
     });
     expect(patch.status).toBe(200);
     expect(feedbacks[0].status).toBe('reviewing');
+
+    const notePatch = await fetch(`${base}/api/feedbacks/fb-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reviewNote: '已修 prompt，待回归' }),
+    });
+    expect(notePatch.status).toBe(200);
+    expect(feedbacks[0].reviewNote).toBe('已修 prompt，待回归');
 
     const del = await fetch(`${base}/api/feedbacks/fb-1`, { method: 'DELETE' });
     expect(del.status).toBe(200);
