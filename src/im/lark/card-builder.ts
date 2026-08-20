@@ -25,6 +25,10 @@ export interface ThinkingCardOpts {
   interruptSessionId: string;
   status: StreamCardStatus;
   footer?: string;
+  feedback?: FeedbackState;
+  feedbackReason?: string;
+  feedbackNote?: string;
+  feedbackId?: string;
 }
 
 export interface MaintenanceCardOpts {
@@ -35,6 +39,24 @@ export interface MaintenanceCardOpts {
   dashboardUrl: string;
   cleanupPolicy?: string;
   details?: string[];
+}
+
+export type FeedbackRating = 'positive' | 'negative';
+export type FeedbackState = FeedbackRating | 'negative_pending';
+
+export interface FeedbackOwnerCardOpts {
+  rating: FeedbackRating;
+  sessionTitle: string;
+  sessionId: string;
+  chatName?: string;
+  chatId?: string;
+  operatorName?: string;
+  operatorId: string;
+  terminalUrl: string;
+  traceExcerpt?: string;
+  reason?: string;
+  note?: string;
+  supplemental?: boolean;
 }
 
 const STATUS_META = {
@@ -186,7 +208,9 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
     },
     {
       tag: 'action',
-      actions: [
+      actions: opts.status === 'completed'
+        ? completedThinkingActions(opts)
+        : [
         {
           tag: 'button',
           text: { tag: 'plain_text', content: '打开分析过程' },
@@ -209,6 +233,19 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
       ],
     },
   ];
+  if (opts.status === 'completed' && opts.feedback) {
+    if (opts.feedback === 'negative_pending') {
+      elements.push(...buildNegativeFeedbackForm(opts));
+    } else {
+      elements.push({
+        tag: 'markdown',
+        text_size: 'notation_small_v2',
+        content: opts.feedback === 'positive'
+          ? "<font color='green'>👍 感谢认可，我会继续保持这种排查质量。</font>"
+          : `<font color='orange'>👎 已收到反馈${opts.feedbackReason ? `：${escapeMarkdownText(opts.feedbackReason)}` : ''}，Owner 已收到通知。</font>`,
+      });
+    }
+  }
   if (opts.footer?.trim()) {
     elements.push({ tag: 'hr' });
     elements.push({
@@ -230,6 +267,135 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
       elements,
     },
   };
+}
+
+function completedThinkingActions(opts: ThinkingCardOpts): unknown[] {
+  const openButton = {
+    tag: 'button',
+    text: { tag: 'plain_text', content: '打开分析过程' },
+    type: 'default',
+    multi_url: {
+      url: opts.url,
+      pc_url: opts.url,
+      android_url: opts.url,
+      ios_url: opts.url,
+    },
+  };
+  if (opts.feedback) return [openButton];
+  const positive = { action: 'rate_thinking', sessionId: opts.interruptSessionId, rating: 'positive', footer: opts.footer };
+  const negative = { action: 'rate_thinking', sessionId: opts.interruptSessionId, rating: 'negative', footer: opts.footer };
+  return [
+    openButton,
+    {
+      tag: 'button',
+      text: { tag: 'plain_text', content: '👍 有帮助' },
+      type: 'primary',
+      value: positive,
+      behaviors: [{ type: 'callback', value: positive }],
+    },
+    {
+      tag: 'button',
+      text: { tag: 'plain_text', content: '👎 拉完了' },
+      type: 'default',
+      value: negative,
+      behaviors: [{ type: 'callback', value: negative }],
+    },
+  ];
+}
+
+function buildNegativeFeedbackForm(opts: ThinkingCardOpts): unknown[] {
+  const submit = { action: 'submit_negative_feedback', sessionId: opts.interruptSessionId, feedbackId: opts.feedbackId, rating: 'negative', footer: opts.footer };
+  return [
+    {
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: "<font color='orange'>👎 已记录差评并通知 Owner。可以继续补充原因，帮助后续复盘。</font>",
+    },
+    {
+      tag: 'select_static',
+      name: 'feedback_reason',
+      placeholder: { tag: 'plain_text', content: '选择主要原因' },
+      options: [
+        { text: { tag: 'plain_text', content: '结论不准确' }, value: '结论不准确' },
+        { text: { tag: 'plain_text', content: '证据不足' }, value: '证据不足' },
+        { text: { tag: 'plain_text', content: '没看知识库/代码' }, value: '没看知识库/代码' },
+        { text: { tag: 'plain_text', content: '没有解决问题' }, value: '没有解决问题' },
+        { text: { tag: 'plain_text', content: '表达不清楚' }, value: '表达不清楚' },
+      ],
+    },
+    {
+      tag: 'input',
+      name: 'feedback_note',
+      placeholder: { tag: 'plain_text', content: '补充说明，可不填' },
+      max_length: 500,
+    },
+    {
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '提交原因' },
+          type: 'primary',
+          value: submit,
+          behaviors: [{ type: 'callback', value: submit }],
+        },
+      ],
+    },
+  ];
+}
+
+export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
+  const liked = opts.rating === 'positive';
+  const title = liked ? '👍 收到一次好评' : opts.supplemental ? '👎 收到差评原因补充' : '👎 收到一次差评';
+  const trace = opts.traceExcerpt?.trim()
+    ? escapeMarkdownText(trimTail(opts.traceExcerpt.trim(), 2600))
+    : '暂无可读取的分析过程摘录，可打开完整分析过程查看。';
+  const content = [
+    `**评价：${liked ? '有帮助' : '拉完了'}**`,
+    opts.supplemental ? undefined : '已写入控制台反馈中心，可在控制台标记状态或删除。',
+    opts.reason ? `原因：${escapeMarkdownText(opts.reason)}` : undefined,
+    opts.note ? `补充：${escapeMarkdownText(opts.note)}` : undefined,
+    `问题：${escapeMarkdownText(opts.sessionTitle || opts.sessionId)}`,
+    `群聊：${escapeMarkdownText(opts.chatName || opts.chatId || '未知群聊')}`,
+    `会话：${escapeMarkdownText(opts.sessionId)}`,
+    `点击人：${escapeMarkdownText(opts.operatorName || opts.operatorId)}`,
+    '',
+    '**分析过程摘录**',
+    trace,
+  ].filter((line): line is string => line !== undefined).join('\n');
+  return {
+    payload: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: liked ? 'green' : 'red',
+        title: { tag: 'plain_text', content: title },
+      },
+      elements: [
+        { tag: 'markdown', content },
+        {
+          tag: 'action',
+          actions: [
+            {
+              tag: 'button',
+              text: { tag: 'plain_text', content: '打开完整分析过程' },
+              type: 'primary',
+              multi_url: {
+                url: opts.terminalUrl,
+                pc_url: opts.terminalUrl,
+                android_url: opts.terminalUrl,
+                ios_url: opts.terminalUrl,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function trimTail(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `...（仅展示尾部 ${max} 字符）\n${value.slice(-max)}`;
 }
 
 export function buildMaintenanceCard(opts: MaintenanceCardOpts): ImCard {

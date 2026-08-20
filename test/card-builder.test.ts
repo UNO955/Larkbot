@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTerminalCard, buildThinkingCard } from '../src/im/lark/card-builder.js';
+import { buildFeedbackOwnerCard, buildTerminalCard, buildThinkingCard } from '../src/im/lark/card-builder.js';
 
 describe('buildTerminalCard', () => {
   it('运行态使用蓝色状态头和原生 Markdown 正文', () => {
@@ -99,14 +99,88 @@ describe('buildTerminalCard', () => {
     expect(card.header.template).toBe('green');
     expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
     expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
-    expect(card.elements[1].actions[1].text.content).toBe('分析已完成');
-    expect(card.elements[1].actions[1].disabled).toBe(true);
-    expect(card.elements[1].actions[1].value).toEqual({ action: 'interrupt_thinking', sessionId: 'lm-1' });
+    expect(card.elements[1].actions[1].text.content).toBe('👍 有帮助');
+    expect(card.elements[1].actions[1].value).toEqual({
+      action: 'rate_thinking',
+      sessionId: 'lm-1',
+      rating: 'positive',
+      footer: '🪙 累计 Token ↑15K ↓3.5K',
+    });
     expect(card.elements[1].actions[1].behaviors).toEqual([
-      { type: 'callback', value: { action: 'interrupt_thinking', sessionId: 'lm-1' } },
+      {
+        type: 'callback',
+        value: {
+          action: 'rate_thinking',
+          sessionId: 'lm-1',
+          rating: 'positive',
+          footer: '🪙 累计 Token ↑15K ↓3.5K',
+        },
+      },
     ]);
-    expect(card.elements[1].actions[1].multi_url).toBeUndefined();
+    expect(card.elements[1].actions[2].text.content).toBe('👎 拉完了');
+    expect(card.elements[1].actions[2].value).toMatchObject({ action: 'rate_thinking', sessionId: 'lm-1', rating: 'negative' });
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
+  });
+
+  it('点击差评后隐藏反馈按钮并展示可选原因表单', () => {
+    const card: any = buildThinkingCard({
+      url: 'http://console/terminal/lm-1',
+      interruptSessionId: 'lm-1',
+      status: 'completed',
+      feedback: 'negative_pending',
+      footer: '⏱️ 总耗时：01:02',
+    }).payload;
+    expect(card.elements[1].actions).toHaveLength(1);
+    expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
+    expect(card.elements[2].content).toContain('已记录差评并通知 Owner');
+    expect(card.elements[3].tag).toBe('select_static');
+    expect(card.elements[3].name).toBe('feedback_reason');
+    expect(card.elements[4].tag).toBe('input');
+    expect(card.elements[4].name).toBe('feedback_note');
+    expect(card.elements[5].actions[0].text.content).toBe('提交原因');
+    expect(card.elements[5].actions[0].value).toMatchObject({ action: 'submit_negative_feedback', sessionId: 'lm-1', rating: 'negative' });
+    expect(card.elements.at(-1).content).toContain('总耗时');
+  });
+
+  it('提交差评原因后隐藏表单并展示确认文案', () => {
+    const card: any = buildThinkingCard({
+      url: 'http://console/terminal/lm-1',
+      interruptSessionId: 'lm-1',
+      status: 'completed',
+      feedback: 'negative',
+      feedbackReason: '证据不足',
+      footer: '⏱️ 总耗时：01:02',
+    }).payload;
+    expect(card.elements[1].actions).toHaveLength(1);
+    expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
+    expect(card.elements[2].content).toContain('已收到反馈');
+    expect(card.elements[2].content).toContain('证据不足');
+    expect(card.elements.at(-1).content).toContain('总耗时');
+  });
+
+  it('构造 Owner 反馈通知卡，包含问题、会话、点击人和完整过程入口', () => {
+    const card: any = buildFeedbackOwnerCard({
+      rating: 'negative',
+      sessionTitle: '猜答手机号按钮排查',
+      sessionId: 'lm-1',
+      chatName: '项目群',
+      operatorName: 'QA',
+      operatorId: 'ou_qa',
+      terminalUrl: 'http://console/terminal/lm-1',
+      traceExcerpt: '读取知识库\n检查代码',
+      reason: '证据不足',
+      note: '没有解释为什么',
+      supplemental: true,
+    }).payload;
+    expect(card.header.template).toBe('red');
+    expect(card.header.title.content).toContain('差评原因补充');
+    expect(card.elements[0].content).toContain('猜答手机号按钮排查');
+    expect(card.elements[0].content).toContain('项目群');
+    expect(card.elements[0].content).toContain('QA');
+    expect(card.elements[0].content).toContain('证据不足');
+    expect(card.elements[0].content).toContain('没有解释为什么');
+    expect(card.elements[0].content).toContain('读取知识库');
+    expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
   });
 
   it('分析中可停止，停止后按钮不可点击', () => {

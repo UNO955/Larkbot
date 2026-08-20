@@ -81,3 +81,24 @@ export interface ExpiredSession {
   deletedAt: string;
   reason: 'retention_expired';
 }
+
+export type FeedbackRating = 'positive' | 'negative';
+export type FeedbackStatus = 'open' | 'reviewing' | 'resolved' | 'ignored';
+
+export interface FeedbackRecord {
+  id: string;
+  rating: FeedbackRating;
+  status: FeedbackStatus;
+  sessionId: string;
+  sessionTitle: string;
+  chatId?: string;
+  chatName?: string;
+  operatorId: string;
+  operatorName?: string;
+  terminalUrl: string;
+  traceExcerpt?: string;
+  reason?: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { SessionStore } from '../core/store.js';
-import type { Bot, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
+import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -91,6 +91,12 @@ export class TerminalStreamStore {
     }
     this.buffers.set(sessionId, buffer);
     this.publish(sessionId, 'data', { chunk: filtered });
+  }
+
+  snapshot(sessionId: string, maxChars = this.maxChars): string {
+    const content = (this.buffers.get(sessionId) ?? []).join('');
+    const visible = stripTerminalControl(content).trim();
+    return visible.length > maxChars ? visible.slice(-maxChars) : visible;
   }
 
   close(sessionId: string): void {
@@ -284,6 +290,23 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { chats: await listChats(opts) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/feedbacks') {
+      sendJson(res, { feedbacks: await listFeedbacks(opts) });
+      return;
+    }
+    const feedbackMatch = url.pathname.match(/^\/api\/feedbacks\/([^/]+)$/);
+    if (feedbackMatch && req.method === 'PATCH') {
+      const feedbackId = decodeURIComponent(feedbackMatch[1]);
+      const patch = await readJsonBody(req);
+      sendJson(res, { feedback: await updateFeedback(opts, feedbackId, patch) });
+      return;
+    }
+    if (feedbackMatch && req.method === 'DELETE') {
+      const feedbackId = decodeURIComponent(feedbackMatch[1]);
+      await deleteFeedback(opts, feedbackId);
+      sendJson(res, { ok: true });
+      return;
+    }
     const chatMatch = url.pathname.match(/^\/api\/chats\/([^/]+)$/);
     if (chatMatch && req.method === 'PATCH') {
       const chatId = decodeURIComponent(chatMatch[1]);
@@ -359,6 +382,34 @@ function displayUserName(name: string | undefined, openId: string | undefined, b
 async function listChats(opts: ConsoleServerOpts): Promise<PublicChat[]> {
   const bot = await requireBot(opts);
   return toPublicChats(bot);
+}
+
+async function listFeedbacks(opts: ConsoleServerOpts): Promise<FeedbackRecord[]> {
+  if (!opts.store.loadFeedbacks) return [];
+  const feedbacks = await opts.store.loadFeedbacks();
+  return [...feedbacks].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
+  if (!opts.store.loadFeedbacks || !opts.store.saveFeedbacks) throw httpError(404, 'feedback_store_not_available');
+  if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
+  const status = (patch as Record<string, unknown>).status;
+  if (!isFeedbackStatus(status)) throw httpError(400, 'unsupported_feedback_update');
+  const feedbacks = await opts.store.loadFeedbacks();
+  const feedback = feedbacks.find((item) => item.id === feedbackId);
+  if (!feedback) throw httpError(404, 'feedback_not_found');
+  feedback.status = status;
+  feedback.updatedAt = new Date().toISOString();
+  await opts.store.saveFeedbacks(feedbacks);
+  return feedback;
+}
+
+async function deleteFeedback(opts: ConsoleServerOpts, feedbackId: string): Promise<void> {
+  if (!opts.store.loadFeedbacks || !opts.store.saveFeedbacks) throw httpError(404, 'feedback_store_not_available');
+  const feedbacks = await opts.store.loadFeedbacks();
+  const next = feedbacks.filter((item) => item.id !== feedbackId);
+  if (next.length === feedbacks.length) throw httpError(404, 'feedback_not_found');
+  await opts.store.saveFeedbacks(next);
 }
 
 async function updateSession(opts: ConsoleServerOpts, sessionId: string, patch: unknown): Promise<Session> {
@@ -556,6 +607,10 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+function isFeedbackStatus(value: unknown): value is FeedbackStatus {
+  return value === 'open' || value === 'reviewing' || value === 'resolved' || value === 'ignored';
+}
+
 function sanitizeSystemPromptProfiles(value: unknown[]): Bot['systemPromptProfiles'] {
   const profiles: SystemPromptProfile[] = [];
   const seen = new Set<string>();
@@ -610,73 +665,122 @@ function renderConsoleHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>larkbot 控制台</title>
   <style>
-    :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root {
+      color-scheme: light;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: oklch(97.4% 0.012 255);
+      --surface: oklch(100% 0 0);
+      --surface-soft: oklch(98.6% 0.01 255);
+      --surface-tint: oklch(96.5% 0.018 255);
+      --border: oklch(89.8% 0.014 255);
+      --border-strong: oklch(84.8% 0.02 255);
+      --text: oklch(24% 0.02 255);
+      --text-soft: oklch(44% 0.025 255);
+      --text-muted: oklch(59% 0.025 255);
+      --primary: oklch(55% 0.18 258);
+      --primary-hover: oklch(49% 0.18 258);
+      --primary-soft: oklch(93.5% 0.045 258);
+      --success: oklch(48% 0.13 150);
+      --success-soft: oklch(94% 0.055 150);
+      --danger: oklch(56% 0.18 24);
+      --danger-hover: oklch(49% 0.17 24);
+      --danger-soft: oklch(94% 0.045 24);
+      --warning: oklch(54% 0.12 70);
+      --warning-soft: oklch(96% 0.055 78);
+      --radius: 8px;
+      --shadow-sm: 0 1px 2px oklch(24% 0.02 255 / .06);
+      --shadow-md: 0 14px 36px oklch(24% 0.02 255 / .08);
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; background: #f7f8fa; color: #1f2329; }
-    main { max-width: 1280px; margin: 28px auto; padding: 0 24px; display: grid; gap: 18px; }
-    .card { background: #fff; border: 1px solid #dee0e3; border-radius: 8px; box-shadow: 0 8px 24px rgba(31,35,41,.05); overflow: hidden; }
-    header { padding: 22px 28px; border-bottom: 1px solid #eff0f1; background: #fbfcfe; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    main { max-width: 1280px; margin: 28px auto; padding: 0 24px; display: grid; gap: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
+    .card:first-child { box-shadow: var(--shadow-md); }
+    header { padding: 24px 28px 22px; border-bottom: 1px solid var(--border); background: linear-gradient(180deg, var(--surface) 0%, var(--surface-soft) 100%); }
     h1 { margin: 0; font-size: 22px; line-height: 1.25; letter-spacing: 0; }
     .app-title, .section-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .title-icon { width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: #eaf0ff; color: #2b67e8; flex: 0 0 auto; }
+    .title-icon { width: 32px; height: 32px; border-radius: var(--radius); display: inline-flex; align-items: center; justify-content: center; background: var(--primary-soft); color: var(--primary); flex: 0 0 auto; }
     .section-title .title-icon { width: 28px; height: 28px; }
     .icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; flex: 0 0 auto; }
     .icon.sm { width: 14px; height: 14px; }
-    .sub { margin-top: 6px; color: #646a73; font-size: 13px; line-height: 1.6; }
+    .sub { margin-top: 6px; color: var(--text-soft); font-size: 13px; line-height: 1.6; }
+    .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+    .summary-item { min-width: 0; display: grid; gap: 5px; padding: 13px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .summary-label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; font-weight: 700; }
+    .summary-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; line-height: 1.25; font-weight: 800; color: var(--text); }
     form { padding: 24px 28px 28px; display: grid; gap: 16px; }
-    label { display: grid; gap: 7px; font-weight: 600; font-size: 13px; color: #343840; }
-      input[type="text"], input[type="password"], select, textarea { width: 100%; border: 1px solid #d0d3d6; border-radius: 8px; padding: 0 12px; font: inherit; background: #fff; color: #1f2329; transition: border-color .15s, box-shadow .15s; }
+    label { display: grid; gap: 7px; font-weight: 700; font-size: 13px; color: var(--text); }
+      input[type="text"], input[type="password"], select, textarea { width: 100%; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 12px; font: inherit; background: var(--surface); color: var(--text); transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
       input[type="text"], input[type="password"], select { height: 38px; }
       textarea { min-height: 144px; padding: 10px 12px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      input:focus, select:focus, textarea:focus { outline: 0; border-color: #2b67e8; box-shadow: 0 0 0 3px rgba(43,103,232,.12); }
+      input:hover, select:hover, textarea:hover { border-color: var(--text-muted); }
+      input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--primary); box-shadow: 0 0 0 3px oklch(55% 0.18 258 / .14); }
     .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-    .check { display: flex; align-items: center; gap: 10px; font-weight: 500; color: #343840; }
-    .check input { width: 16px; height: 16px; }
-    .hint { color: #8f959e; font-size: 12px; font-weight: 400; line-height: 1.5; }
+    .check { display: flex; align-items: center; gap: 10px; min-height: 28px; font-weight: 600; color: var(--text); }
+    .check input { width: 16px; height: 16px; accent-color: var(--primary); }
+    .hint { color: var(--text-muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
     footer { display: flex; align-items: center; gap: 12px; padding-top: 4px; }
-    button { height: 36px; border: 1px solid transparent; border-radius: 8px; background: #2b67e8; color: white; padding: 0 16px; font: inherit; font-weight: 700; cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
-    button:hover:not(:disabled) { background: #1f56cf; }
-    button:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(43,103,232,.16); }
+    button { height: 36px; border: 1px solid transparent; border-radius: var(--radius); background: var(--primary); color: white; padding: 0 16px; font: inherit; font-weight: 800; cursor: pointer; transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .15s ease; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+    button:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 8px 18px oklch(55% 0.18 258 / .16); }
+    button:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
+    button:focus-visible { outline: 0; box-shadow: 0 0 0 3px oklch(55% 0.18 258 / .18); }
     button:disabled { opacity: .55; cursor: not-allowed; }
-    #status { color: #646a73; font-size: 13px; }
-    .warn { background: #fff9ed; color: #8f5a00; border: 1px solid #f7d99c; border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid #eff0f1; background: #fbfcfe; }
+    #status { color: var(--text-soft); font-size: 13px; }
+    .warn { display: flex; align-items: flex-start; gap: 8px; background: var(--warning-soft); color: var(--warning); border: 1px solid oklch(87% 0.075 78); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+    .warn .icon { margin-top: 2px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--border); background: var(--surface-soft); }
     .toolbar h2 { margin: 0; font-size: 18px; line-height: 1.3; letter-spacing: 0; }
-    .ghost { background: #f4f5f7; color: #1f2329; border-color: #e4e6eb; }
-    .ghost:hover:not(:disabled) { background: #e9edf3; }
-    .danger { background: #e5484d; }
-    .danger:hover:not(:disabled) { background: #c93c40; }
+    .ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+    .ghost:hover:not(:disabled) { background: var(--surface-tint); box-shadow: 0 8px 18px oklch(24% 0.02 255 / .08); }
+    .danger { background: var(--danger); }
+    .danger:hover:not(:disabled) { background: var(--danger-hover); box-shadow: 0 8px 18px oklch(56% 0.18 24 / .15); }
     .sessions { padding: 0 28px 24px; overflow-x: auto; scrollbar-color: #c9cdd4 transparent; }
-    .empty { padding: 18px 28px 24px; color: #8f959e; font-size: 14px; }
+    .empty { padding: 18px 28px 24px; color: var(--text-muted); font-size: 14px; }
     table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
     .chat-table { min-width: 760px; }
     .session-table { min-width: 1180px; }
-    th, td { text-align: left; border-bottom: 1px solid #eff0f1; padding: 13px 10px; vertical-align: top; }
-    th { color: #646a73; font-weight: 700; background: #fff; position: sticky; top: 0; z-index: 1; }
-    tbody tr:hover td { background: #fbfcfe; }
-    code { background: #f2f3f5; border-radius: 6px; padding: 2px 5px; font-size: 12px; }
-    .muted { color: #8f959e; }
+    .feedback-table { min-width: 1040px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 13px 10px; vertical-align: top; }
+    th { color: var(--text-soft); font-weight: 800; background: var(--surface); position: sticky; top: 0; z-index: 1; }
+    tbody tr:hover td { background: var(--surface-soft); }
+    code { background: var(--surface-tint); border: 1px solid var(--border); border-radius: 6px; padding: 2px 5px; color: var(--text-soft); font-size: 12px; }
+    .muted { color: var(--text-muted); }
     .line { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.55; }
     .line strong { font-weight: 700; }
     .session-table th:last-child,
-    .session-table td:last-child { position: sticky; right: 0; background: inherit; box-shadow: -12px 0 18px rgba(255,255,255,.94); }
+    .session-table td:last-child { position: sticky; right: 0; background: inherit; box-shadow: -12px 0 18px oklch(100% 0 0 / .94); }
     .session-table th:last-child { z-index: 2; }
-    .status { display: inline-flex; align-items: center; min-width: 56px; justify-content: center; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; line-height: 1.4; }
-    .status.active { background: #e8f7ee; color: #178b3a; }
-    .status.closed { background: #eff0f1; color: #646a73; }
+    .status { display: inline-flex; align-items: center; min-width: 56px; justify-content: center; gap: 6px; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; line-height: 1.4; }
+    .status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+    .status.active, .status.positive, .status.resolved { background: var(--success-soft); color: var(--success); }
+    .status.closed, .status.ignored { background: var(--surface-tint); color: var(--text-soft); }
+    .status.negative, .status.open { background: var(--danger-soft); color: var(--danger); }
+    .status.reviewing { background: var(--warning-soft); color: var(--warning); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
-      .prompt-box { border: 1px solid #eff0f1; border-radius: 8px; padding: 16px; display: grid; gap: 14px; background: #fbfcfe; }
+      .actions select { height: 30px; max-width: 116px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+      .prompt-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: grid; gap: 14px; background: var(--surface-soft); }
       .prompt-title { display: flex; align-items: center; gap: 8px; }
-      .prompt-title .icon { color: #2b67e8; }
+      .prompt-title .icon { color: var(--primary); }
       .prompt-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+    .empty-state { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; color: var(--text-muted); }
+    .empty-state .icon { color: var(--text-muted); }
+    .source-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: var(--surface-tint); color: var(--text-soft); padding: 3px 9px; font-weight: 700; font-size: 12px; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    }
     @media (max-width: 720px) {
       main { margin: 18px auto; padding: 0 14px; gap: 14px; }
       header, .toolbar { padding: 18px; }
       form { padding: 18px; }
       .sessions { padding: 0 18px 18px; }
       .row, .prompt-head { grid-template-columns: 1fr; }
-      .toolbar { align-items: flex-start; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toolbar { align-items: flex-start; flex-direction: column; }
+      .toolbar button { width: 100%; }
+    }
+    @media (max-width: 480px) {
+      .summary-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -685,9 +789,15 @@ function renderConsoleHtml(): string {
     <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4"/><path d="M8 4h8"/><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M9 17h6"/></symbol>
     <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
     <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="m5.45 5.11-3.3 6.6A2 2 0 0 0 2 12.6V19a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6.4a2 2 0 0 0-.15-.89l-3.3-6.6A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></symbol>
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.08V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.08-.4H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.08V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.08.4H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-5"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8-6-16-3 8H2"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-thumbs" viewBox="0 0 24 24"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3l3.6-5.4A2 2 0 0 1 12.26 4H13a2 2 0 0 1 2 1.88Z"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></symbol>
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
@@ -701,6 +811,24 @@ function renderConsoleHtml(): string {
           <h1>larkbot 控制台</h1>
         </div>
         <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
+        <div class="summary-grid" aria-label="运行概览">
+          <div class="summary-item">
+            <span class="summary-label"><svg class="icon sm"><use href="#i-shield"></use></svg>Bot 状态</span>
+            <span id="summary-bot" class="summary-value">加载中</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label"><svg class="icon sm"><use href="#i-users"></use></svg>已启用群</span>
+            <span id="summary-chats" class="summary-value">-</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label"><svg class="icon sm"><use href="#i-activity"></use></svg>活跃会话</span>
+            <span id="summary-sessions" class="summary-value">-</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label"><svg class="icon sm"><use href="#i-cpu"></use></svg>当前模型</span>
+            <span id="summary-model" class="summary-value">默认</span>
+          </div>
+        </div>
       </header>
       <form id="bot-form">
         <div class="row">
@@ -764,7 +892,7 @@ function renderConsoleHtml(): string {
               <textarea id="prompt-content" placeholder="这里写入会注入到 traex 每轮 prompt 的系统提示词。留空表示不使用。"></textarea>
             </label>
           </section>
-        <div class="warn">当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</div>
+        <div class="warn"><svg class="icon sm"><use href="#i-clock"></use></svg><span>当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</span></div>
         <footer>
           <button id="save" type="submit"><svg class="icon sm"><use href="#i-save"></use></svg>保存设置</button>
           <span id="status"></span>
@@ -795,6 +923,45 @@ function renderConsoleHtml(): string {
           </thead>
           <tbody id="chats-body">
             <tr><td colspan="5" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-thumbs"></use></svg></span>
+            <h2>反馈中心</h2>
+          </div>
+          <div class="sub">查看群成员对分析质量的反馈，支持标记处理状态和删除。</div>
+        </div>
+        <button id="refresh-feedbacks" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+      </div>
+      <div class="sessions">
+        <table class="feedback-table">
+          <colgroup>
+            <col style="width: 120px">
+            <col style="width: 110px">
+            <col style="width: 230px">
+            <col style="width: 180px">
+            <col style="width: 150px">
+            <col style="width: 230px">
+            <col style="width: 190px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>评价</th>
+              <th>状态</th>
+              <th>问题</th>
+              <th>群聊 / 点击人</th>
+              <th>原因</th>
+              <th>补充说明</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="feedbacks-body">
+            <tr><td colspan="7" class="muted">加载中…</td></tr>
           </tbody>
         </table>
       </div>
@@ -849,17 +1016,37 @@ function renderConsoleHtml(): string {
     const refreshSessions = document.querySelector('#refresh-sessions');
     const chatsBody = document.querySelector('#chats-body');
     const refreshChats = document.querySelector('#refresh-chats');
+    const feedbacksBody = document.querySelector('#feedbacks-body');
+    const refreshFeedbacks = document.querySelector('#refresh-feedbacks');
+      const summaryBot = document.querySelector('#summary-bot');
+      const summaryChats = document.querySelector('#summary-chats');
+      const summarySessions = document.querySelector('#summary-sessions');
+      const summaryModel = document.querySelector('#summary-model');
       const promptSelect = document.querySelector('#prompt-select');
       const promptName = document.querySelector('#prompt-name');
       const promptContent = document.querySelector('#prompt-content');
       const newPrompt = document.querySelector('#new-prompt');
       const deletePrompt = document.querySelector('#delete-prompt');
+      let latestBot = null;
+      let latestChats = [];
+      let latestSessions = [];
+      let latestFeedbacks = [];
       let promptProfiles = [];
       let activePromptId = '';
 
     function setStatus(text, failed = false) {
       status.textContent = text;
-      status.style.color = failed ? '#d93026' : '#646a73';
+      status.style.color = failed ? 'var(--danger)' : 'var(--text-soft)';
+    }
+
+    function updateSummary() {
+      if (latestBot) {
+        summaryBot.textContent = latestBot.enabled ? '已启用' : '已停用';
+        summaryModel.textContent = latestBot.model || '默认模型';
+      }
+      const enabledChats = latestChats.filter((chat) => chat.enabled).length;
+      summaryChats.textContent = latestChats.length ? enabledChats + ' / ' + latestChats.length : '0';
+      summarySessions.textContent = String(latestSessions.filter((session) => session.status === 'active').length);
     }
 
     async function loadModels() {
@@ -879,6 +1066,7 @@ function renderConsoleHtml(): string {
       const res = await fetch('/api/bot');
       if (!res.ok) throw new Error(await res.text());
       const { bot } = await res.json();
+      latestBot = bot;
       form.name.value = bot.name || '';
       form.cwd.value = bot.cwd || '';
       form.appId.value = bot.appId || '';
@@ -894,6 +1082,7 @@ function renderConsoleHtml(): string {
         promptProfiles = Array.isArray(bot.systemPromptProfiles) ? bot.systemPromptProfiles.map((p) => ({ ...p })) : [];
         activePromptId = bot.activeSystemPromptProfileId || '';
         renderPromptProfiles();
+      updateSummary();
       setStatus('已加载');
     }
 
@@ -982,19 +1171,41 @@ function renderConsoleHtml(): string {
       return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
     }
 
+    function statusText(value) {
+      return value === 'active' ? '运行中' : value === 'closed' ? '已关闭' : value;
+    }
+
+    function sourceText(value) {
+      return value === 'bot_added' ? '入群事件' : '群消息';
+    }
+
+    function feedbackStatusText(value) {
+      return value === 'open' ? '未处理'
+        : value === 'reviewing' ? '处理中'
+        : value === 'resolved' ? '已处理'
+        : value === 'ignored' ? '已忽略'
+        : value;
+    }
+
+    function ratingText(value) {
+      return value === 'positive' ? '👍 有帮助' : '👎 拉完了';
+    }
+
     async function loadSessions() {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(await res.text());
       const { sessions } = await res.json();
+      latestSessions = Array.isArray(sessions) ? sessions : [];
+      updateSummary();
       if (!sessions.length) {
-        sessionsBody.innerHTML = '<tr><td colspan="8" class="muted">暂无会话</td></tr>';
+        sessionsBody.innerHTML = '<tr><td colspan="8"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无会话</span></td></tr>';
         return;
       }
       sessionsBody.innerHTML = sessions.map((s) => {
         const closed = s.status === 'closed';
         return '<tr>' +
           '<td><span class="line"><strong>' + esc(s.title || s.sessionId) + '</strong></span><span class="line muted"><code>' + esc(s.sessionId) + '</code></span></td>' +
-          '<td><span class="status ' + esc(s.status) + '">' + esc(s.status) + '</span></td>' +
+          '<td><span class="status ' + esc(s.status) + '">' + esc(statusText(s.status)) + '</span></td>' +
           '<td><span class="line">' + esc(s.createdByDisplayName || s.createdByName || s.createdByOpenId || '-') + '</span><span class="line muted">' + esc(s.lastCallerDisplayName || s.lastCallerOpenId || '-') + '</span></td>' +
           '<td><span class="line">' + esc(s.chatName || s.chatId || '-') + '</span><span class="line muted">' + esc(s.chatId || '-') + '</span></td>' +
           '<td><span class="line">' + esc(s.cliId || '-') + '</span><span class="line muted">' + esc(s.cliSessionId || 'no cli session') + '</span></td>' +
@@ -1012,17 +1223,50 @@ function renderConsoleHtml(): string {
       const res = await fetch('/api/chats');
       if (!res.ok) throw new Error(await res.text());
       const { chats } = await res.json();
+      latestChats = Array.isArray(chats) ? chats : [];
+      updateSummary();
       if (!chats.length) {
-        chatsBody.innerHTML = '<tr><td colspan="5" class="muted">暂无群聊。把 bot 拉进群，或在群里 @ bot 一次后会出现在这里。</td></tr>';
+        chatsBody.innerHTML = '<tr><td colspan="5"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无群聊。把 bot 拉进群，或在群里 @ bot 一次后会出现在这里。</span></td></tr>';
         return;
       }
       chatsBody.innerHTML = chats.map((chat) => (
         '<tr>' +
           '<td><strong>' + esc(chat.name || '未命名群聊') + '</strong><br><span class="muted"><code>' + esc(compact(chat.chatId, 32)) + '</code></span></td>' +
           '<td><span class="status ' + (chat.enabled ? 'active' : 'closed') + '">' + (chat.enabled ? '已启用' : '未启用') + '</span></td>' +
-          '<td><span class="muted">' + esc(chat.source === 'bot_added' ? '入群事件' : '群消息') + '</span></td>' +
+          '<td><span class="source-pill">' + esc(sourceText(chat.source)) + '</span></td>' +
           '<td><span class="muted">' + esc(formatTime(chat.lastSeenAt)) + '</span></td>' +
           '<td><div class="actions"><button type="button" class="' + (chat.enabled ? 'danger' : 'ghost') + '" data-chat="' + esc(chat.chatId) + '" data-enabled="' + (chat.enabled ? 'false' : 'true') + '"><svg class="icon sm"><use href="' + (chat.enabled ? '#i-x' : '#i-power') + '"></use></svg>' + (chat.enabled ? '停用' : '启用') + '</button></div></td>' +
+        '</tr>'
+      )).join('');
+    }
+
+    async function loadFeedbacks() {
+      const res = await fetch('/api/feedbacks');
+      if (!res.ok) throw new Error(await res.text());
+      const { feedbacks } = await res.json();
+      latestFeedbacks = Array.isArray(feedbacks) ? feedbacks : [];
+      if (!latestFeedbacks.length) {
+        feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无反馈</span></td></tr>';
+        return;
+      }
+      feedbacksBody.innerHTML = latestFeedbacks.map((item) => (
+        '<tr>' +
+          '<td><span class="status ' + esc(item.rating) + '">' + esc(ratingText(item.rating)) + '</span><span class="line muted">' + esc(formatTime(item.createdAt)) + '</span></td>' +
+          '<td><span class="status ' + esc(item.status) + '">' + esc(feedbackStatusText(item.status)) + '</span></td>' +
+          '<td><span class="line"><strong>' + esc(item.sessionTitle || item.sessionId) + '</strong></span><span class="line muted"><code>' + esc(item.sessionId) + '</code></span></td>' +
+          '<td><span class="line">' + esc(item.chatName || item.chatId || '未知群聊') + '</span><span class="line muted">' + esc(item.operatorName || item.operatorId || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(item.reason || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(item.note || '-') + '</span></td>' +
+          '<td><div class="actions">' +
+            '<select data-feedback-status="' + esc(item.id) + '" aria-label="反馈状态">' +
+              '<option value="open"' + (item.status === 'open' ? ' selected' : '') + '>未处理</option>' +
+              '<option value="reviewing"' + (item.status === 'reviewing' ? ' selected' : '') + '>处理中</option>' +
+              '<option value="resolved"' + (item.status === 'resolved' ? ' selected' : '') + '>已处理</option>' +
+              '<option value="ignored"' + (item.status === 'ignored' ? ' selected' : '') + '>忽略</option>' +
+            '</select>' +
+            '<a href="' + esc(item.terminalUrl || ('/terminal/' + encodeURIComponent(item.sessionId))) + '" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-message"></use></svg>过程</button></a>' +
+            '<button class="danger" type="button" data-feedback-delete="' + esc(item.id) + '"><svg class="icon sm"><use href="#i-trash"></use></svg>删除</button>' +
+          '</div></td>' +
         '</tr>'
       )).join('');
     }
@@ -1077,6 +1321,43 @@ function renderConsoleHtml(): string {
       loadChats().catch((error) => alert('刷新失败：' + error.message));
     });
 
+    feedbacksBody.addEventListener('change', async (event) => {
+      const select = event.target.closest('select[data-feedback-status]');
+      if (!select) return;
+      select.disabled = true;
+      try {
+        const res = await fetch('/api/feedbacks/' + encodeURIComponent(select.dataset.feedbackStatus), {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status: select.value }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await loadFeedbacks();
+      } catch (error) {
+        alert('更新反馈状态失败：' + error.message);
+        await loadFeedbacks().catch(() => undefined);
+      }
+    });
+
+    feedbacksBody.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-feedback-delete]');
+      if (!button) return;
+      if (!confirm('删除这条反馈记录？')) return;
+      button.disabled = true;
+      try {
+        const res = await fetch('/api/feedbacks/' + encodeURIComponent(button.dataset.feedbackDelete), { method: 'DELETE' });
+        if (!res.ok) throw new Error(await res.text());
+        await loadFeedbacks();
+      } catch (error) {
+        alert('删除反馈失败：' + error.message);
+        button.disabled = false;
+      }
+    });
+
+    refreshFeedbacks.addEventListener('click', () => {
+      loadFeedbacks().catch((error) => alert('刷新反馈失败：' + error.message));
+    });
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       save.disabled = true;
@@ -1117,10 +1398,13 @@ function renderConsoleHtml(): string {
       .catch((error) => setStatus('模型列表加载失败：' + error.message, true))
       .finally(() => loadBot().catch((error) => setStatus('加载失败：' + error.message, true)));
     loadSessions().catch((error) => {
-      sessionsBody.innerHTML = '<tr><td colspan="8" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
+      sessionsBody.innerHTML = '<tr><td colspan="8"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     loadChats().catch((error) => {
-      chatsBody.innerHTML = '<tr><td colspan="5" class="muted">加载失败：' + esc(error.message) + '</td></tr>';
+      chatsBody.innerHTML = '<tr><td colspan="5"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
+    });
+    loadFeedbacks().catch((error) => {
+      feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
   </script>
 </body>

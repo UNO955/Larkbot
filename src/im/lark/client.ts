@@ -470,6 +470,11 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       ?? '';
     const value = event?.action?.value ?? event?.action?.option ?? event?.action;
     if (!operatorId || value === undefined) return undefined;
+    const formValue = event?.action?.form_value
+      ?? event?.action?.formValue
+      ?? event?.form_value
+      ?? event?.formValue
+      ?? undefined;
     return {
       messageId: event?.context?.open_message_id
         ?? event?.context?.openMessageId
@@ -483,6 +488,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         ?? event?.chat_id
         ?? undefined,
       value,
+      formValue,
     };
   }
 

@@ -52,6 +52,7 @@ export interface ImCardAction {
   operatorId: string;
   chatId?: string;
   value: unknown;
+  formValue?: Record<string, unknown>;
 }
 
 export interface ImCard {

@@ -145,6 +145,10 @@ export class ConversationManager {
     return [...this.sessions.values()].sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
   }
 
+  getSession(sessionId: string): Session | undefined {
+    return this.sessions.get(sessionId);
+  }
+
   async closeSession(sessionId: string): Promise<Session | undefined> {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;

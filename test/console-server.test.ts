@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { startConsoleServer, TerminalStreamStore } from '../src/console/server.js';
 import type { SessionStore } from '../src/core/store.js';
-import type { Bot, Session } from '../src/core/types.js';
+import type { Bot, FeedbackRecord, Session } from '../src/core/types.js';
 
 const bot: Bot = {
   id: 'bot-1',
@@ -196,6 +196,57 @@ describe('console terminal page', () => {
 
     const after = await fetch(`${base}/api/chats`);
     expect((await after.json()).chats[0].enabled).toBe(true);
+  });
+
+  it('管理反馈记录状态并支持删除', async () => {
+    let feedbacks: FeedbackRecord[] = [{
+      id: 'fb-1',
+      rating: 'negative',
+      status: 'open',
+      sessionId: 'lm-1',
+      sessionTitle: '猜答手机号按钮排查',
+      chatId: 'oc-1',
+      chatName: '项目群',
+      operatorId: 'ou_qa',
+      operatorName: 'QA',
+      terminalUrl: 'http://console/terminal/lm-1',
+      reason: '证据不足',
+      note: '没说为什么',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }];
+    const store: SessionStore = {
+      loadBots: async () => [bot],
+      saveBots: async () => undefined,
+      loadSessions: async () => [session],
+      saveSessions: async () => undefined,
+      loadFeedbacks: async () => feedbacks,
+      saveFeedbacks: async (next) => { feedbacks = structuredClone(next); },
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const list = await fetch(`${base}/api/feedbacks`);
+    expect(list.status).toBe(200);
+    expect((await list.json()).feedbacks[0]).toMatchObject({ id: 'fb-1', rating: 'negative', status: 'open' });
+
+    const patch = await fetch(`${base}/api/feedbacks/fb-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'reviewing' }),
+    });
+    expect(patch.status).toBe(200);
+    expect(feedbacks[0].status).toBe('reviewing');
+
+    const del = await fetch(`${base}/api/feedbacks/fb-1`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    expect(feedbacks).toEqual([]);
   });
 
   it('卡片停止入口只中断本轮分析，不关闭会话', async () => {

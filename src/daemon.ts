@@ -20,10 +20,11 @@ import { ConversationManager } from './core/conversation-manager.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
-import { buildMaintenanceCard, buildTerminalCard, buildThinkingCard } from './im/lark/card-builder.js';
+import { buildFeedbackOwnerCard, buildMaintenanceCard, buildTerminalCard, buildThinkingCard, type FeedbackRating } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
 import type { ImAdapter, ImChat, ImMessage, ImReaction } from './im/types.js';
-import type { Bot, ExpiredSession, KnownChat, Session } from './core/types.js';
+import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session } from './core/types.js';
+import type { SessionStore } from './core/store.js';
 
 const DAILY_CLEANUP_HOUR = 3;
 
@@ -216,6 +217,34 @@ async function main(): Promise<void> {
 
     async onCardAction(action): Promise<unknown> {
       const payload = parseCardActionValue(action.value);
+      if (payload.action === 'rate_thinking' && typeof payload.sessionId === 'string' && isFeedbackRating(payload.rating)) {
+        return await handleThinkingFeedback({
+          im,
+          bot: activeBot,
+          store,
+          sessions,
+          terminalStore,
+          consolePublicUrl: cfg.consolePublicUrl,
+          action,
+          sessionId: payload.sessionId,
+          rating: payload.rating,
+          footer: typeof payload.footer === 'string' ? payload.footer : undefined,
+        });
+      }
+      if (payload.action === 'submit_negative_feedback' && typeof payload.sessionId === 'string') {
+        return await handleNegativeFeedbackSupplement({
+          im,
+          bot: activeBot,
+          store,
+          sessions,
+          terminalStore,
+          consolePublicUrl: cfg.consolePublicUrl,
+          action,
+          sessionId: payload.sessionId,
+          feedbackId: typeof payload.feedbackId === 'string' ? payload.feedbackId : undefined,
+          footer: typeof payload.footer === 'string' ? payload.footer : undefined,
+        });
+      }
       if (payload.action !== 'interrupt_thinking' || typeof payload.sessionId !== 'string') return;
       const sessionId = payload.sessionId;
       void sessions.interruptSession(sessionId).then((session) => {
@@ -489,9 +518,152 @@ async function addReceivedReactionBeforeThread(im: ImAdapter, messageId: string)
     return undefined;
   }
 }
+async function handleThinkingFeedback(opts: {
+  im: ImAdapter;
+  bot: Bot;
+  store: SessionStore;
+  sessions: ConversationManager;
+  terminalStore: TerminalStreamStore;
+  consolePublicUrl: string;
+  action: { operatorId: string; chatId?: string };
+  sessionId: string;
+  rating: FeedbackRating;
+  footer?: string;
+}): Promise<unknown> {
+  const session = opts.sessions.getSession(opts.sessionId);
+  const terminalUrl = `${opts.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(opts.sessionId)}`;
+  const operatorName = await opts.im.getUserName(opts.action.operatorId, opts.action.chatId).catch(() => undefined);
+  const traceExcerpt = opts.terminalStore.snapshot(opts.sessionId, 2600);
+  const record: FeedbackRecord = {
+    id: randomUUID(),
+    rating: opts.rating,
+    status: 'open',
+    sessionId: opts.sessionId,
+    sessionTitle: session?.title || opts.sessionId,
+    chatName: session?.chatName || (session ? chatName(opts.bot, session.chatId) : undefined),
+    chatId: session?.chatId || opts.action.chatId,
+    operatorName,
+    operatorId: opts.action.operatorId,
+    terminalUrl,
+    traceExcerpt,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await appendFeedback(opts.store, record).catch((error: any) => {
+    logger.warn(`写入反馈记录失败 session=${opts.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+  });
+  if (session) {
+    const card = buildFeedbackOwnerCard({
+      rating: opts.rating,
+      sessionTitle: record.sessionTitle,
+      sessionId: record.sessionId,
+      chatName: record.chatName,
+      chatId: record.chatId,
+      operatorName: record.operatorName,
+      operatorId: record.operatorId,
+      terminalUrl,
+      traceExcerpt,
+    });
+    void opts.im.sendDirectCard(opts.bot.ownerOpenId, card).catch((error: any) => {
+      logger.warn(`发送反馈私聊失败 owner=${opts.bot.ownerOpenId.slice(0, 10)} session=${opts.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+    });
+  } else {
+    logger.warn(`收到反馈但未找到 session=${opts.sessionId}`);
+  }
+  return {
+    toast: {
+      type: opts.rating === 'positive' ? 'success' : 'info',
+      content: opts.rating === 'positive' ? '感谢反馈' : '已收到反馈',
+    },
+    card: {
+      type: 'raw',
+      data: buildThinkingCard({
+        url: terminalUrl,
+        interruptSessionId: opts.sessionId,
+        status: 'completed',
+        feedback: opts.rating === 'negative' ? 'negative_pending' : opts.rating,
+        feedbackId: record.id,
+        footer: opts.footer,
+      }).payload,
+    },
+  };
+}
 
-function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown } {
-  if (value && typeof value === 'object') return value as { action?: unknown; sessionId?: unknown };
+async function handleNegativeFeedbackSupplement(opts: {
+  im: ImAdapter;
+  bot: Bot;
+  store: SessionStore;
+  sessions: ConversationManager;
+  terminalStore: TerminalStreamStore;
+  consolePublicUrl: string;
+  action: { operatorId: string; chatId?: string; formValue?: Record<string, unknown> };
+  sessionId: string;
+  feedbackId?: string;
+  footer?: string;
+}): Promise<unknown> {
+  const session = opts.sessions.getSession(opts.sessionId);
+  const terminalUrl = `${opts.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(opts.sessionId)}`;
+  const operatorName = await opts.im.getUserName(opts.action.operatorId, opts.action.chatId).catch(() => undefined);
+  const reason = stringFormValue(opts.action.formValue, 'feedback_reason');
+  const note = stringFormValue(opts.action.formValue, 'feedback_note');
+  const traceExcerpt = opts.terminalStore.snapshot(opts.sessionId, 2600);
+  const record = await updateNegativeFeedbackSupplement(opts.store, {
+    feedbackId: opts.feedbackId,
+    sessionId: opts.sessionId,
+    sessionTitle: session?.title || opts.sessionId,
+    chatName: session?.chatName || (session ? chatName(opts.bot, session.chatId) : undefined),
+    chatId: session?.chatId || opts.action.chatId,
+    operatorName,
+    operatorId: opts.action.operatorId,
+    terminalUrl,
+    traceExcerpt,
+    reason,
+    note,
+  }).catch((error: any) => {
+    logger.warn(`写入差评原因失败 session=${opts.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+    return undefined;
+  });
+  if (session) {
+    const card = buildFeedbackOwnerCard({
+      rating: 'negative',
+      sessionTitle: record?.sessionTitle || session.title,
+      sessionId: record?.sessionId || session.sessionId,
+      chatName: record?.chatName || session.chatName || chatName(opts.bot, session.chatId),
+      chatId: record?.chatId || session.chatId,
+      operatorName: record?.operatorName || operatorName,
+      operatorId: record?.operatorId || opts.action.operatorId,
+      terminalUrl,
+      traceExcerpt,
+      reason,
+      note,
+      supplemental: true,
+    });
+    void opts.im.sendDirectCard(opts.bot.ownerOpenId, card).catch((error: any) => {
+      logger.warn(`发送差评原因私聊失败 owner=${opts.bot.ownerOpenId.slice(0, 10)} session=${opts.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
+    });
+  } else {
+    logger.warn(`收到差评原因但未找到 session=${opts.sessionId}`);
+  }
+  return {
+    toast: { type: 'success', content: '已提交原因' },
+    card: {
+      type: 'raw',
+      data: buildThinkingCard({
+        url: terminalUrl,
+        interruptSessionId: opts.sessionId,
+        status: 'completed',
+        feedback: 'negative',
+        feedbackReason: reason,
+        feedbackNote: note,
+        feedbackId: record?.id || opts.feedbackId,
+        footer: opts.footer,
+      }).payload,
+    },
+  };
+}
+
+function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; footer?: unknown } {
+  if (value && typeof value === 'object') return value as { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; footer?: unknown };
   if (typeof value !== 'string' || !value.trim()) return {};
   try {
     const parsed = JSON.parse(value);
@@ -499,4 +671,88 @@ function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: u
   } catch {
     return {};
   }
+}
+
+function isFeedbackRating(value: unknown): value is FeedbackRating {
+  return value === 'positive' || value === 'negative';
+}
+
+function stringFormValue(formValue: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = formValue?.[key];
+  if (typeof value === 'string') return cleanFeedbackText(value);
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => typeof item === 'string' ? item : undefined)
+      .filter((item): item is string => !!item)
+      .join('、');
+    return cleanFeedbackText(joined);
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const candidate of [record.value, record.text, record.content]) {
+      if (typeof candidate === 'string') return cleanFeedbackText(candidate);
+    }
+  }
+  return undefined;
+}
+
+function cleanFeedbackText(value: string): string | undefined {
+  const text = value.trim().slice(0, 500);
+  return text || undefined;
+}
+
+async function appendFeedback(store: SessionStore, record: FeedbackRecord): Promise<void> {
+  if (!store.loadFeedbacks || !store.saveFeedbacks) return;
+  const feedbacks = await store.loadFeedbacks();
+  feedbacks.unshift(record);
+  await store.saveFeedbacks(feedbacks.slice(0, 500));
+}
+
+async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
+  feedbackId?: string;
+  sessionId: string;
+  sessionTitle: string;
+  chatName?: string;
+  chatId?: string;
+  operatorName?: string;
+  operatorId: string;
+  terminalUrl: string;
+  traceExcerpt: string;
+  reason?: string;
+  note?: string;
+}): Promise<FeedbackRecord | undefined> {
+  if (!store.loadFeedbacks || !store.saveFeedbacks) return undefined;
+  const feedbacks = await store.loadFeedbacks();
+  let record = feedbacks.find((item) => item.id === input.feedbackId);
+  if (!record) {
+    record = feedbacks.find((item) =>
+      item.rating === 'negative'
+      && item.sessionId === input.sessionId
+      && item.operatorId === input.operatorId
+    );
+  }
+  if (!record) {
+    record = {
+      id: randomUUID(),
+      rating: 'negative',
+      status: 'open',
+      sessionId: input.sessionId,
+      sessionTitle: input.sessionTitle,
+      chatId: input.chatId,
+      chatName: input.chatName,
+      operatorId: input.operatorId,
+      operatorName: input.operatorName,
+      terminalUrl: input.terminalUrl,
+      traceExcerpt: input.traceExcerpt,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    feedbacks.unshift(record);
+  }
+  record.reason = input.reason || record.reason;
+  record.note = input.note || record.note;
+  record.traceExcerpt = input.traceExcerpt || record.traceExcerpt;
+  record.updatedAt = new Date().toISOString();
+  await store.saveFeedbacks(feedbacks.slice(0, 500));
+  return record;
 }

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, ExpiredSession, KnownChat, Session, SystemPromptProfile } from './types.js';
+import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
@@ -11,20 +11,30 @@ export interface SessionStore {
   saveSessions(sessions: Session[]): Promise<void>;
   loadExpiredSessions?(): Promise<ExpiredSession[]>;
   saveExpiredSessions?(sessions: ExpiredSession[]): Promise<void>;
+  loadFeedbacks?(): Promise<FeedbackRecord[]>;
+  saveFeedbacks?(feedbacks: FeedbackRecord[]): Promise<void>;
 }
 
 export class JsonSessionStore implements SessionStore {
   readonly sessionsPath: string;
   readonly botsPath: string;
   readonly expiredSessionsPath: string;
+  readonly feedbackPath: string;
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
   private pendingExpiredSessionWrite: Promise<void> = Promise.resolve();
+  private pendingFeedbackWrite: Promise<void> = Promise.resolve();
 
-  constructor(sessionsPath = defaultSessionsPath(), botsPath = defaultBotsPath(), expiredSessionsPath = defaultExpiredSessionsPath()) {
+  constructor(
+    sessionsPath = defaultSessionsPath(),
+    botsPath = defaultBotsPath(),
+    expiredSessionsPath = defaultExpiredSessionsPath(),
+    feedbackPath = defaultFeedbackPath(),
+  ) {
     this.sessionsPath = sessionsPath;
     this.botsPath = botsPath;
     this.expiredSessionsPath = expiredSessionsPath;
+    this.feedbackPath = feedbackPath;
   }
 
   async loadBots(): Promise<Bot[]> {
@@ -76,6 +86,24 @@ export class JsonSessionStore implements SessionStore {
       .then(() => writeJsonAtomic(this.expiredSessionsPath, sessions));
     await this.pendingExpiredSessionWrite;
   }
+
+  async loadFeedbacks(): Promise<FeedbackRecord[]> {
+    try {
+      const parsed = JSON.parse(await readFile(this.feedbackPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isFeedbackRecord);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  async saveFeedbacks(feedbacks: FeedbackRecord[]): Promise<void> {
+    this.pendingFeedbackWrite = this.pendingFeedbackWrite
+      .catch(() => undefined)
+      .then(() => writeJsonAtomic(this.feedbackPath, feedbacks));
+    await this.pendingFeedbackWrite;
+  }
 }
 
 function defaultSessionsPath(): string {
@@ -91,6 +119,11 @@ function defaultBotsPath(): string {
 function defaultExpiredSessionsPath(): string {
   const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'expired-sessions.json');
+}
+
+function defaultFeedbackPath(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'feedback.json');
 }
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
@@ -161,4 +194,24 @@ function isExpiredSession(value: unknown): value is ExpiredSession {
     && typeof session.createdAt === 'string'
     && typeof session.deletedAt === 'string'
     && session.reason === 'retention_expired';
+}
+
+function isFeedbackRecord(value: unknown): value is FeedbackRecord {
+  if (!value || typeof value !== 'object') return false;
+  const feedback = value as Partial<FeedbackRecord>;
+  return typeof feedback.id === 'string'
+    && (feedback.rating === 'positive' || feedback.rating === 'negative')
+    && (feedback.status === 'open' || feedback.status === 'reviewing' || feedback.status === 'resolved' || feedback.status === 'ignored')
+    && typeof feedback.sessionId === 'string'
+    && typeof feedback.sessionTitle === 'string'
+    && (feedback.chatId === undefined || typeof feedback.chatId === 'string')
+    && (feedback.chatName === undefined || typeof feedback.chatName === 'string')
+    && typeof feedback.operatorId === 'string'
+    && (feedback.operatorName === undefined || typeof feedback.operatorName === 'string')
+    && typeof feedback.terminalUrl === 'string'
+    && (feedback.traceExcerpt === undefined || typeof feedback.traceExcerpt === 'string')
+    && (feedback.reason === undefined || typeof feedback.reason === 'string')
+    && (feedback.note === undefined || typeof feedback.note === 'string')
+    && typeof feedback.createdAt === 'string'
+    && typeof feedback.updatedAt === 'string';
 }
