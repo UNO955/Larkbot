@@ -663,6 +663,60 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('能识别最终回答里的项目页知识库标题引用', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionFinal: vi.fn(() => ({
+        key: 'turn-knowledge:done',
+        text: '项目页记录：public 知识库《进私视频带入私信会话》记录当前线上形态是进私吸底视频卡。',
+      })),
+      readyPattern: /❯/,
+      completionPattern: /❯/,
+    };
+    const child = fakePty();
+    const postTrace = vi.fn(async () => 'trace-card-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace,
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+    child.emitData('\r\n❯ ');
+    await vi.waitFor(() => expect(postTrace).toHaveBeenCalled(), { timeout: 1500 });
+    expect(postTrace.mock.calls[0]?.[6]).toMatchObject({
+      references: [expect.objectContaining({
+        path: '知识库《进私视频带入私信会话》',
+        source: 'answer',
+      })],
+    });
+    manager.shutdownAll();
+  });
+
   it('完成回复优先使用 traex rollout 的 task_complete final', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {

@@ -820,12 +820,18 @@ function extractKnowledgeReferences(text: string, source: KnowledgeReference['so
   const refs: KnowledgeReference[] = [];
   const lines = text.split(/\r?\n/);
   const pathRe = /(?:\/data00\/home\/[^\s`'"]+|\/Users\/[^\s`'"]+|(?:docs|public|knowledge|kb|41-WORK-PROJECT-PUBLIC)\/[^\s`'"]+|[A-Za-z0-9_.-]*知识库[A-Za-z0-9_./-]*|[A-Za-z0-9_./-]+\.md)/g;
+  const titleRe = /(?:项目页记录|public\s*(?:知识库|页)?|知识库|Playbook|playbook)[：:，,\s]*(?:《([^》]{2,80})》|“([^”]{2,80})”|"([^"]{2,80})")/gi;
   for (const line of lines) {
-    if (!/(知识库|knowledge|kb|41-WORK-PROJECT-PUBLIC|one-page|playbook|\.md|docs\/)/i.test(line)) continue;
+    if (!/(知识库|knowledge|kb|41-WORK-PROJECT-PUBLIC|one-page|playbook|项目页记录|public\s*页|\.md|docs\/)/i.test(line)) continue;
     for (const match of line.matchAll(pathRe)) {
       const path = cleanKnowledgePath(match[0]);
       if (!path) continue;
       refs.push({ path, source, evidence: line.trim().slice(0, 240) });
+    }
+    for (const match of line.matchAll(titleRe)) {
+      const title = (match[1] || match[2] || match[3] || '').trim();
+      if (!title) continue;
+      refs.push({ path: `知识库《${title}》`, source, evidence: line.trim().slice(0, 240) });
     }
   }
   return refs.slice(0, 20);
