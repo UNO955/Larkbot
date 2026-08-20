@@ -758,7 +758,11 @@ function renderConsoleHtml(): string {
     .status.reviewing { background: var(--warning-soft); color: var(--warning); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
-      .actions select { height: 30px; max-width: 116px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+      .actions select { height: 30px; max-width: 116px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 800; }
+      .feedback-status-select.open { color: var(--danger); border-color: oklch(62% 0.19 24 / .35); background: var(--danger-soft); }
+      .feedback-status-select.reviewing { color: var(--warning); border-color: oklch(65% 0.16 74 / .38); background: var(--warning-soft); }
+      .feedback-status-select.resolved { color: var(--success); border-color: oklch(55% 0.15 150 / .35); background: var(--success-soft); }
+      .feedback-status-select.ignored { color: var(--text-soft); border-color: var(--border-strong); background: var(--surface-tint); }
       .prompt-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: grid; gap: 14px; background: var(--surface-soft); }
       .prompt-title { display: flex; align-items: center; gap: 8px; }
       .prompt-title .icon { color: var(--primary); }
@@ -1258,7 +1262,7 @@ function renderConsoleHtml(): string {
           '<td><span class="line">' + esc(item.reason || '-') + '</span></td>' +
           '<td><span class="line">' + esc(item.note || '-') + '</span></td>' +
           '<td><div class="actions">' +
-            '<select data-feedback-status="' + esc(item.id) + '" aria-label="反馈状态">' +
+            '<select class="feedback-status-select ' + esc(item.status) + '" data-feedback-status="' + esc(item.id) + '" aria-label="反馈状态">' +
               '<option value="open"' + (item.status === 'open' ? ' selected' : '') + '>未处理</option>' +
               '<option value="reviewing"' + (item.status === 'reviewing' ? ' selected' : '') + '>处理中</option>' +
               '<option value="resolved"' + (item.status === 'resolved' ? ' selected' : '') + '>已处理</option>' +
