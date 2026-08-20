@@ -611,52 +611,95 @@ function renderConsoleHtml(): string {
   <title>larkbot 控制台</title>
   <style>
     :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; background: #f6f7fb; color: #1f2329; }
-    main { max-width: 1100px; margin: 40px auto; padding: 0 20px; display: grid; gap: 20px; }
-    .card { background: #fff; border: 1px solid #dee0e3; border-radius: 16px; box-shadow: 0 10px 30px rgba(31,35,41,.06); overflow: hidden; }
-    header { padding: 24px 28px; border-bottom: 1px solid #eff0f1; }
-    h1 { margin: 0; font-size: 24px; }
-    .sub { margin-top: 8px; color: #646a73; font-size: 14px; }
-    form { padding: 24px 28px 28px; display: grid; gap: 18px; }
-    label { display: grid; gap: 8px; font-weight: 600; font-size: 14px; }
-      input[type="text"], input[type="password"], select, textarea { border: 1px solid #bbbfc4; border-radius: 10px; padding: 0 12px; font: inherit; }
-      input[type="text"], input[type="password"], select { height: 42px; }
-      textarea { min-height: 160px; padding: 12px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      input:focus, select:focus, textarea:focus { outline: 2px solid #3370ff33; border-color: #3370ff; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f7f8fa; color: #1f2329; }
+    main { max-width: 1280px; margin: 28px auto; padding: 0 24px; display: grid; gap: 18px; }
+    .card { background: #fff; border: 1px solid #dee0e3; border-radius: 8px; box-shadow: 0 8px 24px rgba(31,35,41,.05); overflow: hidden; }
+    header { padding: 22px 28px; border-bottom: 1px solid #eff0f1; background: #fbfcfe; }
+    h1 { margin: 0; font-size: 22px; line-height: 1.25; letter-spacing: 0; }
+    .app-title, .section-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .title-icon { width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: #eaf0ff; color: #2b67e8; flex: 0 0 auto; }
+    .section-title .title-icon { width: 28px; height: 28px; }
+    .icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; flex: 0 0 auto; }
+    .icon.sm { width: 14px; height: 14px; }
+    .sub { margin-top: 6px; color: #646a73; font-size: 13px; line-height: 1.6; }
+    form { padding: 24px 28px 28px; display: grid; gap: 16px; }
+    label { display: grid; gap: 7px; font-weight: 600; font-size: 13px; color: #343840; }
+      input[type="text"], input[type="password"], select, textarea { width: 100%; border: 1px solid #d0d3d6; border-radius: 8px; padding: 0 12px; font: inherit; background: #fff; color: #1f2329; transition: border-color .15s, box-shadow .15s; }
+      input[type="text"], input[type="password"], select { height: 38px; }
+      textarea { min-height: 144px; padding: 10px 12px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      input:focus, select:focus, textarea:focus { outline: 0; border-color: #2b67e8; box-shadow: 0 0 0 3px rgba(43,103,232,.12); }
+    .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
     .check { display: flex; align-items: center; gap: 10px; font-weight: 500; color: #343840; }
-    .hint { color: #8f959e; font-size: 12px; font-weight: 400; }
-    footer { display: flex; align-items: center; gap: 12px; padding-top: 6px; }
-    button { height: 40px; border: 0; border-radius: 10px; background: #3370ff; color: white; padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    #status { color: #646a73; font-size: 14px; }
-    .warn { background: #fff7e6; color: #8f5a00; border: 1px solid #ffd591; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 28px; border-bottom: 1px solid #eff0f1; }
-    .toolbar h2 { margin: 0; font-size: 18px; }
-    .ghost { background: #f2f3f5; color: #1f2329; }
-    .danger { background: #f54a45; }
-    .sessions { padding: 0 28px 24px; }
+    .check input { width: 16px; height: 16px; }
+    .hint { color: #8f959e; font-size: 12px; font-weight: 400; line-height: 1.5; }
+    footer { display: flex; align-items: center; gap: 12px; padding-top: 4px; }
+    button { height: 36px; border: 1px solid transparent; border-radius: 8px; background: #2b67e8; color: white; padding: 0 16px; font: inherit; font-weight: 700; cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; }
+    button:hover:not(:disabled) { background: #1f56cf; }
+    button:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(43,103,232,.16); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    #status { color: #646a73; font-size: 13px; }
+    .warn { background: #fff9ed; color: #8f5a00; border: 1px solid #f7d99c; border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid #eff0f1; background: #fbfcfe; }
+    .toolbar h2 { margin: 0; font-size: 18px; line-height: 1.3; letter-spacing: 0; }
+    .ghost { background: #f4f5f7; color: #1f2329; border-color: #e4e6eb; }
+    .ghost:hover:not(:disabled) { background: #e9edf3; }
+    .danger { background: #e5484d; }
+    .danger:hover:not(:disabled) { background: #c93c40; }
+    .sessions { padding: 0 28px 24px; overflow-x: auto; scrollbar-color: #c9cdd4 transparent; }
     .empty { padding: 18px 28px 24px; color: #8f959e; font-size: 14px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; border-bottom: 1px solid #eff0f1; padding: 12px 8px; vertical-align: top; }
-    th { color: #646a73; font-weight: 700; }
-    code { background: #f2f3f5; border-radius: 6px; padding: 2px 5px; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
+    .chat-table { min-width: 760px; }
+    .session-table { min-width: 1180px; }
+    th, td { text-align: left; border-bottom: 1px solid #eff0f1; padding: 13px 10px; vertical-align: top; }
+    th { color: #646a73; font-weight: 700; background: #fff; position: sticky; top: 0; z-index: 1; }
+    tbody tr:hover td { background: #fbfcfe; }
+    code { background: #f2f3f5; border-radius: 6px; padding: 2px 5px; font-size: 12px; }
     .muted { color: #8f959e; }
-    .status { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 12px; }
+    .line { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.55; }
+    .line strong { font-weight: 700; }
+    .session-table th:last-child,
+    .session-table td:last-child { position: sticky; right: 0; background: inherit; box-shadow: -12px 0 18px rgba(255,255,255,.94); }
+    .session-table th:last-child { z-index: 2; }
+    .status { display: inline-flex; align-items: center; min-width: 56px; justify-content: center; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; line-height: 1.4; }
     .status.active { background: #e8f7ee; color: #178b3a; }
     .status.closed { background: #eff0f1; color: #646a73; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-      .actions button { height: 32px; padding: 0 10px; font-size: 13px; }
-      .prompt-box { border: 1px solid #eff0f1; border-radius: 14px; padding: 16px; display: grid; gap: 14px; background: #fbfcff; }
+      .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
+      .prompt-box { border: 1px solid #eff0f1; border-radius: 8px; padding: 16px; display: grid; gap: 14px; background: #fbfcfe; }
+      .prompt-title { display: flex; align-items: center; gap: 8px; }
+      .prompt-title .icon { color: #2b67e8; }
       .prompt-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
-    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } main { margin: 20px auto; } }
+    @media (max-width: 720px) {
+      main { margin: 18px auto; padding: 0 14px; gap: 14px; }
+      header, .toolbar { padding: 18px; }
+      form { padding: 18px; }
+      .sessions { padding: 0 18px 18px; }
+      .row, .prompt-head { grid-template-columns: 1fr; }
+      .toolbar { align-items: flex-start; }
+    }
   </style>
 </head>
 <body>
+  <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4"/><path d="M8 4h8"/><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M9 17h6"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M18 2v4h4"/><path d="M6 22v-4H2"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.08V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.08-.4H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.08V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.08.4H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  </svg>
   <main>
     <section class="card">
       <header>
-        <h1>larkbot 控制台</h1>
+        <div class="app-title">
+          <span class="title-icon"><svg class="icon"><use href="#i-bot"></use></svg></span>
+          <h1>larkbot 控制台</h1>
+        </div>
         <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
       </header>
       <form id="bot-form">
@@ -702,7 +745,7 @@ function renderConsoleHtml(): string {
           </label>
           <section class="prompt-box">
             <div>
-              <strong>系统提示词</strong>
+              <div class="prompt-title"><svg class="icon"><use href="#i-settings"></use></svg><strong>系统提示词</strong></div>
               <div class="hint">可保存多份提示词，选择后下一轮消息立即生效。</div>
             </div>
             <div class="prompt-head">
@@ -710,8 +753,8 @@ function renderConsoleHtml(): string {
                 <select id="prompt-select"></select>
               </label>
               <div class="actions">
-                <button id="new-prompt" type="button" class="ghost">新建</button>
-                <button id="delete-prompt" type="button" class="danger">删除</button>
+                <button id="new-prompt" type="button" class="ghost"><svg class="icon sm"><use href="#i-plus"></use></svg>新建</button>
+                <button id="delete-prompt" type="button" class="danger"><svg class="icon sm"><use href="#i-trash"></use></svg>删除</button>
             </div>
             </div>
             <label>提示词名称
@@ -723,7 +766,7 @@ function renderConsoleHtml(): string {
           </section>
         <div class="warn">当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</div>
         <footer>
-          <button id="save" type="submit">保存设置</button>
+          <button id="save" type="submit"><svg class="icon sm"><use href="#i-save"></use></svg>保存设置</button>
           <span id="status"></span>
         </footer>
       </form>
@@ -731,13 +774,16 @@ function renderConsoleHtml(): string {
     <section class="card">
       <div class="toolbar">
         <div>
-          <h2>群聊授权</h2>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-users"></use></svg></span>
+            <h2>群聊授权</h2>
+          </div>
           <div class="sub">展示 bot 已感知到的群聊。启用后，该群内成员可直接 @ bot 提问；Owner 始终可用。</div>
         </div>
-        <button id="refresh-chats" type="button" class="ghost">刷新</button>
+        <button id="refresh-chats" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
       </div>
       <div class="sessions">
-        <table>
+        <table class="chat-table">
           <thead>
             <tr>
               <th>群聊</th>
@@ -756,13 +802,26 @@ function renderConsoleHtml(): string {
     <section class="card">
       <div class="toolbar">
         <div>
-          <h2>会话管理</h2>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-message"></use></svg></span>
+            <h2>会话管理</h2>
+          </div>
           <div class="sub">查看飞书话题到 traex 原生会话的路由。关闭会杀掉正在运行的 runtime，删除会移除路由记录。</div>
         </div>
-        <button id="refresh-sessions" type="button" class="ghost">刷新</button>
+        <button id="refresh-sessions" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
       </div>
       <div class="sessions">
-        <table>
+        <table class="session-table">
+          <colgroup>
+            <col style="width: 300px">
+            <col style="width: 92px">
+            <col style="width: 116px">
+            <col style="width: 170px">
+            <col style="width: 120px">
+            <col style="width: 230px">
+            <col style="width: 140px">
+            <col style="width: 112px">
+          </colgroup>
           <thead>
             <tr>
               <th>会话</th>
@@ -934,16 +993,16 @@ function renderConsoleHtml(): string {
       sessionsBody.innerHTML = sessions.map((s) => {
         const closed = s.status === 'closed';
         return '<tr>' +
-          '<td><strong>' + esc(compact(s.title || s.sessionId, 48)) + '</strong><br><span class="muted"><code>' + esc(compact(s.sessionId, 18)) + '</code></span></td>' +
+          '<td><span class="line"><strong>' + esc(s.title || s.sessionId) + '</strong></span><span class="line muted"><code>' + esc(s.sessionId) + '</code></span></td>' +
           '<td><span class="status ' + esc(s.status) + '">' + esc(s.status) + '</span></td>' +
-          '<td>' + esc(compact(s.createdByDisplayName || s.createdByName || s.createdByOpenId || '-', 24)) + '<br><span class="muted">' + esc(compact(s.lastCallerDisplayName || s.lastCallerOpenId || '-', 18)) + '</span></td>' +
-          '<td>' + esc(compact(s.chatName || s.chatId || '-', 28)) + '<br><span class="muted">' + esc(compact(s.chatId || '-', 18)) + '</span></td>' +
-          '<td>' + esc(s.cliId || '-') + '<br><span class="muted">' + esc(compact(s.cliSessionId || 'no cli session', 22)) + '</span></td>' +
-          '<td><span class="muted">' + esc(compact(s.workingDir || '-', 42)) + '</span><br><span class="muted">' + esc(compact(s.threadId || s.rootMessageId || '-', 24)) + '</span></td>' +
-          '<td><span class="muted">创建 ' + esc(formatTime(s.createdAt)) + '</span><br><span class="muted">最后 ' + esc(formatTime(s.lastMessageAt)) + '</span></td>' +
+          '<td><span class="line">' + esc(s.createdByDisplayName || s.createdByName || s.createdByOpenId || '-') + '</span><span class="line muted">' + esc(s.lastCallerDisplayName || s.lastCallerOpenId || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(s.chatName || s.chatId || '-') + '</span><span class="line muted">' + esc(s.chatId || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(s.cliId || '-') + '</span><span class="line muted">' + esc(s.cliSessionId || 'no cli session') + '</span></td>' +
+          '<td><span class="line muted">' + esc(s.workingDir || '-') + '</span><span class="line muted">' + esc(s.threadId || s.rootMessageId || '-') + '</span></td>' +
+          '<td><span class="line muted">创建 ' + esc(formatTime(s.createdAt)) + '</span><span class="line muted">最后 ' + esc(formatTime(s.lastMessageAt)) + '</span></td>' +
           '<td><div class="actions">' +
-            '<button type="button" class="ghost" data-action="close" data-session="' + esc(s.sessionId) + '"' + (closed ? ' disabled' : '') + '>关闭</button>' +
-            '<button type="button" class="danger" data-action="delete" data-session="' + esc(s.sessionId) + '">删除</button>' +
+            '<button type="button" class="ghost" data-action="close" data-session="' + esc(s.sessionId) + '"' + (closed ? ' disabled' : '') + '><svg class="icon sm"><use href="#i-x"></use></svg>关闭</button>' +
+            '<button type="button" class="danger" data-action="delete" data-session="' + esc(s.sessionId) + '"><svg class="icon sm"><use href="#i-trash"></use></svg>删除</button>' +
           '</div></td>' +
         '</tr>';
       }).join('');
@@ -963,7 +1022,7 @@ function renderConsoleHtml(): string {
           '<td><span class="status ' + (chat.enabled ? 'active' : 'closed') + '">' + (chat.enabled ? '已启用' : '未启用') + '</span></td>' +
           '<td><span class="muted">' + esc(chat.source === 'bot_added' ? '入群事件' : '群消息') + '</span></td>' +
           '<td><span class="muted">' + esc(formatTime(chat.lastSeenAt)) + '</span></td>' +
-          '<td><div class="actions"><button type="button" class="' + (chat.enabled ? 'danger' : 'ghost') + '" data-chat="' + esc(chat.chatId) + '" data-enabled="' + (chat.enabled ? 'false' : 'true') + '">' + (chat.enabled ? '停用' : '启用') + '</button></div></td>' +
+          '<td><div class="actions"><button type="button" class="' + (chat.enabled ? 'danger' : 'ghost') + '" data-chat="' + esc(chat.chatId) + '" data-enabled="' + (chat.enabled ? 'false' : 'true') + '"><svg class="icon sm"><use href="' + (chat.enabled ? '#i-x' : '#i-power') + '"></use></svg>' + (chat.enabled ? '停用' : '启用') + '</button></div></td>' +
         '</tr>'
       )).join('');
     }
