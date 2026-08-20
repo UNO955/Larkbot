@@ -122,7 +122,7 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
 
-  it('点击差评后隐藏反馈按钮并展示可选原因表单', () => {
+  it('点击差评后隐藏反馈按钮并展示原因快捷按钮', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
       interruptSessionId: 'lm-1',
@@ -133,15 +133,17 @@ describe('buildTerminalCard', () => {
     expect(card.elements[1].actions).toHaveLength(1);
     expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
     expect(card.elements[2].content).toContain('已记录差评并通知 Owner');
-    expect(card.elements[3].tag).toBe('form');
-    expect(card.elements[3].name).toBe('negative_feedback_form');
-    expect(card.elements[3].elements[0].tag).toBe('select_static');
-    expect(card.elements[3].elements[0].name).toBe('feedback_reason');
-    expect(card.elements[3].elements[1].tag).toBe('input');
-    expect(card.elements[3].elements[1].name).toBe('feedback_note');
-    expect(card.elements[3].elements[2].action_type).toBe('form_submit');
-    expect(card.elements[3].elements[2].text.content).toBe('提交原因');
-    expect(card.elements[3].elements[2].value).toMatchObject({ action: 'submit_negative_feedback', sessionId: 'lm-1', rating: 'negative' });
+    expect(card.elements[3].tag).toBe('action');
+    expect(card.elements[3].actions).toHaveLength(3);
+    expect(card.elements[3].actions[0].text.content).toBe('结论不准确');
+    expect(card.elements[3].actions[0].value).toMatchObject({
+      action: 'submit_negative_feedback',
+      sessionId: 'lm-1',
+      rating: 'negative',
+      reason: '结论不准确',
+    });
+    expect(card.elements[4].tag).toBe('action');
+    expect(card.elements[4].actions[1].text.content).toBe('表达不清楚');
     expect(card.elements.at(-1).content).toContain('总耗时');
   });
 

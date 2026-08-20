@@ -242,6 +242,7 @@ async function main(): Promise<void> {
           action,
           sessionId: payload.sessionId,
           feedbackId: typeof payload.feedbackId === 'string' ? payload.feedbackId : undefined,
+          reason: typeof payload.reason === 'string' ? payload.reason : undefined,
           footer: typeof payload.footer === 'string' ? payload.footer : undefined,
         });
       }
@@ -599,12 +600,13 @@ async function handleNegativeFeedbackSupplement(opts: {
   action: { operatorId: string; chatId?: string; formValue?: Record<string, unknown> };
   sessionId: string;
   feedbackId?: string;
+  reason?: string;
   footer?: string;
 }): Promise<unknown> {
   const session = opts.sessions.getSession(opts.sessionId);
   const terminalUrl = `${opts.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(opts.sessionId)}`;
   const operatorName = await opts.im.getUserName(opts.action.operatorId, opts.action.chatId).catch(() => undefined);
-  const reason = stringFormValue(opts.action.formValue, 'feedback_reason');
+  const reason = cleanFeedbackText(opts.reason || '') || stringFormValue(opts.action.formValue, 'feedback_reason');
   const note = stringFormValue(opts.action.formValue, 'feedback_note');
   const traceExcerpt = opts.terminalStore.snapshot(opts.sessionId, 2600);
   const record = await updateNegativeFeedbackSupplement(opts.store, {
@@ -662,8 +664,8 @@ async function handleNegativeFeedbackSupplement(opts: {
   };
 }
 
-function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; footer?: unknown } {
-  if (value && typeof value === 'object') return value as { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; footer?: unknown };
+function parseCardActionValue(value: unknown): { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; reason?: unknown; footer?: unknown } {
+  if (value && typeof value === 'object') return value as { action?: unknown; sessionId?: unknown; feedbackId?: unknown; rating?: unknown; reason?: unknown; footer?: unknown };
   if (typeof value !== 'string' || !value.trim()) return {};
   try {
     const parsed = JSON.parse(value);

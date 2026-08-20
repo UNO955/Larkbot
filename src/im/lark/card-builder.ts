@@ -304,45 +304,37 @@ function completedThinkingActions(opts: ThinkingCardOpts): unknown[] {
 }
 
 function buildNegativeFeedbackForm(opts: ThinkingCardOpts): unknown[] {
-  const submit = { action: 'submit_negative_feedback', sessionId: opts.interruptSessionId, feedbackId: opts.feedbackId, rating: 'negative', footer: opts.footer };
+  const reasonButtons = ['结论不准确', '证据不足', '没看知识库/代码', '没有解决问题', '表达不清楚']
+    .map((reason) => {
+      const value = {
+        action: 'submit_negative_feedback',
+        sessionId: opts.interruptSessionId,
+        feedbackId: opts.feedbackId,
+        rating: 'negative',
+        reason,
+        footer: opts.footer,
+      };
+      return {
+        tag: 'button',
+        text: { tag: 'plain_text', content: reason },
+        type: 'default',
+        value,
+        behaviors: [{ type: 'callback', value }],
+      };
+    });
   return [
     {
       tag: 'markdown',
       text_size: 'notation_small_v2',
-      content: "<font color='orange'>👎 已记录差评并通知 Owner。可以继续补充原因，帮助后续复盘。</font>",
+      content: "<font color='orange'>👎 已记录差评并通知 Owner。可以继续点一个原因，帮助后续复盘。</font>",
     },
     {
-      tag: 'form',
-      name: 'negative_feedback_form',
-      elements: [
-        {
-          tag: 'select_static',
-          name: 'feedback_reason',
-          placeholder: { tag: 'plain_text', content: '选择主要原因' },
-          options: [
-            { text: { tag: 'plain_text', content: '结论不准确' }, value: '结论不准确' },
-            { text: { tag: 'plain_text', content: '证据不足' }, value: '证据不足' },
-            { text: { tag: 'plain_text', content: '没看知识库/代码' }, value: '没看知识库/代码' },
-            { text: { tag: 'plain_text', content: '没有解决问题' }, value: '没有解决问题' },
-            { text: { tag: 'plain_text', content: '表达不清楚' }, value: '表达不清楚' },
-          ],
-        },
-        {
-          tag: 'input',
-          name: 'feedback_note',
-          placeholder: { tag: 'plain_text', content: '补充说明，可不填' },
-          max_length: 500,
-        },
-        {
-          tag: 'button',
-          name: 'submit_negative_feedback',
-          text: { tag: 'plain_text', content: '提交原因' },
-          type: 'primary',
-          action_type: 'form_submit',
-          value: submit,
-          behaviors: [{ type: 'callback', value: submit }],
-        },
-      ],
+      tag: 'action',
+      actions: reasonButtons.slice(0, 3),
+    },
+    {
+      tag: 'action',
+      actions: reasonButtons.slice(3),
     },
   ];
 }
