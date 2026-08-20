@@ -52,11 +52,11 @@ async function main(): Promise<void> {
     patch: async (messageId, text, status, _replyToName, replySignature, replyToId, argosSource) => {
       await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource }));
     },
-    postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer) => {
-      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }), replyAnchorMessageId);
+    postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer, knowledge) => {
+      return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer, knowledge }), replyAnchorMessageId);
     },
-    patchTrace: async (messageId, traceUrl, interruptSessionId, status, footer) => {
-      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer }));
+    patchTrace: async (messageId, traceUrl, interruptSessionId, status, footer, knowledge) => {
+      await im.updateCard(messageId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer, knowledge }));
     },
     notify: async (threadId, text, replyAnchorMessageId) => {
       await im.reply(threadId, text, 'text', replyAnchorMessageId);
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
         const existing = sessions.find(msg.chatId, msg.rootMessageId, msg.threadId, msg.quotedMessageId);
         if (existing) {
           await sessions.touch(existing, msg.senderId);
-          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildThreadPrompt(existing, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+          await sessions.submit(existing, buildOpeningPrompt(existing, msg, promptOptions(activeBot)), buildThreadPrompt(existing, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, undefined, msg.content);
           return;
         }
 
@@ -168,7 +168,7 @@ async function main(): Promise<void> {
         };
         await sessions.add(session);
         if (msg.content) {
-          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, receivedReactionId);
+          await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildFollowUpPrompt(msg), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, receivedReactionId, msg.content);
         }
       } catch (err: any) {
         logger.error(`建会话失败: ${err?.message ?? err}`);
@@ -202,7 +202,7 @@ async function main(): Promise<void> {
           return;
         }
         await sessions.touch(session, msg.senderId);
-        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildThreadPrompt(session, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId);
+        await sessions.submit(session, buildOpeningPrompt(session, msg, promptOptions(activeBot)), buildThreadPrompt(session, msg, promptOptions(activeBot)), msg.id, replyToName(msg), replySignature(activeBot), msg.senderId, undefined, msg.content);
       } catch (err: any) {
         logger.error(`处理话题消息失败: ${err?.message ?? err}`);
         await im.reply(msg.threadId, `消息处理失败：${err?.message ?? err}`, 'text');
@@ -547,6 +547,9 @@ async function handleThinkingFeedback(opts: {
     operatorId: opts.action.operatorId,
     terminalUrl,
     traceExcerpt,
+    question: session?.latestQuestion,
+    answer: session?.latestAnswer,
+    knowledge: session?.latestKnowledge,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -564,6 +567,9 @@ async function handleThinkingFeedback(opts: {
       operatorId: record.operatorId,
       terminalUrl,
       traceExcerpt,
+      question: record.question,
+      answer: record.answer,
+      knowledge: record.knowledge,
     });
     void opts.im.sendDirectCard(opts.bot.ownerOpenId, card).catch((error: any) => {
       logger.warn(`发送反馈私聊失败 owner=${opts.bot.ownerOpenId.slice(0, 10)} session=${opts.sessionId.slice(0, 8)}: ${error?.message ?? error}`);
@@ -584,6 +590,7 @@ async function handleThinkingFeedback(opts: {
         status: 'completed',
         feedback: opts.rating === 'negative' ? 'negative_pending' : opts.rating,
         feedbackId: record.id,
+        knowledge: record.knowledge,
         footer: opts.footer,
       }).payload,
     },
@@ -619,6 +626,9 @@ async function handleNegativeFeedbackSupplement(opts: {
     operatorId: opts.action.operatorId,
     terminalUrl,
     traceExcerpt,
+    question: session?.latestQuestion,
+    answer: session?.latestAnswer,
+    knowledge: session?.latestKnowledge,
     reason,
     note,
   }).catch((error: any) => {
@@ -636,6 +646,9 @@ async function handleNegativeFeedbackSupplement(opts: {
       operatorId: record?.operatorId || opts.action.operatorId,
       terminalUrl,
       traceExcerpt,
+      question: record?.question || session.latestQuestion,
+      answer: record?.answer || session.latestAnswer,
+      knowledge: record?.knowledge || session.latestKnowledge,
       reason,
       note,
       supplemental: true,
@@ -658,6 +671,7 @@ async function handleNegativeFeedbackSupplement(opts: {
         feedbackReason: reason,
         feedbackNote: note,
         feedbackId: record?.id || opts.feedbackId,
+        knowledge: record?.knowledge,
         footer: opts.footer,
       }).payload,
     },
@@ -720,6 +734,9 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
   operatorId: string;
   terminalUrl: string;
   traceExcerpt: string;
+  question?: string;
+  answer?: string;
+  knowledge?: FeedbackRecord['knowledge'];
   reason?: string;
   note?: string;
 }): Promise<FeedbackRecord | undefined> {
@@ -746,6 +763,9 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
       operatorName: input.operatorName,
       terminalUrl: input.terminalUrl,
       traceExcerpt: input.traceExcerpt,
+      question: input.question,
+      answer: input.answer,
+      knowledge: input.knowledge,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -753,6 +773,9 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
   }
   record.reason = input.reason || record.reason;
   record.note = input.note || record.note;
+  record.question = input.question || record.question;
+  record.answer = input.answer || record.answer;
+  record.knowledge = input.knowledge || record.knowledge;
   record.traceExcerpt = input.traceExcerpt || record.traceExcerpt;
   record.updatedAt = new Date().toISOString();
   await store.saveFeedbacks(feedbacks.slice(0, 500));

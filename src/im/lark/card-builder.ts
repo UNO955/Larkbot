@@ -5,6 +5,7 @@
  * 所以流式回贴统一走卡片：把 traex 的屏幕快照塞进一个 markdown 代码块
  * （等宽字体，保留终端对齐），靠 message.patch 原地刷新同一张卡片。
  */
+import type { KnowledgeObservation } from '../../core/types.js';
 import type { ImCard } from '../types.js';
 
 export type StreamCardStatus = 'working' | 'completed' | 'failed' | 'stopped';
@@ -29,6 +30,7 @@ export interface ThinkingCardOpts {
   feedbackReason?: string;
   feedbackNote?: string;
   feedbackId?: string;
+  knowledge?: KnowledgeObservation;
 }
 
 export interface MaintenanceCardOpts {
@@ -54,6 +56,9 @@ export interface FeedbackOwnerCardOpts {
   operatorId: string;
   terminalUrl: string;
   traceExcerpt?: string;
+  question?: string;
+  answer?: string;
+  knowledge?: KnowledgeObservation;
   reason?: string;
   note?: string;
   supplemental?: boolean;
@@ -233,6 +238,13 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
       ],
     },
   ];
+  if (opts.status === 'completed' && opts.knowledge) {
+    elements.push({
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: `<font color='grey'>本轮参考资料：${escapeMarkdownText(knowledgeSummary(opts.knowledge))}</font>`,
+    });
+  }
   if (opts.status === 'completed' && opts.feedback) {
     if (opts.feedback === 'negative_pending') {
       elements.push(...buildNegativeFeedbackForm(opts));
@@ -348,9 +360,12 @@ export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
     opts.reason ? `原因：${escapeMarkdownText(opts.reason)}` : undefined,
     opts.note ? `补充：${escapeMarkdownText(opts.note)}` : undefined,
     `问题：${escapeMarkdownText(opts.sessionTitle || opts.sessionId)}`,
+    opts.question ? `原始提问：${escapeMarkdownText(trimLine(opts.question, 180))}` : undefined,
+    opts.answer ? `最终回答：${escapeMarkdownText(trimLine(opts.answer, 220))}` : undefined,
     `群聊：${escapeMarkdownText(opts.chatName || opts.chatId || '未知群聊')}`,
     `会话：${escapeMarkdownText(opts.sessionId)}`,
     `点击人：${escapeMarkdownText(opts.operatorName || opts.operatorId)}`,
+    `知识库：${escapeMarkdownText(knowledgeSummary(opts.knowledge))}`,
   ].filter((line): line is string => line !== undefined).join('\n');
   return {
     payload: {
@@ -380,6 +395,17 @@ export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
       ],
     },
   };
+}
+
+function trimLine(value: string, max: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
+}
+
+function knowledgeSummary(knowledge: KnowledgeObservation | undefined): string {
+  if (!knowledge) return '暂无记录';
+  if (!knowledge.references.length) return knowledge.noReferenceReason || '未检测到知识库引用';
+  return knowledge.references.slice(0, 3).map((ref) => ref.path).join('、');
 }
 
 export function buildMaintenanceCard(opts: MaintenanceCardOpts): ImCard {

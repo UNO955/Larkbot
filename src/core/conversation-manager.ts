@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { ExpiredSession, Session } from './types.js';
+import type { KnowledgeObservation, KnowledgeReference, ExpiredSession, Session } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -20,6 +20,8 @@ const PTY_ROWS = 30;
 interface QueuedTurn {
   content: string;
   fallbackOpening: string;
+  question?: string;
+  questionMessageId?: string;
   replyAnchorMessageId?: string;
   receivedReactionId?: string;
   replyToId?: string;
@@ -75,8 +77,8 @@ export interface ConversationManagerDeps {
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
   post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<string>;
   patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<void>;
-  postTrace(threadId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string): Promise<string>;
-  patchTrace(messageId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, footer?: string): Promise<void>;
+  postTrace(threadId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string, knowledge?: KnowledgeObservation): Promise<string>;
+  patchTrace(messageId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, footer?: string, knowledge?: KnowledgeObservation): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
   addReaction(messageId: string, emojiType: string): Promise<string>;
   removeReaction(messageId: string, reactionId: string): Promise<void>;
@@ -270,7 +272,7 @@ export class ConversationManager {
         ))));
   }
 
-  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string): Promise<void> {
+  async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string, question?: string): Promise<void> {
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -279,6 +281,8 @@ export class ConversationManager {
     runtime.queue.push({
       content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
       fallbackOpening: opening,
+      question,
+      questionMessageId: replyAnchorMessageId,
       replyAnchorMessageId,
       receivedReactionId,
       replyToId,
@@ -415,6 +419,8 @@ export class ConversationManager {
         runtime.receivedReactionId = await this.addReaction(runtime.currentReplyAnchorMessageId, RECEIVED_REACTION);
       }
       this.deps.redactTerminalInput?.(runtime.route.sessionId, turn.content);
+      runtime.route.latestQuestion = turn.question;
+      runtime.route.latestQuestionMessageId = turn.questionMessageId;
       const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
       if (!result.submitted) throw new Error('traex 未确认接收输入');
       runtime.route.hasHistory = true;
@@ -479,6 +485,8 @@ export class ConversationManager {
     fresh.queue.push(...queued.map((turn) => ({
       content: turn.fallbackOpening,
       fallbackOpening: turn.fallbackOpening,
+      question: turn.question,
+      questionMessageId: turn.questionMessageId,
       replyAnchorMessageId: turn.replyAnchorMessageId,
       receivedReactionId: turn.receivedReactionId,
       replyToId: turn.replyToId,
@@ -535,6 +543,7 @@ export class ConversationManager {
     const sourceAnswer = cleanAnswer(final?.text || answer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
+    const knowledge = status === 'working' ? undefined : extractKnowledgeObservation(trace, sourceAnswer);
     const argosSource = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/.test(trace)
       ? `${sourceAnswer}\n${trace}`
       : undefined;
@@ -553,12 +562,18 @@ export class ConversationManager {
             status,
             runtime.currentReplyAnchorMessageId,
             footer,
+            knowledge,
           );
           runtime.route.traceCardMessageId = runtime.traceCardMessageId;
           await this.persist();
         } else {
-          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, status, footer);
+          await this.deps.patchTrace(runtime.traceCardMessageId, runtime.traceUrl, runtime.interruptSessionId, status, footer, knowledge);
         }
+      }
+      if (status !== 'working') {
+        runtime.route.latestAnswer = answerBody;
+        runtime.route.latestKnowledge = knowledge;
+        await this.persist();
       }
       if (status !== 'working' && answerBody) {
         if (!runtime.answerCardMessageId) {
@@ -587,6 +602,7 @@ export class ConversationManager {
           if (argosSource) patchArgs.push(argosSource);
           await this.deps.patch(...patchArgs);
         }
+        await this.persist();
       }
       runtime.lastCardStatus = status;
     } catch (error: any) {
@@ -786,6 +802,52 @@ function cleanAnswer(answer: string): string {
   const text = answer.trim();
   if (text === 'BOTMUX_NOTHING_TO_SEND') return '';
   return text;
+}
+
+function extractKnowledgeObservation(trace: string, answer: string): KnowledgeObservation {
+  const refs = uniqueKnowledgeReferences([
+    ...extractKnowledgeReferences(trace, 'trace'),
+    ...extractKnowledgeReferences(answer, 'answer'),
+  ]);
+  return {
+    references: refs,
+    noReferenceReason: refs.length ? undefined : '未在分析过程或最终回答中检测到知识库文件读取记录。',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function extractKnowledgeReferences(text: string, source: KnowledgeReference['source']): KnowledgeReference[] {
+  const refs: KnowledgeReference[] = [];
+  const lines = text.split(/\r?\n/);
+  const pathRe = /(?:\/data00\/home\/[^\s`'"]+|\/Users\/[^\s`'"]+|(?:docs|public|knowledge|kb|41-WORK-PROJECT-PUBLIC)\/[^\s`'"]+|[A-Za-z0-9_.-]*知识库[A-Za-z0-9_./-]*|[A-Za-z0-9_./-]+\.md)/g;
+  for (const line of lines) {
+    if (!/(知识库|knowledge|kb|41-WORK-PROJECT-PUBLIC|one-page|playbook|\.md|docs\/)/i.test(line)) continue;
+    for (const match of line.matchAll(pathRe)) {
+      const path = cleanKnowledgePath(match[0]);
+      if (!path) continue;
+      refs.push({ path, source, evidence: line.trim().slice(0, 240) });
+    }
+  }
+  return refs.slice(0, 20);
+}
+
+function cleanKnowledgePath(value: string): string | undefined {
+  const path = value.replace(/[),.;，。；、]+$/g, '').trim();
+  if (!path || path.length < 4) return undefined;
+  if (!/(知识库|knowledge|kb|41-WORK-PROJECT-PUBLIC|one-page|playbook|\.md|docs\/)/i.test(path)) return undefined;
+  return path.slice(0, 300);
+}
+
+function uniqueKnowledgeReferences(refs: KnowledgeReference[]): KnowledgeReference[] {
+  const seen = new Set<string>();
+  const result: KnowledgeReference[] = [];
+  for (const ref of refs) {
+    const key = `${ref.source}:${ref.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(ref);
+  }
+  return result.slice(0, 12);
 }
 
 function formatTokenCount(value: number): string {

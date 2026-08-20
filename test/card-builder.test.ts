@@ -94,6 +94,10 @@ describe('buildTerminalCard', () => {
       url: 'http://console/terminal/lm-1',
       interruptSessionId: 'lm-1',
       status: 'completed',
+      knowledge: {
+        references: [{ path: 'docs/qa-log-troubleshooting-prompt.md', source: 'trace' }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
       footer: '🪙 累计 Token ↑15K ↓3.5K',
     }).payload;
     expect(card.header.template).toBe('green');
@@ -119,6 +123,8 @@ describe('buildTerminalCard', () => {
     ]);
     expect(card.elements[1].actions[2].text.content).toBe('👎 拉完了');
     expect(card.elements[1].actions[2].value).toMatchObject({ action: 'rate_thinking', sessionId: 'lm-1', rating: 'negative' });
+    expect(card.elements[2].content).toContain('本轮参考资料');
+    expect(card.elements[2].content).toContain('docs/qa-log-troubleshooting-prompt.md');
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
   });
 
@@ -173,6 +179,15 @@ describe('buildTerminalCard', () => {
       operatorId: 'ou_qa',
       terminalUrl: 'http://console/terminal/lm-1',
       traceExcerpt: '读取知识库\n检查代码',
+      question: '为什么猜答手机号按钮未下发？',
+      answer: '结论：猜答手机号按钮未下发。',
+      knowledge: {
+        references: [{
+          path: '41-WORK-PROJECT-PUBLIC/2026-08-10-猜答行业推全改造/one-page.md',
+          source: 'trace',
+        }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
       reason: '证据不足',
       note: '没有解释为什么',
       supplemental: true,
@@ -184,6 +199,8 @@ describe('buildTerminalCard', () => {
     expect(card.elements[0].content).toContain('QA');
     expect(card.elements[0].content).toContain('证据不足');
     expect(card.elements[0].content).toContain('没有解释为什么');
+    expect(card.elements[0].content).toContain('为什么猜答手机号按钮未下发');
+    expect(card.elements[0].content).toContain('41-WORK-PROJECT-PUBLIC');
     expect(card.elements[0].content).not.toContain('分析过程摘录');
     expect(card.elements[0].content).not.toContain('读取知识库');
     expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');

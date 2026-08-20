@@ -210,8 +210,27 @@ function isFeedbackRecord(value: unknown): value is FeedbackRecord {
     && (feedback.operatorName === undefined || typeof feedback.operatorName === 'string')
     && typeof feedback.terminalUrl === 'string'
     && (feedback.traceExcerpt === undefined || typeof feedback.traceExcerpt === 'string')
+    && (feedback.question === undefined || typeof feedback.question === 'string')
+    && (feedback.answer === undefined || typeof feedback.answer === 'string')
+    && (feedback.knowledge === undefined || isKnowledgeObservation(feedback.knowledge))
     && (feedback.reason === undefined || typeof feedback.reason === 'string')
     && (feedback.note === undefined || typeof feedback.note === 'string')
+    && (feedback.reviewNote === undefined || typeof feedback.reviewNote === 'string')
     && typeof feedback.createdAt === 'string'
     && typeof feedback.updatedAt === 'string';
+}
+
+function isKnowledgeObservation(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const observation = value as { references?: unknown; noReferenceReason?: unknown; updatedAt?: unknown };
+  return Array.isArray(observation.references)
+    && observation.references.every((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const ref = item as { path?: unknown; source?: unknown; evidence?: unknown };
+      return typeof ref.path === 'string'
+        && (ref.source === 'trace' || ref.source === 'answer')
+        && (ref.evidence === undefined || typeof ref.evidence === 'string');
+    })
+    && (observation.noReferenceReason === undefined || typeof observation.noReferenceReason === 'string')
+    && typeof observation.updatedAt === 'string';
 }

@@ -57,6 +57,10 @@ export interface Session {
   createdByName?: string;
   lastCallerOpenId?: string;
   chatName?: string;
+  latestQuestion?: string;
+  latestQuestionMessageId?: string;
+  latestAnswer?: string;
+  latestKnowledge?: KnowledgeObservation;
   closedAt?: string;
   lastMessageAt: string;
   createdAt: string;
@@ -85,6 +89,18 @@ export interface ExpiredSession {
 export type FeedbackRating = 'positive' | 'negative';
 export type FeedbackStatus = 'open' | 'reviewing' | 'resolved' | 'ignored';
 
+export interface KnowledgeReference {
+  path: string;
+  source: 'trace' | 'answer';
+  evidence?: string;
+}
+
+export interface KnowledgeObservation {
+  references: KnowledgeReference[];
+  noReferenceReason?: string;
+  updatedAt: string;
+}
+
 export interface FeedbackRecord {
   id: string;
   rating: FeedbackRating;
@@ -97,8 +113,12 @@ export interface FeedbackRecord {
   operatorName?: string;
   terminalUrl: string;
   traceExcerpt?: string;
+  question?: string;
+  answer?: string;
+  knowledge?: KnowledgeObservation;
   reason?: string;
   note?: string;
+  reviewNote?: string;
   createdAt: string;
   updatedAt: string;
 }

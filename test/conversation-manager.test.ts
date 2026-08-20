@@ -653,6 +653,10 @@ describe('ConversationManager', () => {
       'completed',
       'om-current-user',
       expect.stringContaining('🪙 累计 Token ↑15K ↓3.5K · gpt-5.5'),
+      expect.objectContaining({
+        references: [],
+        noReferenceReason: expect.any(String),
+      }),
     ), { timeout: 1500 });
     expect(postTrace.mock.calls[0]?.[5]).toContain('⏱️ 总耗时：');
     expect(patchTrace).not.toHaveBeenCalled();
