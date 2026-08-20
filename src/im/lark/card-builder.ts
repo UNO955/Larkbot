@@ -312,30 +312,33 @@ function buildNegativeFeedbackForm(opts: ThinkingCardOpts): unknown[] {
       content: "<font color='orange'>👎 已记录差评并通知 Owner。可以继续补充原因，帮助后续复盘。</font>",
     },
     {
-      tag: 'select_static',
-      name: 'feedback_reason',
-      placeholder: { tag: 'plain_text', content: '选择主要原因' },
-      options: [
-        { text: { tag: 'plain_text', content: '结论不准确' }, value: '结论不准确' },
-        { text: { tag: 'plain_text', content: '证据不足' }, value: '证据不足' },
-        { text: { tag: 'plain_text', content: '没看知识库/代码' }, value: '没看知识库/代码' },
-        { text: { tag: 'plain_text', content: '没有解决问题' }, value: '没有解决问题' },
-        { text: { tag: 'plain_text', content: '表达不清楚' }, value: '表达不清楚' },
-      ],
-    },
-    {
-      tag: 'input',
-      name: 'feedback_note',
-      placeholder: { tag: 'plain_text', content: '补充说明，可不填' },
-      max_length: 500,
-    },
-    {
-      tag: 'action',
-      actions: [
+      tag: 'form',
+      name: 'negative_feedback_form',
+      elements: [
+        {
+          tag: 'select_static',
+          name: 'feedback_reason',
+          placeholder: { tag: 'plain_text', content: '选择主要原因' },
+          options: [
+            { text: { tag: 'plain_text', content: '结论不准确' }, value: '结论不准确' },
+            { text: { tag: 'plain_text', content: '证据不足' }, value: '证据不足' },
+            { text: { tag: 'plain_text', content: '没看知识库/代码' }, value: '没看知识库/代码' },
+            { text: { tag: 'plain_text', content: '没有解决问题' }, value: '没有解决问题' },
+            { text: { tag: 'plain_text', content: '表达不清楚' }, value: '表达不清楚' },
+          ],
+        },
+        {
+          tag: 'input',
+          name: 'feedback_note',
+          placeholder: { tag: 'plain_text', content: '补充说明，可不填' },
+          max_length: 500,
+        },
         {
           tag: 'button',
+          name: 'submit_negative_feedback',
           text: { tag: 'plain_text', content: '提交原因' },
           type: 'primary',
+          action_type: 'form_submit',
           value: submit,
           behaviors: [{ type: 'callback', value: submit }],
         },
@@ -347,9 +350,6 @@ function buildNegativeFeedbackForm(opts: ThinkingCardOpts): unknown[] {
 export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
   const liked = opts.rating === 'positive';
   const title = liked ? '👍 收到一次好评' : opts.supplemental ? '👎 收到差评原因补充' : '👎 收到一次差评';
-  const trace = opts.traceExcerpt?.trim()
-    ? escapeMarkdownText(trimTail(opts.traceExcerpt.trim(), 2600))
-    : '暂无可读取的分析过程摘录，可打开完整分析过程查看。';
   const content = [
     `**评价：${liked ? '有帮助' : '拉完了'}**`,
     opts.supplemental ? undefined : '已写入控制台反馈中心，可在控制台标记状态或删除。',
@@ -359,9 +359,6 @@ export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
     `群聊：${escapeMarkdownText(opts.chatName || opts.chatId || '未知群聊')}`,
     `会话：${escapeMarkdownText(opts.sessionId)}`,
     `点击人：${escapeMarkdownText(opts.operatorName || opts.operatorId)}`,
-    '',
-    '**分析过程摘录**',
-    trace,
   ].filter((line): line is string => line !== undefined).join('\n');
   return {
     payload: {
@@ -391,11 +388,6 @@ export function buildFeedbackOwnerCard(opts: FeedbackOwnerCardOpts): ImCard {
       ],
     },
   };
-}
-
-function trimTail(value: string, max: number): string {
-  if (value.length <= max) return value;
-  return `...（仅展示尾部 ${max} 字符）\n${value.slice(-max)}`;
 }
 
 export function buildMaintenanceCard(opts: MaintenanceCardOpts): ImCard {

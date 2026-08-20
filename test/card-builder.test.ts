@@ -133,12 +133,15 @@ describe('buildTerminalCard', () => {
     expect(card.elements[1].actions).toHaveLength(1);
     expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
     expect(card.elements[2].content).toContain('已记录差评并通知 Owner');
-    expect(card.elements[3].tag).toBe('select_static');
-    expect(card.elements[3].name).toBe('feedback_reason');
-    expect(card.elements[4].tag).toBe('input');
-    expect(card.elements[4].name).toBe('feedback_note');
-    expect(card.elements[5].actions[0].text.content).toBe('提交原因');
-    expect(card.elements[5].actions[0].value).toMatchObject({ action: 'submit_negative_feedback', sessionId: 'lm-1', rating: 'negative' });
+    expect(card.elements[3].tag).toBe('form');
+    expect(card.elements[3].name).toBe('negative_feedback_form');
+    expect(card.elements[3].elements[0].tag).toBe('select_static');
+    expect(card.elements[3].elements[0].name).toBe('feedback_reason');
+    expect(card.elements[3].elements[1].tag).toBe('input');
+    expect(card.elements[3].elements[1].name).toBe('feedback_note');
+    expect(card.elements[3].elements[2].action_type).toBe('form_submit');
+    expect(card.elements[3].elements[2].text.content).toBe('提交原因');
+    expect(card.elements[3].elements[2].value).toMatchObject({ action: 'submit_negative_feedback', sessionId: 'lm-1', rating: 'negative' });
     expect(card.elements.at(-1).content).toContain('总耗时');
   });
 
@@ -158,7 +161,7 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('总耗时');
   });
 
-  it('构造 Owner 反馈通知卡，包含问题、会话、点击人和完整过程入口', () => {
+  it('构造 Owner 反馈通知卡，包含问题、会话、点击人和完整过程入口，不展示过程摘录', () => {
     const card: any = buildFeedbackOwnerCard({
       rating: 'negative',
       sessionTitle: '猜答手机号按钮排查',
@@ -179,7 +182,8 @@ describe('buildTerminalCard', () => {
     expect(card.elements[0].content).toContain('QA');
     expect(card.elements[0].content).toContain('证据不足');
     expect(card.elements[0].content).toContain('没有解释为什么');
-    expect(card.elements[0].content).toContain('读取知识库');
+    expect(card.elements[0].content).not.toContain('分析过程摘录');
+    expect(card.elements[0].content).not.toContain('读取知识库');
     expect(card.elements[1].actions[0].multi_url.url).toBe('http://console/terminal/lm-1');
   });
 
