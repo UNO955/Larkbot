@@ -15,7 +15,7 @@ export interface ConsoleServerOpts {
   traceStore?: TurnTraceStore;
   terminalStore?: TerminalStreamStore;
   sessionManager?: {
-    listSessions(): Session[];
+    listSessions(): PublicSession[];
     closeSession(sessionId: string): Promise<Session | undefined>;
     interruptSession(sessionId: string): Promise<Session | undefined>;
     deleteSession(sessionId: string): Promise<boolean>;
@@ -349,7 +349,7 @@ async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
   return bot;
 }
 
-type PublicSession = Session & { createdByDisplayName?: string; lastCallerDisplayName?: string };
+type PublicSession = Session & { runtimeStatus?: 'idle' | 'busy'; turnStartedAt?: string; createdByDisplayName?: string; lastCallerDisplayName?: string };
 
 async function listSessions(opts: ConsoleServerOpts): Promise<PublicSession[]> {
   const bot = await requireBot(opts).catch(() => undefined);
@@ -939,22 +939,279 @@ function renderConsoleHtml(): string {
       justify-content: space-between;
       gap: 16px;
     }
-    .pipeline {
-      margin-top: 14px;
-      display: flex;
+    .office-banner {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
       align-items: center;
-      gap: 9px;
-      overflow-x: auto;
-      padding: 11px 12px;
+      gap: 18px;
+      overflow: hidden;
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--surface-soft);
-      color: var(--text-muted);
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, oklch(97% 0.025 245), oklch(99% 0.012 120));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+    }
+    .office-copy {
+      padding: 18px 0 18px 18px;
+      min-width: 0;
+    }
+    .office-copy strong {
+      display: block;
+      margin-top: 10px;
+      font-size: 20px;
+      line-height: 1.35;
+      color: var(--text);
+    }
+    .office-copy p {
+      margin: 8px 0 0;
+      max-width: 620px;
+      color: var(--text-soft);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+    .office-tags {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .office-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text-soft);
       font-size: 12px;
       font-weight: 800;
     }
-    .pipeline span { color: var(--text); white-space: nowrap; }
-    .pipeline .icon { color: var(--primary); }
+    .office-tag .icon { width: 14px; height: 14px; color: var(--primary); }
+    .office-floor {
+      min-width: 0;
+      align-self: stretch;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: center;
+      background: oklch(100% 0 0 / .54);
+      border-left: 1px solid oklch(89.8% 0.014 255 / .7);
+    }
+    .office-workers {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+      gap: 10px;
+    }
+    .worker-card {
+      position: relative;
+      min-width: 0;
+      min-height: 154px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      align-content: end;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, var(--surface) 0%, var(--surface-soft) 100%);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .worker-card.slow {
+      border-color: oklch(72% 0.12 72);
+      background: linear-gradient(180deg, oklch(99% 0.012 92) 0%, var(--surface) 100%);
+    }
+    .worker-card.office-nudged .worker-head {
+      animation: officeNudge .42s ease-out;
+    }
+    .worker-time {
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      max-width: calc(100% - 18px);
+      transform: translateX(-50%);
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .worker-scene {
+      height: 72px;
+      display: grid;
+      place-items: end center;
+    }
+    .worker-avatar {
+      position: relative;
+      width: 86px;
+      height: 64px;
+    }
+    .worker-head {
+      position: absolute;
+      left: 31px;
+      top: 2px;
+      width: 28px;
+      height: 28px;
+      border: 2px solid oklch(63% 0.13 76);
+      border-radius: 999px;
+      background: oklch(91% 0.11 88);
+      box-shadow: inset 0 -2px 0 oklch(80% 0.1 82);
+    }
+    .worker-head::before,
+    .worker-head::after {
+      content: "";
+      position: absolute;
+      top: 10px;
+      width: 3px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--text);
+    }
+    .worker-head::before { left: 7px; }
+    .worker-head::after { right: 7px; }
+    .worker-body {
+      position: absolute;
+      left: 24px;
+      top: 30px;
+      width: 40px;
+      height: 28px;
+      border: 2px solid oklch(43% 0.14 258);
+      border-radius: 12px 12px 6px 6px;
+      background: var(--primary);
+    }
+    .worker-screen {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 36px;
+      height: 27px;
+      border: 2px solid oklch(76% 0.05 245);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+    .worker-screen::before,
+    .worker-screen::after {
+      content: "";
+      position: absolute;
+      left: 7px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--primary);
+      animation: officeScan 2.8s ease-in-out infinite;
+    }
+    .worker-screen::before { top: 8px; width: 14px; }
+    .worker-screen::after { top: 16px; width: 22px; animation-delay: .35s; }
+    .worker-name {
+      min-width: 0;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: center;
+    }
+    .worker-meta {
+      min-width: 0;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: center;
+    }
+    .worker-actions {
+      display: flex;
+      justify-content: center;
+    }
+    .worker-actions button {
+      height: 28px;
+      padding: 0 9px;
+      font-size: 12px;
+    }
+    .office-empty {
+      min-height: 132px;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: center;
+      background: var(--surface);
+    }
+    #office-status {
+      min-height: 18px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    @keyframes officeScan {
+      0%, 100% { opacity: .32; transform: translateX(0); }
+      50% { opacity: 1; transform: translateX(6px); }
+    }
+    @keyframes officeNudge {
+      0%, 100% { transform: translateX(0) rotate(0deg); }
+      25% { transform: translateX(-4px) rotate(-7deg); }
+      55% { transform: translateX(4px) rotate(7deg); }
+      80% { transform: translateX(-2px) rotate(-3deg); }
+    }
+    .pipeline {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .pipeline-step {
+      position: relative;
+      min-height: 54px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 850;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px oklch(27% 0.03 255 / .05);
+    }
+    .pipeline-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -11px;
+      top: 50%;
+      width: 10px;
+      border-top: 2px solid var(--border-strong);
+      transform: translateY(-50%);
+      z-index: 1;
+    }
+    .pipeline-step .icon {
+      width: 18px;
+      height: 18px;
+      color: var(--primary);
+      flex: 0 0 auto;
+    }
     .side-panel {
       padding: 16px;
       display: grid;
@@ -1027,6 +1284,11 @@ function renderConsoleHtml(): string {
       .console-shell { grid-template-columns: 220px minmax(0, 1fr); }
       .content-frame { grid-template-columns: 1fr; }
       .observer-column { position: static; }
+      .office-banner { grid-template-columns: 1fr; }
+      .office-copy { padding: 16px 16px 0; }
+      .office-floor { border-left: 0; border-top: 1px solid oklch(89.8% 0.014 255 / .7); }
+      .pipeline { grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+      .pipeline-step:not(:last-child)::after { display: none; }
     }
     @media (max-width: 820px) {
       .console-shell { display: block; }
@@ -1036,6 +1298,25 @@ function renderConsoleHtml(): string {
       .content-frame { overflow: visible; padding: 16px; }
       .header-actions { width: 100%; }
       .header-actions button { flex: 1; }
+      .office-banner {
+        grid-template-columns: minmax(0, 1fr) 180px;
+        gap: 10px;
+      }
+      .office-copy { padding: 14px 0 14px 14px; }
+      .office-copy strong { font-size: 18px; }
+      .office-copy p { font-size: 13px; }
+      .office-workers { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+    }
+    @media (max-width: 480px) {
+      .office-banner { grid-template-columns: 1fr; }
+      .office-copy { padding: 14px 14px 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .worker-screen::before,
+      .worker-screen::after,
+      .worker-card.office-nudged .worker-head {
+        animation: none;
+      }
     }
   </style>
 </head>
@@ -1114,6 +1395,22 @@ function renderConsoleHtml(): string {
         <span class="mini-stat"><svg class="icon sm"><use href="#i-radio"></use></svg>长连接模式</span>
         </div>
         <div class="sub">核心链路：飞书事件进入后，larkbot daemon 将消息路由到独立 traex PTY runtime，并把结果回传为卡片。</div>
+        <div class="office-banner" aria-label="办公室">
+          <div class="office-copy">
+            <span class="mini-stat"><svg class="icon sm"><use href="#i-terminal"></use></svg>办公室</span>
+            <strong>开发者替身正在开工</strong>
+            <p>群聊里的问题会被拆成日志、代码、知识库和反馈复盘；控制台负责把每个会话的现场状态收拢到一个工作台。</p>
+            <div class="office-tags">
+              <span class="office-tag"><svg class="icon"><use href="#i-message"></use></svg>接收问题</span>
+              <span class="office-tag"><svg class="icon"><use href="#i-database"></use></svg>读取证据</span>
+              <span class="office-tag"><svg class="icon"><use href="#i-thumbs"></use></svg>复盘改进</span>
+            </div>
+          </div>
+          <div class="office-floor" aria-live="polite">
+            <div id="office-workers" class="office-workers"></div>
+            <div id="office-status">等待会话进入办公室</div>
+          </div>
+        </div>
         <div class="summary-grid" aria-label="运行概览">
           <div class="summary-item">
             <span class="summary-label"><svg class="icon sm"><use href="#i-shield"></use></svg>Bot 状态</span>
@@ -1133,11 +1430,11 @@ function renderConsoleHtml(): string {
           </div>
         </div>
         <div class="pipeline" aria-label="处理链路">
-          <span>飞书消息</span><svg class="icon sm"><use href="#i-radio"></use></svg>
-          <span>daemon 路由</span><svg class="icon sm"><use href="#i-activity"></use></svg>
-          <span>traex PTY</span><svg class="icon sm"><use href="#i-terminal"></use></svg>
-          <span>分析卡</span><svg class="icon sm"><use href="#i-message"></use></svg>
-          <span>反馈闭环</span>
+          <span class="pipeline-step"><svg class="icon"><use href="#i-radio"></use></svg>飞书消息</span>
+          <span class="pipeline-step"><svg class="icon"><use href="#i-activity"></use></svg>daemon 路由</span>
+          <span class="pipeline-step"><svg class="icon"><use href="#i-terminal"></use></svg>traex PTY</span>
+          <span class="pipeline-step"><svg class="icon"><use href="#i-message"></use></svg>分析卡</span>
+          <span class="pipeline-step"><svg class="icon"><use href="#i-thumbs"></use></svg>反馈闭环</span>
         </div>
       </header>
     </section>
@@ -1412,6 +1709,8 @@ function renderConsoleHtml(): string {
     const observerSessions = document.querySelector('#observer-sessions');
     const observerChats = document.querySelector('#observer-chats');
     const observerTerminal = document.querySelector('#observer-terminal');
+      const officeWorkers = document.querySelector('#office-workers');
+      const officeStatus = document.querySelector('#office-status');
       const summaryBot = document.querySelector('#summary-bot');
       const summaryChats = document.querySelector('#summary-chats');
       const summarySessions = document.querySelector('#summary-sessions');
@@ -1454,6 +1753,7 @@ function renderConsoleHtml(): string {
         ? '待处理 ' + openFeedbacks + '，差评 ' + negativeFeedbacks
         : '暂无反馈';
       observerTerminal.textContent = activeSessions ? '可进入' : '等待会话';
+      renderOffice();
     }
 
     async function loadModels() {
@@ -1576,6 +1876,62 @@ function renderConsoleHtml(): string {
       if (!value) return '-';
       const date = new Date(value);
       return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+    }
+
+    function formatDuration(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return '刚开始';
+      const minutes = Math.floor(ms / 60000);
+      if (minutes < 1) return '刚开始';
+      if (minutes < 60) return minutes + ' 分钟';
+      const hours = Math.floor(minutes / 60);
+      const restMinutes = minutes % 60;
+      if (hours < 24) return hours + ' 小时' + (restMinutes ? ' ' + restMinutes + ' 分钟' : '');
+      const days = Math.floor(hours / 24);
+      const restHours = hours % 24;
+      return days + ' 天' + (restHours ? ' ' + restHours + ' 小时' : '');
+    }
+
+    function renderOffice() {
+      if (!officeWorkers || !officeStatus) return;
+      const active = latestSessions.filter((session) => session.status === 'active');
+      if (!active.length) {
+        officeWorkers.innerHTML = '<div class="office-empty">办公室暂时没人加班，新的飞书话题会自动变成员工工位。</div>';
+        officeStatus.textContent = '等待会话进入办公室';
+        return;
+      }
+      const now = Date.now();
+      const visible = active.slice(0, 6);
+      const slowCount = active.filter((session) => {
+        const workingSince = Date.parse(session.turnStartedAt || '');
+        return session.runtimeStatus === 'busy' && Number.isFinite(workingSince) && now - workingSince >= 3 * 60 * 1000;
+      }).length;
+      officeWorkers.innerHTML = visible.map((session) => {
+        const workingSince = Date.parse(session.turnStartedAt || '');
+        const working = Number.isFinite(workingSince) ? now - workingSince : 0;
+        const busy = session.runtimeStatus === 'busy';
+        const slow = busy && working >= 3 * 60 * 1000;
+        const workerName = session.title || session.createdByDisplayName || session.createdByName || session.sessionId;
+        const meta = compact(session.chatName || session.chatId || '群聊', 18);
+        return '<article class="worker-card ' + (slow ? 'slow' : '') + '" data-session="' + esc(session.sessionId) + '">' +
+          '<div class="worker-time" title="' + esc(busy ? '本轮问题处理时长' : '当前没有正在处理的问题') + '">' + esc(busy ? '等 ' + formatDuration(working) : '待命') + '</div>' +
+          '<div class="worker-scene" aria-hidden="true">' +
+            '<div class="worker-avatar">' +
+              '<span class="worker-head"></span>' +
+              '<span class="worker-body"></span>' +
+              '<span class="worker-screen"></span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="worker-name" title="' + esc(workerName) + '">' + esc(compact(workerName, 18)) + '</div>' +
+          '<div class="worker-meta" title="按当前 runtime 状态判断">' + esc(meta) + ' · ' + esc(busy ? (slow ? '超过 3 分钟' : '处理中') : '在办公室') + '</div>' +
+          '<div class="worker-actions">' +
+            '<button type="button" class="' + (slow ? 'danger' : 'ghost') + '" data-office-nudge="' + esc(session.sessionId) + '" aria-label="敲打 ' + esc(workerName) + '" title="只触发控制台提醒动画，不会影响会话运行"' + (slow ? '' : ' disabled') + '>' +
+              '<svg class="icon sm"><use href="#i-activity"></use></svg>' + (slow ? '敲打' : (busy ? '处理中' : '待命')) +
+            '</button>' +
+          '</div>' +
+        '</article>';
+      }).join('');
+      const busyCount = active.filter((session) => session.runtimeStatus === 'busy').length;
+      officeStatus.textContent = active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '') + (active.length > visible.length ? '，其余在会话表' : '');
     }
 
     function statusText(value) {
@@ -1741,6 +2097,24 @@ function renderConsoleHtml(): string {
       }
     });
 
+    officeWorkers?.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-office-nudge]');
+      if (!button) return;
+      const id = button.dataset.officeNudge;
+      const card = id ? officeWorkers.querySelector('[data-session="' + CSS.escape(id) + '"]') : null;
+      const session = latestSessions.find((item) => item.sessionId === id);
+      if (!card || !session) return;
+      card.classList.remove('office-nudged');
+      void card.offsetWidth;
+      card.classList.add('office-nudged');
+      button.textContent = '已敲打';
+      officeStatus.textContent = '已敲打 ' + compact(session.title || session.sessionId, 22) + '，只是控制台动画，不会打断任务。';
+      window.setTimeout(() => {
+        card.classList.remove('office-nudged');
+        renderOffice();
+      }, 900);
+    });
+
     refreshSessions.addEventListener('click', () => {
       loadSessions().catch((error) => alert('刷新失败：' + error.message));
     });
@@ -1889,6 +2263,7 @@ function renderConsoleHtml(): string {
     loadFeedbacks().catch((error) => {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
+    window.setInterval(renderOffice, 30000);
   </script>
 </body>
 </html>`;

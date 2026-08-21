@@ -143,8 +143,17 @@ export class ConversationManager {
     await this.persist();
   }
 
-  listSessions(): Session[] {
-    return [...this.sessions.values()].sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+  listSessions(): Array<Session & { runtimeStatus?: Runtime['status']; turnStartedAt?: string }> {
+    return [...this.sessions.values()]
+      .map((session) => {
+        const runtime = this.runtimes.get(session.sessionId);
+        return {
+          ...session,
+          runtimeStatus: runtime?.status,
+          turnStartedAt: runtime?.turnStartedAtMs ? new Date(runtime.turnStartedAtMs).toISOString() : undefined,
+        };
+      })
+      .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
   }
 
   getSession(sessionId: string): Session | undefined {
