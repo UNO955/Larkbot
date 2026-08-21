@@ -796,6 +796,18 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     button:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
     button:focus-visible { outline: 0; box-shadow: 0 0 0 3px oklch(55% 0.18 258 / .18); }
     button:disabled { opacity: .55; cursor: not-allowed; }
+    button.is-success {
+      border-color: oklch(72% 0.12 150);
+      background: var(--success-soft);
+      color: var(--success);
+      box-shadow: none;
+    }
+    button.is-danger-state {
+      border-color: oklch(62% 0.19 24 / .36);
+      background: var(--danger-soft);
+      color: var(--danger);
+      box-shadow: none;
+    }
     #status { color: var(--text-soft); font-size: 13px; }
     .warn { display: flex; align-items: flex-start; gap: 8px; background: var(--warning-soft); color: var(--warning); border: 1px solid oklch(87% 0.075 78); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; line-height: 1.5; }
     .warn .icon { margin-top: 2px; }
@@ -823,6 +835,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .context-line strong { color: var(--text); font-weight: 800; }
     .feedback-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .feedback-controls select { width: auto; min-width: 124px; height: 34px; }
+    .session-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .session-controls select { width: auto; min-width: 124px; height: 34px; }
     .feedback-stats { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 28px 16px; }
     .feedback-stat { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; background: var(--surface-tint); color: var(--text-soft); border: 1px solid var(--border); padding: 5px 10px; font-size: 12px; font-weight: 800; }
     .feedback-stat.negative { background: var(--danger-soft); color: var(--danger); border-color: oklch(62% 0.19 24 / .22); }
@@ -861,7 +875,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       .row, .prompt-head { grid-template-columns: 1fr; }
       .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toolbar { align-items: flex-start; flex-direction: column; }
+      .session-controls { width: 100%; }
+      .session-controls select,
+      .session-controls button { flex: 1 1 150px; }
       .toolbar button { width: 100%; }
+      .session-controls button { width: auto; }
     }
     @media (max-width: 480px) {
       .summary-grid { grid-template-columns: 1fr; }
@@ -981,6 +999,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .workspace-header h1 { font-size: 30px; letter-spacing: 0; }
     .workspace-copy { margin: 8px 0 0; color: var(--text-soft); line-height: 1.6; max-width: 760px; }
     .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .page-status {
+      min-width: 90px;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 750;
+      text-align: right;
+    }
+    .page-status.error { color: var(--danger); }
     .page-overview #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
@@ -1486,6 +1512,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           <p class="workspace-copy">${escapeHtml(pageMeta.copy)}</p>
         </div>
         <div class="header-actions">
+          <span id="page-status" class="page-status"></span>
           <button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
           <button id="top-save" type="submit" form="bot-form"><svg class="icon sm"><use href="#i-save"></use></svg>保存</button>
         </div>
@@ -1694,7 +1721,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           </div>
           <div class="sub">查看飞书话题到 traex 原生会话的路由。关闭会杀掉正在运行的 runtime，删除会移除路由记录。</div>
         </div>
-        <button id="refresh-sessions" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        <div class="session-controls">
+          <select id="session-filter" aria-label="筛选会话状态">
+            <option value="">全部会话</option>
+            <option value="active">活跃会话</option>
+            <option value="closed">已关闭会话</option>
+          </select>
+          <button id="refresh-sessions" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        </div>
       </div>
       <div class="sessions">
         <table class="session-table">
@@ -1783,9 +1817,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
   <script>
     const form = document.querySelector('#bot-form');
     const status = document.querySelector('#status');
+    const pageStatus = document.querySelector('#page-status');
     const save = document.querySelector('#save');
     const sessionsBody = document.querySelector('#sessions-body');
     const refreshSessions = document.querySelector('#refresh-sessions');
+    const sessionFilter = document.querySelector('#session-filter');
     const chatsBody = document.querySelector('#chats-body');
     const refreshChats = document.querySelector('#refresh-chats');
     const feedbacksBody = document.querySelector('#feedbacks-body');
@@ -1819,8 +1855,63 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let activePromptId = '';
 
     function setStatus(text, failed = false) {
-      status.textContent = text;
-      status.style.color = failed ? 'var(--danger)' : 'var(--text-soft)';
+      if (status) {
+        status.textContent = text;
+        status.style.color = failed ? 'var(--danger)' : 'var(--text-soft)';
+      }
+      if (pageStatus) {
+        pageStatus.textContent = text;
+        pageStatus.classList.toggle('error', failed);
+      }
+    }
+
+    function buttonText(button) {
+      return button?.dataset?.idleText || button?.textContent?.trim() || '';
+    }
+
+    function setButtonText(button, text) {
+      if (!button || !text) return;
+      let textNode = [...button.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+      if (!textNode) {
+        textNode = document.createTextNode('');
+        button.appendChild(textNode);
+      }
+      textNode.textContent = text;
+    }
+
+    async function withButtonFeedback(button, labels, task) {
+      if (!button) return task();
+      if (!button.dataset.idleText) button.dataset.idleText = buttonText(button);
+      const idleText = button.dataset.idleText || labels.idle || '完成';
+      button.disabled = true;
+      button.classList.remove('is-success', 'is-danger-state');
+      button.setAttribute('aria-busy', 'true');
+      setButtonText(button, labels.loading || '处理中');
+      try {
+        const result = await task();
+        if (labels.success) {
+          button.classList.add('is-success');
+          setButtonText(button, labels.success);
+          window.setTimeout(() => {
+            button.classList.remove('is-success');
+            setButtonText(button, idleText);
+          }, 900);
+        } else {
+          setButtonText(button, idleText);
+        }
+        return result;
+      } catch (error) {
+        button.classList.add('is-danger-state');
+        setButtonText(button, labels.failure || '失败');
+        window.setTimeout(() => {
+          button.classList.remove('is-danger-state');
+          setButtonText(button, idleText);
+        }, 1400);
+        throw error;
+      } finally {
+        button.disabled = false;
+        button.setAttribute('aria-busy', 'false');
+      }
     }
 
     function updateSummary() {
@@ -2074,17 +2165,21 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       return parts.join('');
     }
 
-    async function loadSessions() {
-      const res = await fetch('/api/sessions');
-      if (!res.ok) throw new Error(await res.text());
-      const { sessions } = await res.json();
-      latestSessions = Array.isArray(sessions) ? sessions : [];
-      updateSummary();
-      if (!sessions.length) {
+    function renderSessions() {
+      const statusFilter = sessionFilter?.value || '';
+      const visibleSessions = statusFilter
+        ? latestSessions.filter((session) => session.status === statusFilter)
+        : latestSessions;
+      if (!latestSessions.length) {
         sessionsBody.innerHTML = '<tr><td colspan="8"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无会话</span></td></tr>';
         return;
       }
-      sessionsBody.innerHTML = sessions.map((s) => {
+      if (!visibleSessions.length) {
+        const label = statusFilter === 'active' ? '活跃会话' : statusFilter === 'closed' ? '已关闭会话' : '会话';
+        sessionsBody.innerHTML = '<tr><td colspan="8"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无' + esc(label) + '</span></td></tr>';
+        return;
+      }
+      sessionsBody.innerHTML = visibleSessions.map((s) => {
         const closed = s.status === 'closed';
         return '<tr>' +
           '<td><span class="line"><strong>' + esc(s.title || s.sessionId) + '</strong></span><span class="line muted"><code>' + esc(s.sessionId) + '</code></span></td>' +
@@ -2100,6 +2195,15 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           '</div></td>' +
         '</tr>';
       }).join('');
+    }
+
+    async function loadSessions() {
+      const res = await fetch('/api/sessions');
+      if (!res.ok) throw new Error(await res.text());
+      const { sessions } = await res.json();
+      latestSessions = Array.isArray(sessions) ? sessions : [];
+      updateSummary();
+      renderSessions();
     }
 
     async function loadChats() {
@@ -2173,18 +2277,23 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       const id = button.dataset.session;
       const action = button.dataset.action;
       if (action === 'delete' && !confirm('删除这个会话路由？这不会删除 traex 原生日志，但会让 larkbot 忘记这条飞书话题映射。')) return;
-      button.disabled = true;
       try {
-        const res = await fetch('/api/sessions/' + encodeURIComponent(id), {
-          method: action === 'close' ? 'PATCH' : 'DELETE',
-          headers: { 'content-type': 'application/json' },
-          body: action === 'close' ? JSON.stringify({ status: 'closed' }) : undefined,
+        await withButtonFeedback(button, {
+          loading: action === 'close' ? '关闭中' : '删除中',
+          success: action === 'close' ? '已关闭' : '已删除',
+          failure: '失败',
+        }, async () => {
+          const res = await fetch('/api/sessions/' + encodeURIComponent(id), {
+            method: action === 'close' ? 'PATCH' : 'DELETE',
+            headers: { 'content-type': 'application/json' },
+            body: action === 'close' ? JSON.stringify({ status: 'closed' }) : undefined,
+          });
+          if (!res.ok) throw new Error(await res.text());
+          await loadSessions();
         });
-        if (!res.ok) throw new Error(await res.text());
-        await loadSessions();
+        setStatus(action === 'close' ? '会话已关闭' : '会话已删除');
       } catch (error) {
-        alert('操作失败：' + error.message);
-        button.disabled = false;
+        setStatus('操作失败：' + error.message, true);
       }
     });
 
@@ -2207,7 +2316,13 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
 
     refreshSessions.addEventListener('click', () => {
-      loadSessions().catch((error) => alert('刷新失败：' + error.message));
+      withButtonFeedback(refreshSessions, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadSessions)
+        .then(() => setStatus('会话已刷新'))
+        .catch((error) => setStatus('刷新失败：' + error.message, true));
+    });
+
+    sessionFilter?.addEventListener('change', () => {
+      renderSessions();
     });
 
     chatsBody.addEventListener('click', async (event) => {
@@ -2216,29 +2331,37 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       const chatId = button.dataset.chat;
       const enabled = button.dataset.enabled === 'true';
       if (!enabled && !confirm('停用这个群聊？群内非 Owner 用户将不能继续使用 bot。')) return;
-      button.disabled = true;
       try {
-        const res = await fetch('/api/chats/' + encodeURIComponent(chatId), {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ enabled }),
+        await withButtonFeedback(button, {
+          loading: enabled ? '启用中' : '停用中',
+          success: enabled ? '已启用' : '已停用',
+          failure: '失败',
+        }, async () => {
+          const res = await fetch('/api/chats/' + encodeURIComponent(chatId), {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          await loadChats();
         });
-        if (!res.ok) throw new Error(await res.text());
-        await loadChats();
+        setStatus(enabled ? '群聊已启用' : '群聊已停用');
       } catch (error) {
-        alert('操作失败：' + error.message);
-        button.disabled = false;
+        setStatus('操作失败：' + error.message, true);
       }
     });
 
     refreshChats.addEventListener('click', () => {
-      loadChats().catch((error) => alert('刷新失败：' + error.message));
+      withButtonFeedback(refreshChats, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadChats)
+        .then(() => setStatus('群聊已刷新'))
+        .catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
     feedbacksBody.addEventListener('change', async (event) => {
       const select = event.target.closest('select[data-feedback-status]');
       if (!select) return;
       select.disabled = true;
+      const nextText = feedbackStatusText(select.value);
       try {
         const res = await fetch('/api/feedbacks/' + encodeURIComponent(select.dataset.feedbackStatus), {
           method: 'PATCH',
@@ -2246,9 +2369,10 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           body: JSON.stringify({ status: select.value }),
         });
         if (!res.ok) throw new Error(await res.text());
+        setStatus('反馈状态已更新为 ' + nextText);
         await loadFeedbacks();
       } catch (error) {
-        alert('更新反馈状态失败：' + error.message);
+        setStatus('更新反馈状态失败：' + error.message, true);
         await loadFeedbacks().catch(() => undefined);
       }
     });
@@ -2259,56 +2383,63 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         const feedbackId = saveNote.dataset.feedbackSaveNote;
         const textarea = [...feedbacksBody.querySelectorAll('textarea[data-feedback-note]')]
           .find((item) => item.dataset.feedbackNote === feedbackId);
-        saveNote.disabled = true;
         try {
-          const res = await fetch('/api/feedbacks/' + encodeURIComponent(feedbackId), {
-            method: 'PATCH',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ reviewNote: textarea ? textarea.value : '' }),
+          await withButtonFeedback(saveNote, { loading: '保存中', success: '已保存', failure: '失败' }, async () => {
+            const res = await fetch('/api/feedbacks/' + encodeURIComponent(feedbackId), {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ reviewNote: textarea ? textarea.value : '' }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            await loadFeedbacks();
           });
-          if (!res.ok) throw new Error(await res.text());
-          await loadFeedbacks();
+          setStatus('复盘备注已保存');
         } catch (error) {
-          alert('保存复盘备注失败：' + error.message);
-          saveNote.disabled = false;
+          setStatus('保存复盘备注失败：' + error.message, true);
         }
         return;
       }
       const button = event.target.closest('button[data-feedback-delete]');
       if (!button) return;
       if (!confirm('删除这条反馈记录？')) return;
-      button.disabled = true;
       try {
-        const res = await fetch('/api/feedbacks/' + encodeURIComponent(button.dataset.feedbackDelete), { method: 'DELETE' });
-        if (!res.ok) throw new Error(await res.text());
-        await loadFeedbacks();
+        await withButtonFeedback(button, { loading: '删除中', success: '已删除', failure: '失败' }, async () => {
+          const res = await fetch('/api/feedbacks/' + encodeURIComponent(button.dataset.feedbackDelete), { method: 'DELETE' });
+          if (!res.ok) throw new Error(await res.text());
+          await loadFeedbacks();
+        });
+        setStatus('反馈已删除');
       } catch (error) {
-        alert('删除反馈失败：' + error.message);
-        button.disabled = false;
+        setStatus('删除反馈失败：' + error.message, true);
       }
     });
 
     refreshFeedbacks.addEventListener('click', () => {
-      loadFeedbacks().catch((error) => alert('刷新反馈失败：' + error.message));
+      withButtonFeedback(refreshFeedbacks, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadFeedbacks)
+        .then(() => setStatus('反馈已刷新'))
+        .catch((error) => setStatus('刷新反馈失败：' + error.message, true));
     });
 
     refreshAll.addEventListener('click', () => {
-      Promise.all([
+      withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => Promise.all([
         loadBot(),
         loadModels(),
         loadChats(),
         loadSessions(),
         loadFeedbacks(),
-      ]).catch((error) => alert('刷新失败：' + error.message));
+      ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
     feedbackFilter.addEventListener('change', () => {
-      loadFeedbacks().catch((error) => alert('筛选反馈失败：' + error.message));
+      setStatus('筛选中…');
+      loadFeedbacks()
+        .then(() => setStatus('筛选完成'))
+        .catch((error) => setStatus('筛选反馈失败：' + error.message, true));
     });
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      save.disabled = true;
+      const submitButton = event.submitter?.matches?.('button') ? event.submitter : save;
       setStatus('保存中…');
         syncPromptEditorToState();
       const payload = {
@@ -2326,19 +2457,19 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           activeSystemPromptProfileId: activePromptId,
       };
       try {
-        const res = await fetch('/api/bot', {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
+        await withButtonFeedback(submitButton, { loading: '保存中', success: '已保存', failure: '失败' }, async () => {
+          const res = await fetch('/api/bot', {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          form.appSecret.value = '';
+          await loadBot();
         });
-        if (!res.ok) throw new Error(await res.text());
-        form.appSecret.value = '';
-        await loadBot();
         setStatus('已保存');
       } catch (error) {
         setStatus('保存失败：' + error.message, true);
-      } finally {
-        save.disabled = false;
       }
     });
 
@@ -2801,6 +2932,26 @@ function renderOfficeHtml(): string {
     const worktimeNote = document.querySelector('#worktime-note');
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const slowMs = 3 * 60 * 1000;
+    const pokeLines = {
+      idle: [
+        '点名收到，椅子已经摆正。',
+        '空闲工位抬头：随时开工。',
+        '他看了看队列：现在可以接活。',
+        '杯子归位，键盘待命。',
+      ],
+      busy: [
+        '别急，他正在敲键盘。',
+        '屏幕亮着，脑子也在转。',
+        '收到催办，手速 +1。',
+        '他比了个 OK，继续推进。',
+      ],
+      slow: [
+        '叩叩！慢工位收到加急。',
+        '他抬头看了一眼，进度条往前挪。',
+        '已拍灯牌：这单优先看。',
+        '办公室广播：慢任务加速中。',
+      ],
+    };
     let latestSessions = [];
     let selectedId = '';
     let refreshOkTimer = 0;
@@ -2814,6 +2965,11 @@ function renderOfficeHtml(): string {
     function compact(value, len) {
       const text = String(value ?? '').trim();
       return text.length > len ? text.slice(0, len - 1) + '…' : text;
+    }
+
+    function pickLine(state) {
+      const lines = pokeLines[state] || pokeLines.idle;
+      return lines[Math.floor(Math.random() * lines.length)];
     }
 
     function updateClock() {
@@ -2991,8 +3147,8 @@ function renderOfficeHtml(): string {
       chair: new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.58 }),
       laptop: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 }),
       screenOff: new THREE.MeshStandardMaterial({ color: 0x05070d, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.35 }),
-      screenOn: new THREE.MeshStandardMaterial({ color: 0x86d7ff, emissive: 0x2563eb, emissiveIntensity: 0.28, roughness: 0.2 }),
-      screenLine: new THREE.MeshBasicMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.82 }),
+      screenOn: new THREE.MeshBasicMaterial({ color: 0x5ecbff, side: THREE.DoubleSide }),
+      screenLine: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false }),
       wall: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 }),
       prop: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.78 }),
     };
@@ -3112,39 +3268,47 @@ function renderOfficeHtml(): string {
       laptop.castShadow = true;
       group.add(laptop);
 
-      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.026), materials.screenOff.clone());
-      screen.position.set(0.25, 0.9, -0.258);
-      screen.rotation.x = -0.35;
-      group.add(screen);
+      const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.38, 0.035), materials.laptop);
+      screenFrame.position.set(0.25, 0.91, -0.258);
+      screenFrame.rotation.x = -0.35;
+      screenFrame.castShadow = true;
+      group.add(screenFrame);
+
+      const screenFace = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.31), materials.screenOff.clone());
+      screenFace.position.set(0.25, 0.918, -0.205);
+      screenFace.rotation.x = -0.35;
+      screenFace.renderOrder = 2;
+      group.add(screenFace);
       const screenLines = [];
       for (let i = 0; i < 3; i += 1) {
-        const line = new THREE.Mesh(new THREE.BoxGeometry(0.25 - i * 0.04, 0.018, 0.012), materials.screenLine.clone());
-        line.position.set(0.18 + i * 0.035, 0.93 - i * 0.07, -0.284);
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(0.3 - i * 0.045, 0.026), materials.screenLine.clone());
+        line.position.set(0.17 + i * 0.04, 0.972 - i * 0.075, -0.197);
         line.rotation.x = -0.35;
+        line.renderOrder = 3;
         line.visible = false;
         group.add(line);
         screenLines.push(line);
       }
 
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.34, 6, 12), materials.body);
-      body.position.set(0.25, 0.84, 0.24);
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.3, 6, 12), materials.body);
+      body.position.set(0.25, 0.8, 0.24);
       body.castShadow = true;
       body.userData.pickable = true;
       group.add(body);
 
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.085, 0.055), materials.idleStripe);
-      stripe.position.set(0.25, 0.94, 0.46);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.075, 0.052), materials.idleStripe);
+      stripe.position.set(0.25, 0.89, 0.45);
       stripe.castShadow = true;
       group.add(stripe);
 
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 24, 16), materials.head);
-      head.position.set(0.25, 1.22, 0.24);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 24, 16), materials.head);
+      head.position.set(0.25, 1.14, 0.24);
       head.castShadow = true;
       head.userData.pickable = true;
       group.add(head);
 
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.48, 12), materials.head);
-      arm.position.set(0.34, 0.88, -0.04);
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.42, 12), materials.head);
+      arm.position.set(0.34, 0.84, -0.04);
       arm.rotation.z = -1.05;
       arm.rotation.x = 0.6;
       arm.castShadow = true;
@@ -3152,13 +3316,13 @@ function renderOfficeHtml(): string {
 
       const labelMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('待命', 'idle'), transparent: true });
       const label = new THREE.Sprite(labelMaterial);
-      label.position.set(0.25, 1.72, 0.24);
-      label.scale.set(1.28, 0.42, 1);
+      label.position.set(0.25, 1.58, 0.24);
+      label.scale.set(1.2, 0.4, 1);
       group.add(label);
 
       const reactionMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('马上！', 'slow'), transparent: true, opacity: 0 });
       const reaction = new THREE.Sprite(reactionMaterial);
-      reaction.position.set(0.72, 2.08, 0.28);
+      reaction.position.set(0.7, 1.92, 0.28);
       reaction.scale.set(1.05, 0.36, 1);
       group.add(reaction);
 
@@ -3166,12 +3330,12 @@ function renderOfficeHtml(): string {
         new THREE.SphereGeometry(0.07, 16, 10),
         new THREE.MeshStandardMaterial({ color: 0xf472b6, emissive: 0xbe185d, emissiveIntensity: 0.15, roughness: 0.35 })
       );
-      pop.position.set(0.74, 1.38, 0.24);
+      pop.position.set(0.72, 1.28, 0.24);
       pop.visible = false;
       group.add(pop);
       group.userData.body = body;
       group.userData.stripe = stripe;
-      group.userData.screen = screen;
+      group.userData.screen = screenFace;
       group.userData.screenLines = screenLines;
       group.userData.arm = arm;
       group.userData.label = label;
@@ -3194,6 +3358,17 @@ function renderOfficeHtml(): string {
       group.userData.labelMaterial.map = makeLabelTexture(text, tone);
       group.userData.labelMaterial.needsUpdate = true;
       oldMap?.dispose();
+    }
+
+    function showReaction(group, text, tone) {
+      const reaction = group.userData.reaction;
+      if (!reaction) return;
+      const oldMap = group.userData.reactionMaterial.map;
+      group.userData.reactionMaterial.map = makeLabelTexture(text, tone);
+      group.userData.reactionMaterial.needsUpdate = true;
+      oldMap?.dispose();
+      reaction.scale.set(Math.max(0.9, Math.min(1.65, text.length * 0.12)), 0.36, 1);
+      group.userData.nudgeUntil = performance.now() + (tone === 'slow' ? 1500 : 1050);
     }
 
     function layoutPosition(index, total) {
@@ -3256,6 +3431,7 @@ function renderOfficeHtml(): string {
         const busy = session.runtimeStatus === 'busy';
         const slow = busy && working >= slowMs;
         group.userData.slow = slow;
+        group.userData.state = slow ? 'slow' : busy ? 'busy' : 'idle';
         group.userData.screenBusy = busy;
         group.userData.title = session.title || session.sessionId;
         group.userData.stripe.material = slow ? materials.slowStripe : busy ? materials.busyStripe : materials.idleStripe;
@@ -3275,7 +3451,7 @@ function renderOfficeHtml(): string {
       const payload = await res.json();
       latestSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
       renderWorkers();
-      if (manual) setRefreshState('success', '已刷新：' + new Date().toLocaleTimeString('zh-CN', { hour12: false }));
+      if (manual) setRefreshState('success', '已刷新');
     }
 
     function resize() {
@@ -3314,7 +3490,7 @@ function renderOfficeHtml(): string {
         group.position.y = nudge ? Math.abs(Math.sin(now / 52)) * 0.18 : 0;
         if (reaction) {
           reaction.material.opacity = nudge ? 1 : 0;
-          reaction.position.y = nudge ? 2.25 + Math.sin(now / 80) * 0.06 : 2.25;
+          reaction.position.y = nudge ? 1.92 + Math.sin(now / 80) * 0.06 : 1.92;
         }
         if (pop) {
           pop.visible = nudge;
@@ -3335,12 +3511,10 @@ function renderOfficeHtml(): string {
       const group = hit.object.parent;
       if (!group?.userData?.sessionId) return;
       selectedId = group.userData.sessionId;
-      if (group.userData.slow) {
-        group.userData.nudgeUntil = performance.now() + 1300;
-        statusEl.textContent = '叩叩！' + compact(group.userData.title, 24) + ' 抬头看了一眼，手速 +1。';
-      } else {
-        statusEl.textContent = compact(group.userData.title, 24) + ' 正在稳稳推进，先别催他。';
-      }
+      const state = group.userData.state || 'idle';
+      const line = pickLine(state);
+      showReaction(group, state === 'idle' ? '在岗' : state === 'busy' ? '收到' : '加急', state);
+      statusEl.textContent = compact(group.userData.title, 24) + '：' + line;
     });
 
     canvas.addEventListener('pointermove', (event) => {
@@ -3348,7 +3522,7 @@ function renderOfficeHtml(): string {
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObjects(clickable, false).find((item) => item.object.parent?.userData?.slow);
+      const hit = raycaster.intersectObjects(clickable, false).find((item) => item.object.parent?.userData?.sessionId);
       canvas.style.cursor = hit ? 'pointer' : 'default';
     });
 
