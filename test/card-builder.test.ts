@@ -28,6 +28,20 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('<at id="ou_123"></at>');
   });
 
+  it('完成态最终回答卡展示知识库参考资料', () => {
+    const card: any = buildTerminalCard({
+      body: '结论：按钮未下发。',
+      status: 'completed',
+      knowledge: {
+        references: [{ path: '知识库《猜答行业推全改造》', source: 'structured' }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    }).payload;
+    expect(card.elements[0].content).toBe('结论：按钮未下发。');
+    expect(card.elements[1].content).toContain('本轮参考资料');
+    expect(card.elements[1].content).toContain('知识库《猜答行业推全改造》');
+  });
+
   it('完成态识别 logid 后在底栏右侧展示 Argos 跳转', () => {
     const card: any = buildTerminalCard({
       body: '结论：服务端发送成功。\n\n证据：msg_id=7674844825229837873 已反查到 result_logid=021786939060271fdbddc0c00010106000000000000003625b880',

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
@@ -233,6 +234,14 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
     const url = new URL(req.url || '/', 'http://larkbot.local');
     if (req.method === 'GET' && url.pathname === '/') {
       sendHtml(res, renderConsoleHtml());
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/office') {
+      sendHtml(res, renderOfficeHtml());
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/vendor/three.module.js') {
+      await sendThreeModule(res);
       return;
     }
     const traceMatch = url.pathname.match(/^\/trace\/([^/]+)$/);
@@ -657,6 +666,16 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html);
 }
 
+async function sendThreeModule(res: ServerResponse): Promise<void> {
+  const moduleUrl = new URL('../../node_modules/three/build/three.module.js', import.meta.url);
+  const source = await readFile(moduleUrl, 'utf8');
+  res.writeHead(200, {
+    'content-type': 'text/javascript; charset=utf-8',
+    'cache-control': 'public, max-age=31536000, immutable',
+  });
+  res.end(source);
+}
+
 function writeSse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -692,6 +711,8 @@ function renderConsoleHtml(): string {
       --danger-soft: oklch(94% 0.045 24);
       --warning: oklch(54% 0.12 70);
       --warning-soft: oklch(96% 0.055 78);
+      --fun: oklch(63% 0.19 330);
+      --fun-soft: oklch(95% 0.045 330);
       --radius: 8px;
       --shadow-sm: 0 1px 2px oklch(24% 0.02 255 / .06);
       --shadow-md: 0 14px 36px oklch(24% 0.02 255 / .08);
@@ -1361,6 +1382,7 @@ function renderConsoleHtml(): string {
       </div>
       <nav class="side-nav">
         <a class="nav-item active" href="#region-health"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
+        <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="nav-item" href="#region-config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="#region-chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="nav-item" href="#region-feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -1395,22 +1417,6 @@ function renderConsoleHtml(): string {
         <span class="mini-stat"><svg class="icon sm"><use href="#i-radio"></use></svg>长连接模式</span>
         </div>
         <div class="sub">核心链路：飞书事件进入后，larkbot daemon 将消息路由到独立 traex PTY runtime，并把结果回传为卡片。</div>
-        <div class="office-banner" aria-label="办公室">
-          <div class="office-copy">
-            <span class="mini-stat"><svg class="icon sm"><use href="#i-terminal"></use></svg>办公室</span>
-            <strong>开发者替身正在开工</strong>
-            <p>群聊里的问题会被拆成日志、代码、知识库和反馈复盘；控制台负责把每个会话的现场状态收拢到一个工作台。</p>
-            <div class="office-tags">
-              <span class="office-tag"><svg class="icon"><use href="#i-message"></use></svg>接收问题</span>
-              <span class="office-tag"><svg class="icon"><use href="#i-database"></use></svg>读取证据</span>
-              <span class="office-tag"><svg class="icon"><use href="#i-thumbs"></use></svg>复盘改进</span>
-            </div>
-          </div>
-          <div class="office-floor" aria-live="polite">
-            <div id="office-workers" class="office-workers"></div>
-            <div id="office-status">等待会话进入办公室</div>
-          </div>
-        </div>
         <div class="summary-grid" aria-label="运行概览">
           <div class="summary-item">
             <span class="summary-label"><svg class="icon sm"><use href="#i-shield"></use></svg>Bot 状态</span>
@@ -2264,6 +2270,653 @@ function renderConsoleHtml(): string {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     window.setInterval(renderOffice, 30000);
+  </script>
+</body>
+</html>`;
+}
+
+function renderOfficeHtml(): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>办公室 · larkbot 控制台</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: oklch(97.4% 0.012 255);
+      --surface: oklch(100% 0 0);
+      --surface-soft: oklch(98.6% 0.01 255);
+      --surface-tint: oklch(96.5% 0.018 255);
+      --border: oklch(89.8% 0.014 255);
+      --border-strong: oklch(84.8% 0.02 255);
+      --text: oklch(24% 0.02 255);
+      --text-soft: oklch(44% 0.025 255);
+      --text-muted: oklch(59% 0.025 255);
+      --primary: oklch(55% 0.18 258);
+      --primary-hover: oklch(49% 0.18 258);
+      --primary-soft: oklch(93.5% 0.045 258);
+      --success: oklch(48% 0.13 150);
+      --success-soft: oklch(94% 0.055 150);
+      --danger: oklch(56% 0.18 24);
+      --danger-soft: oklch(94% 0.045 24);
+      --warning: oklch(54% 0.12 70);
+      --warning-soft: oklch(96% 0.055 78);
+      --radius: 8px;
+      --shadow-sm: 0 1px 2px oklch(24% 0.02 255 / .06);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    .icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; flex: 0 0 auto; }
+    .icon.sm { width: 14px; height: 14px; }
+    .console-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      background: var(--bg);
+    }
+    .console-sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      z-index: 5;
+    }
+    .brand-block { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 14px 30px oklch(55% 0.18 258 / .18);
+    }
+    .brand-name { margin: 0; font-size: 20px; line-height: 1.2; font-weight: 850; }
+    .brand-subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+    .side-status {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface-soft);
+    }
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      margin-top: 5px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 4px var(--success-soft);
+      flex: 0 0 auto;
+    }
+    .side-status strong { display: block; font-size: 13px; line-height: 1.4; }
+    .side-status span { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+    .side-nav { display: grid; gap: 6px; }
+    .nav-item {
+      min-height: 40px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: var(--radius);
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 750;
+    }
+    .nav-item.active,
+    .nav-item:hover { background: var(--primary-soft); color: var(--primary); }
+    .side-note {
+      margin-top: auto;
+      display: flex;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--bg);
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .side-note p { margin: 0; }
+    .office-workspace {
+      min-width: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .office-header {
+      min-height: 108px;
+      padding: 22px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklch, var(--bg) 82%, white);
+    }
+    .eyebrow { margin: 0 0 6px; color: var(--primary); font-size: 11px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.25; letter-spacing: 0; }
+    .office-copy { margin: 8px 0 0; color: var(--text-soft); line-height: 1.6; max-width: 760px; }
+    .office-stats { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .stat-pill {
+      min-height: 30px;
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text-soft);
+      font-size: 12px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .stat-pill.warn { background: var(--warning-soft); color: var(--warning); border-color: oklch(82% 0.08 78); }
+    .office-stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 20% 18%, oklch(97% 0.025 245), transparent 28%),
+        linear-gradient(180deg, oklch(99% 0.008 250), oklch(94% 0.018 245));
+    }
+    #office-canvas {
+      width: 100%;
+      height: 100%;
+      min-height: 520px;
+      display: block;
+      outline: 0;
+    }
+    .office-overlay {
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+      pointer-events: none;
+    }
+    #office-status {
+      max-width: min(680px, 100%);
+      padding: 10px 12px;
+      border: 1px solid oklch(100% 0 0 / .6);
+      border-radius: var(--radius);
+      background: oklch(100% 0 0 / .78);
+      color: var(--text-soft);
+      font-size: 13px;
+      line-height: 1.5;
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(10px);
+    }
+    .office-empty {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      color: var(--text-muted);
+      font-size: 14px;
+      text-align: center;
+      pointer-events: none;
+    }
+    .office-empty.visible { display: grid; }
+    button {
+      height: 36px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      padding: 0 16px;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      transition: background .15s ease, box-shadow .15s ease, transform .15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      white-space: nowrap;
+    }
+    button:hover { background: var(--surface-tint); transform: translateY(-1px); box-shadow: 0 8px 18px oklch(24% 0.02 255 / .08); }
+    @media (max-width: 820px) {
+      .console-shell { display: block; }
+      .console-sidebar { position: static; height: auto; }
+      .office-workspace { height: auto; min-height: 100vh; }
+      .office-header { flex-direction: column; align-items: flex-start; padding: 18px; }
+      .office-stats { justify-content: flex-start; }
+      #office-canvas { min-height: 620px; }
+      .office-overlay { left: 14px; right: 14px; bottom: 14px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4"/><path d="M8 4h8"/><rect x="5" y="8" width="14" height="11" rx="3"/><path d="M9 13h.01"/><path d="M15 13h.01"/><path d="M9 17h6"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.08V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.08-.4H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.08V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.08.4H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-5"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8-6-16-3 8H2"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3"/></symbol>
+  </svg>
+  <main class="console-shell">
+    <aside class="console-sidebar" aria-label="控制台导航">
+      <div class="brand-block">
+        <span class="brand-mark"><svg class="icon"><use href="#i-bot"></use></svg></span>
+        <div>
+          <p class="brand-name">larkbot</p>
+          <p class="brand-subtitle">Developer Stand-in</p>
+        </div>
+      </div>
+      <div class="side-status">
+        <span class="status-dot"></span>
+        <div>
+          <strong id="side-daemon-status">daemon 运行中</strong>
+          <span>飞书消息进入后由本地 traex runtime 接管执行。</span>
+        </div>
+      </div>
+      <nav class="side-nav">
+        <a class="nav-item" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
+        <a class="nav-item active" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
+        <a class="nav-item" href="/#region-config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
+        <a class="nav-item" href="/#region-chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
+        <a class="nav-item" href="/#region-feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
+        <a class="nav-item" href="/#region-sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
+      </nav>
+      <div class="side-note">
+        <svg class="icon sm"><use href="#i-shield"></use></svg>
+        <p>员工常驻对应活跃会话；慢工位点一下，办公室会立刻热闹起来。</p>
+      </div>
+    </aside>
+    <section class="office-workspace">
+      <header class="office-header">
+        <div>
+          <p class="eyebrow">Office floor</p>
+          <h1>办公室</h1>
+          <p class="office-copy">每个飞书话题会话是一名员工；待命说明人还在办公室，正在处理时会显示本轮等待时长。</p>
+        </div>
+        <div class="office-stats">
+          <span class="stat-pill"><svg class="icon sm"><use href="#i-users"></use></svg><span id="stat-employees">0 员工</span></span>
+          <span class="stat-pill"><svg class="icon sm"><use href="#i-activity"></use></svg><span id="stat-working">0 干活</span></span>
+          <span class="stat-pill warn"><svg class="icon sm"><use href="#i-terminal"></use></svg><span id="stat-slow">0 可敲打</span></span>
+        </div>
+      </header>
+      <div class="office-stage">
+        <canvas id="office-canvas" aria-label="三维办公室员工视图"></canvas>
+        <div id="office-empty" class="office-empty">办公室暂时空着。</div>
+        <div class="office-overlay">
+          <div id="office-status">办公室加载中</div>
+          <button id="refresh-office" type="button"><svg class="icon sm"><use href="#i-activity"></use></svg>刷新</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script type="module">
+    import * as THREE from '/vendor/three.module.js';
+
+    const canvas = document.querySelector('#office-canvas');
+    const statusEl = document.querySelector('#office-status');
+    const emptyEl = document.querySelector('#office-empty');
+    const statEmployees = document.querySelector('#stat-employees');
+    const statWorking = document.querySelector('#stat-working');
+    const statSlow = document.querySelector('#stat-slow');
+    const refreshOffice = document.querySelector('#refresh-office');
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const slowMs = 3 * 60 * 1000;
+    let latestSessions = [];
+    let selectedId = '';
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf5f7fb);
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+    camera.position.set(0, 7.2, 8.8);
+    camera.lookAt(0, 0, 0);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.8);
+    scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(4, 8, 5);
+    sun.castShadow = true;
+    scene.add(sun);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 14),
+      new THREE.MeshStandardMaterial({ color: 0xe8eef8, roughness: 0.82 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(18, 18, 0xb8c3d5, 0xd9e1ee);
+    grid.position.y = 0.01;
+    scene.add(grid);
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const workers = new Map();
+    const clickable = [];
+
+    const materials = {
+      idleBody: new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.55 }),
+      busyBody: new THREE.MeshStandardMaterial({ color: 0x4f7df3, roughness: 0.5 }),
+      slowBody: new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5 }),
+      head: new THREE.MeshStandardMaterial({ color: 0xf5c06f, roughness: 0.5 }),
+      desk: new THREE.MeshStandardMaterial({ color: 0x8aa2bd, roughness: 0.75 }),
+      laptop: new THREE.MeshStandardMaterial({ color: 0x263241, roughness: 0.45 }),
+      screen: new THREE.MeshStandardMaterial({ color: 0x8bd3ff, emissive: 0x1d4ed8, emissiveIntensity: 0.18, roughness: 0.25 }),
+    };
+
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]));
+    }
+
+    function compact(value, len) {
+      const text = String(value ?? '').trim();
+      return text.length > len ? text.slice(0, len - 1) + '…' : text;
+    }
+
+    function formatDuration(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return '刚开始';
+      const minutes = Math.floor(ms / 60000);
+      if (minutes < 1) return '刚开始';
+      if (minutes < 60) return minutes + ' 分钟';
+      const hours = Math.floor(minutes / 60);
+      const restMinutes = minutes % 60;
+      if (hours < 24) return hours + ' 小时' + (restMinutes ? ' ' + restMinutes + ' 分钟' : '');
+      const days = Math.floor(hours / 24);
+      const restHours = hours % 24;
+      return days + ' 天' + (restHours ? ' ' + restHours + ' 小时' : '');
+    }
+
+    function makeLabelTexture(text, tone) {
+      const c = document.createElement('canvas');
+      c.width = 384;
+      c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.fillStyle = tone === 'slow' ? '#fff7ed' : tone === 'busy' ? '#eff6ff' : '#f8fafc';
+      ctx.strokeStyle = tone === 'slow' ? '#d97706' : tone === 'busy' ? '#4f7df3' : '#94a3b8';
+      ctx.lineWidth = 4;
+      roundRect(ctx, 18, 24, 348, 68, 28);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#1f2937';
+      ctx.font = '700 30px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 192, 58);
+      const texture = new THREE.CanvasTexture(c);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function createWorker(session) {
+      const group = new THREE.Group();
+      group.userData.sessionId = session.sessionId;
+      group.userData.nudgeUntil = 0;
+
+      const desk = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.18, 0.72), materials.desk);
+      desk.position.set(0, 0.45, 0.04);
+      desk.castShadow = true;
+      desk.receiveShadow = true;
+      group.add(desk);
+
+      const laptop = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.36, 0.04), materials.laptop);
+      laptop.position.set(0.25, 0.76, -0.22);
+      laptop.rotation.x = -0.35;
+      laptop.castShadow = true;
+      group.add(laptop);
+
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.025), materials.screen);
+      screen.position.set(0.25, 0.77, -0.247);
+      screen.rotation.x = -0.35;
+      group.add(screen);
+
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.42, 6, 12), materials.idleBody);
+      body.position.set(-0.24, 0.88, 0.05);
+      body.castShadow = true;
+      body.userData.pickable = true;
+      group.add(body);
+
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 16), materials.head);
+      head.position.set(-0.24, 1.32, 0.05);
+      head.castShadow = true;
+      head.userData.pickable = true;
+      group.add(head);
+
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.52, 12), materials.head);
+      arm.position.set(0.02, 0.93, -0.12);
+      arm.rotation.z = -1.05;
+      arm.rotation.x = 0.6;
+      arm.castShadow = true;
+      group.add(arm);
+
+      const labelMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('待命', 'idle'), transparent: true });
+      const label = new THREE.Sprite(labelMaterial);
+      label.position.set(-0.24, 1.88, 0.05);
+      label.scale.set(1.35, 0.45, 1);
+      group.add(label);
+
+      const reactionMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('马上！', 'slow'), transparent: true, opacity: 0 });
+      const reaction = new THREE.Sprite(reactionMaterial);
+      reaction.position.set(0.32, 2.25, 0.12);
+      reaction.scale.set(1.05, 0.36, 1);
+      group.add(reaction);
+
+      const pop = new THREE.Mesh(
+        new THREE.SphereGeometry(0.07, 16, 10),
+        new THREE.MeshStandardMaterial({ color: 0xf472b6, emissive: 0xbe185d, emissiveIntensity: 0.15, roughness: 0.35 })
+      );
+      pop.position.set(0.34, 1.52, 0.08);
+      pop.visible = false;
+      group.add(pop);
+      group.userData.body = body;
+      group.userData.arm = arm;
+      group.userData.label = label;
+      group.userData.labelMaterial = labelMaterial;
+      group.userData.reaction = reaction;
+      group.userData.reactionMaterial = reactionMaterial;
+      group.userData.pop = pop;
+      group.traverse((object) => {
+        if (object.isMesh && object.userData.pickable) clickable.push(object);
+      });
+      scene.add(group);
+      return group;
+    }
+
+    function updateLabel(group, text, tone) {
+      if (group.userData.labelText === text && group.userData.labelTone === tone) return;
+      group.userData.labelText = text;
+      group.userData.labelTone = tone;
+      const oldMap = group.userData.labelMaterial.map;
+      group.userData.labelMaterial.map = makeLabelTexture(text, tone);
+      group.userData.labelMaterial.needsUpdate = true;
+      oldMap?.dispose();
+    }
+
+    function layoutPosition(index, total) {
+      const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(total))));
+      const rows = Math.ceil(total / cols);
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      return {
+        x: (col - (cols - 1) / 2) * 2.6,
+        z: (row - (rows - 1) / 2) * 2.15,
+      };
+    }
+
+    function renderWorkers() {
+      const active = latestSessions.filter((session) => session.status === 'active');
+      const activeIds = new Set(active.map((session) => session.sessionId));
+      for (const [id, group] of workers) {
+        if (!activeIds.has(id)) {
+          scene.remove(group);
+          group.traverse((object) => {
+            if (object.geometry) object.geometry.dispose();
+          });
+          workers.delete(id);
+        }
+      }
+      clickable.length = 0;
+      const now = Date.now();
+      let busyCount = 0;
+      let slowCount = 0;
+      active.slice(0, 16).forEach((session, index) => {
+        let group = workers.get(session.sessionId);
+        if (!group) {
+          group = createWorker(session);
+          workers.set(session.sessionId, group);
+        } else {
+          group.traverse((object) => {
+            if (object.isMesh && object.userData.pickable) clickable.push(object);
+          });
+        }
+        const pos = layoutPosition(index, Math.min(active.length, 16));
+        group.position.x += (pos.x - group.position.x) * 0.25;
+        group.position.z += (pos.z - group.position.z) * 0.25;
+        const workingSince = Date.parse(session.turnStartedAt || '');
+        const working = Number.isFinite(workingSince) ? now - workingSince : 0;
+        const busy = session.runtimeStatus === 'busy';
+        const slow = busy && working >= slowMs;
+        if (busy) busyCount += 1;
+        if (slow) slowCount += 1;
+        group.userData.slow = slow;
+        group.userData.title = session.title || session.sessionId;
+        group.userData.body.material = slow ? materials.slowBody : busy ? materials.busyBody : materials.idleBody;
+        updateLabel(group, busy ? '等 ' + formatDuration(working) : '待命', slow ? 'slow' : busy ? 'busy' : 'idle');
+      });
+      statEmployees.textContent = active.length + ' 员工';
+      statWorking.textContent = busyCount + ' 干活';
+      statSlow.textContent = slowCount + ' 可敲打';
+      emptyEl.classList.toggle('visible', active.length === 0);
+      statusEl.textContent = active.length
+        ? active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '')
+        : '办公室暂时空着。';
+    }
+
+    async function loadOffice() {
+      const res = await fetch('/api/sessions');
+      if (!res.ok) throw new Error(await res.text());
+      const payload = await res.json();
+      latestSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+      renderWorkers();
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(320, rect.width);
+      const height = Math.max(360, rect.height);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.position.set(0, width < 720 ? 8.2 : 7.2, width < 720 ? 10.5 : 8.8);
+      camera.updateProjectionMatrix();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      for (const group of workers.values()) {
+        const busy = group.userData.labelTone === 'busy' || group.userData.labelTone === 'slow';
+        const nudge = now < group.userData.nudgeUntil;
+        const pop = group.userData.pop;
+        const reaction = group.userData.reaction;
+        group.rotation.y = nudge ? Math.sin(now / 30) * 0.28 : 0;
+        group.userData.arm.rotation.z = nudge
+          ? -1.05 + Math.sin(now / 42) * 0.42
+          : busy && !prefersReducedMotion ? -1.05 + Math.sin(now / 190) * 0.16 : -1.05;
+        group.position.y = nudge ? Math.abs(Math.sin(now / 52)) * 0.18 : 0;
+        if (reaction) {
+          reaction.material.opacity = nudge ? 1 : 0;
+          reaction.position.y = nudge ? 2.25 + Math.sin(now / 80) * 0.06 : 2.25;
+        }
+        if (pop) {
+          pop.visible = nudge;
+          const pulse = nudge ? 1 + Math.abs(Math.sin(now / 65)) * 1.4 : 1;
+          pop.scale.setScalar(pulse);
+        }
+      }
+      renderer.render(scene, camera);
+    }
+
+    canvas.addEventListener('click', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(clickable, false)[0];
+      if (!hit) return;
+      const group = hit.object.parent;
+      if (!group?.userData?.sessionId) return;
+      selectedId = group.userData.sessionId;
+      if (group.userData.slow) {
+        group.userData.nudgeUntil = performance.now() + 1300;
+        statusEl.textContent = '叩叩！' + compact(group.userData.title, 24) + ' 抬头看了一眼，手速 +1。';
+      } else {
+        statusEl.textContent = compact(group.userData.title, 24) + ' 正在稳稳推进，先别催他。';
+      }
+    });
+
+    canvas.addEventListener('pointermove', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(clickable, false).find((item) => item.object.parent?.userData?.slow);
+      canvas.style.cursor = hit ? 'pointer' : 'default';
+    });
+
+    refreshOffice.addEventListener('click', () => {
+      loadOffice().catch((error) => {
+        statusEl.textContent = '刷新失败：' + error.message;
+      });
+    });
+    window.addEventListener('resize', resize);
+    resize();
+    animate();
+    loadOffice().catch((error) => {
+      statusEl.textContent = '加载失败：' + error.message;
+    });
+    window.setInterval(() => {
+      loadOffice().catch((error) => {
+        statusEl.textContent = '刷新失败：' + error.message;
+      });
+    }, 15000);
   </script>
 </body>
 </html>`;

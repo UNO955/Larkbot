@@ -23,7 +23,8 @@
     "@napi-rs/canvas": "^0.1.65",
     "@xterm/headless": "^6.0.0",
     "dotenv": "^17.3.1",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

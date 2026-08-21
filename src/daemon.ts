@@ -46,11 +46,11 @@ async function main(): Promise<void> {
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
-    post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature, replyToId, argosSource) => {
-      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource }), replyAnchorMessageId);
+    post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature, replyToId, argosSource, knowledge) => {
+      return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource, knowledge }), replyAnchorMessageId);
     },
-    patch: async (messageId, text, status, _replyToName, replySignature, replyToId, argosSource) => {
-      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource }));
+    patch: async (messageId, text, status, _replyToName, replySignature, replyToId, argosSource, knowledge) => {
+      await im.updateCard(messageId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource, knowledge }));
     },
     postTrace: async (threadId, traceUrl, interruptSessionId, status, replyAnchorMessageId, footer, knowledge) => {
       return im.sendCard(threadId, buildThinkingCard({ url: traceUrl, interruptSessionId, status, footer, knowledge }), replyAnchorMessageId);

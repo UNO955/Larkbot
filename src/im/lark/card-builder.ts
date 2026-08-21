@@ -19,6 +19,7 @@ export interface TerminalCardOpts {
   replyToId?: string;
   argosUrlTemplate?: string;
   argosSource?: string;
+  knowledge?: KnowledgeObservation;
 }
 
 export interface ThinkingCardOpts {
@@ -88,6 +89,13 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
   if (opts.status === 'completed') {
     const signature = completedFooter(opts.replySignature, opts.replyToId);
     const argosUrl = buildArgosUrl(opts.argosSource ?? opts.body, opts.argosUrlTemplate);
+    if (opts.knowledge) {
+      elements.push({
+        tag: 'markdown',
+        text_size: 'notation_small_v2',
+        content: `<font color='grey'>本轮参考资料：${escapeMarkdownText(knowledgeSummary(opts.knowledge))}</font>`,
+      });
+    }
     elements.push({ tag: 'hr' });
     elements.push(buildCompletedFooter(signature, argosUrl));
   }

@@ -75,8 +75,8 @@ export interface ConversationManagerDeps {
   cli: CliAdapter;
   store: SessionStore;
   spawnPty?: (command: string, args: string[], options: Parameters<typeof pty.spawn>[2]) => IPty;
-  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<string>;
-  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string): Promise<void>;
+  post(threadId: string, text: string, status: CardStatus, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string, knowledge?: KnowledgeObservation): Promise<string>;
+  patch(messageId: string, text: string, status: CardStatus, replyToName?: string, replySignature?: string, replyToId?: string, argosSource?: string, knowledge?: KnowledgeObservation): Promise<void>;
   postTrace(threadId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, replyAnchorMessageId?: string, footer?: string, knowledge?: KnowledgeObservation): Promise<string>;
   patchTrace(messageId: string, traceUrl: string, interruptSessionId: string, status: CardStatus, footer?: string, knowledge?: KnowledgeObservation): Promise<void>;
   notify(threadId: string, text: string, replyAnchorMessageId?: string): Promise<void>;
@@ -551,6 +551,7 @@ export class ConversationManager {
     const final = status === 'working' ? undefined : await this.waitForSessionFinal(runtime);
     const rawAnswer = final?.text || answer;
     const knowledge = status === 'working' ? undefined : extractKnowledgeObservation(trace, rawAnswer);
+    const answerCardKnowledge = knowledge?.references.length ? knowledge : undefined;
     const sourceAnswer = cleanAnswer(rawAnswer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
@@ -596,7 +597,8 @@ export class ConversationManager {
             runtime.currentReplySignature,
             runtime.currentReplyToId,
           ];
-          if (argosSource) postArgs.push(argosSource);
+          if (argosSource || answerCardKnowledge) postArgs.push(argosSource);
+          if (answerCardKnowledge) postArgs.push(answerCardKnowledge);
           runtime.answerCardMessageId = await this.deps.post(...postArgs);
           runtime.route.answerCardMessageId = runtime.answerCardMessageId;
           await this.persist();
@@ -609,7 +611,8 @@ export class ConversationManager {
             runtime.currentReplySignature,
             runtime.currentReplyToId,
           ];
-          if (argosSource) patchArgs.push(argosSource);
+          if (argosSource || answerCardKnowledge) patchArgs.push(argosSource);
+          if (answerCardKnowledge) patchArgs.push(answerCardKnowledge);
           await this.deps.patch(...patchArgs);
         }
         await this.persist();
