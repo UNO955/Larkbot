@@ -800,6 +800,243 @@ function renderConsoleHtml(): string {
     @media (max-width: 480px) {
       .summary-grid { grid-template-columns: 1fr; }
     }
+    .console-shell {
+      max-width: none;
+      min-height: 100vh;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      gap: 0;
+      background: var(--bg);
+    }
+    .console-sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      z-index: 5;
+    }
+    .brand-block { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 14px 30px oklch(55% 0.18 258 / .18);
+    }
+    .brand-name { margin: 0; font-size: 20px; line-height: 1.2; font-weight: 850; }
+    .brand-subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+    .side-status {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface-soft);
+    }
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      margin-top: 5px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 4px var(--success-soft);
+      flex: 0 0 auto;
+    }
+    .side-status strong { display: block; font-size: 13px; line-height: 1.4; }
+    .side-status span { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+    .side-nav { display: grid; gap: 6px; }
+    .nav-item {
+      min-height: 40px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: var(--radius);
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 750;
+    }
+    .nav-item.active,
+    .nav-item:hover {
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .side-note {
+      margin-top: auto;
+      display: flex;
+      gap: 10px;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--bg);
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .side-note p { margin: 0; }
+    .workspace {
+      min-width: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .workspace-header {
+      min-height: 108px;
+      padding: 22px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklch, var(--bg) 82%, white);
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .workspace-header h1 { font-size: 30px; letter-spacing: 0; }
+    .workspace-copy { margin: 8px 0 0; color: var(--text-soft); line-height: 1.6; max-width: 760px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .content-frame {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 22px 28px 30px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 336px;
+      gap: 20px;
+    }
+    .primary-column,
+    .observer-column {
+      min-width: 0;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+    .observer-column { position: sticky; top: 0; }
+    .overview-card header { background: var(--surface); }
+    .overview-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .pipeline {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      overflow-x: auto;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .pipeline span { color: var(--text); white-space: nowrap; }
+    .pipeline .icon { color: var(--primary); }
+    .side-panel {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .side-panel .toolbar {
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+    .side-panel h2 { font-size: 16px; }
+    .queue-list, .policy-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .queue-list li {
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .queue-index {
+      color: var(--primary);
+      font: 800 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .queue-list strong { display: block; font-size: 13px; }
+    .queue-list p { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+    .terminal-preview {
+      margin: 0;
+      max-height: 240px;
+      overflow: auto;
+      border-radius: var(--radius);
+      border: 1px solid oklch(29% 0.025 255);
+      background: oklch(22% 0.025 255);
+      color: oklch(91% 0.01 255);
+      padding: 14px;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .policy-list li {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .policy-list li:last-child { border-bottom: 0; padding-bottom: 0; }
+    .policy-list span { color: var(--text-muted); text-align: right; }
+    .mini-stat {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      width: fit-content;
+      min-height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+      color: var(--text-soft);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    @media (max-width: 1180px) {
+      .console-shell { grid-template-columns: 220px minmax(0, 1fr); }
+      .content-frame { grid-template-columns: 1fr; }
+      .observer-column { position: static; }
+    }
+    @media (max-width: 820px) {
+      .console-shell { display: block; }
+      .console-sidebar { position: static; height: auto; }
+      .workspace { height: auto; }
+      .workspace-header { flex-direction: column; align-items: flex-start; }
+      .content-frame { overflow: visible; padding: 16px; }
+      .header-actions { width: 100%; }
+      .header-actions button { flex: 1; }
+    }
   </style>
 </head>
 <body>
@@ -820,15 +1057,63 @@ function renderConsoleHtml(): string {
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></symbol>
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
   </svg>
-  <main>
-    <section class="card">
+  <main class="console-shell">
+    <aside class="console-sidebar" aria-label="控制台导航">
+      <div class="brand-block">
+        <span class="brand-mark"><svg class="icon"><use href="#i-bot"></use></svg></span>
+        <div>
+          <p class="brand-name">larkbot</p>
+          <p class="brand-subtitle">Developer Stand-in</p>
+        </div>
+      </div>
+      <div class="side-status">
+        <span class="status-dot"></span>
+        <div>
+          <strong id="side-daemon-status">daemon 运行中</strong>
+          <span>飞书消息进入后由本地 traex runtime 接管执行。</span>
+        </div>
+      </div>
+      <nav class="side-nav">
+        <a class="nav-item active" href="#region-health"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
+        <a class="nav-item" href="#region-config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
+        <a class="nav-item" href="#region-chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
+        <a class="nav-item" href="#region-feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
+        <a class="nav-item" href="#region-sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
+      </nav>
+      <div class="side-note">
+        <svg class="icon sm"><use href="#i-shield"></use></svg>
+        <p>Owner 控制授权入口；群成员通过飞书提问，本地 daemon 保留会话路由、trace 和反馈闭环。</p>
+      </div>
+    </aside>
+    <section class="workspace">
+      <header class="workspace-header">
+        <div>
+          <p class="eyebrow">Local operations cockpit</p>
+          <h1>控制台</h1>
+          <p class="workspace-copy">飞书作为团队入口，本地 daemon 负责路由、执行、观察、打断与反馈复盘。</p>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+          <button id="top-save" type="submit" form="bot-form"><svg class="icon sm"><use href="#i-save"></use></svg>保存</button>
+        </div>
+      </header>
+      <div class="content-frame">
+        <div class="primary-column">
+    <section id="region-health" class="card overview-card">
       <header>
+        <div class="overview-title-row">
         <div class="app-title">
           <span class="title-icon"><svg class="icon"><use href="#i-bot"></use></svg></span>
-          <h1>larkbot 控制台</h1>
+          <h2>运行健康概览</h2>
         </div>
-        <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
+        <span class="mini-stat"><svg class="icon sm"><use href="#i-radio"></use></svg>长连接模式</span>
+        </div>
+        <div class="sub">核心链路：飞书事件进入后，larkbot daemon 将消息路由到独立 traex PTY runtime，并把结果回传为卡片。</div>
         <div class="summary-grid" aria-label="运行概览">
           <div class="summary-item">
             <span class="summary-label"><svg class="icon sm"><use href="#i-shield"></use></svg>Bot 状态</span>
@@ -847,7 +1132,25 @@ function renderConsoleHtml(): string {
             <span id="summary-model" class="summary-value">默认</span>
           </div>
         </div>
+        <div class="pipeline" aria-label="处理链路">
+          <span>飞书消息</span><svg class="icon sm"><use href="#i-radio"></use></svg>
+          <span>daemon 路由</span><svg class="icon sm"><use href="#i-activity"></use></svg>
+          <span>traex PTY</span><svg class="icon sm"><use href="#i-terminal"></use></svg>
+          <span>分析卡</span><svg class="icon sm"><use href="#i-message"></use></svg>
+          <span>反馈闭环</span>
+        </div>
       </header>
+    </section>
+    <section id="region-config" class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-settings"></use></svg></span>
+            <h2>配置面板</h2>
+          </div>
+          <div class="sub">调整当前 bot 配置。App 凭证变更需要重启 daemon 后生效。</div>
+        </div>
+      </div>
       <form id="bot-form">
         <div class="row">
           <label>名称
@@ -917,7 +1220,7 @@ function renderConsoleHtml(): string {
         </footer>
       </form>
     </section>
-    <section class="card">
+    <section id="region-chats" class="card">
       <div class="toolbar">
         <div>
           <div class="section-title">
@@ -945,7 +1248,7 @@ function renderConsoleHtml(): string {
         </table>
       </div>
     </section>
-    <section class="card">
+    <section id="region-feedback" class="card">
       <div class="toolbar">
         <div>
           <div class="section-title">
@@ -994,7 +1297,7 @@ function renderConsoleHtml(): string {
         </table>
       </div>
     </section>
-    <section class="card">
+    <section id="region-sessions" class="card">
       <div class="toolbar">
         <div>
           <div class="section-title">
@@ -1035,6 +1338,59 @@ function renderConsoleHtml(): string {
         </table>
       </div>
     </section>
+        </div>
+        <aside class="observer-column" aria-label="右侧观察栏">
+          <section class="card side-panel">
+            <div class="toolbar">
+              <div>
+                <div class="section-title">
+                  <span class="title-icon"><svg class="icon"><use href="#i-activity"></use></svg></span>
+                  <h2>实时观察</h2>
+                </div>
+                <div class="sub">用于快速确认当前运行姿态。</div>
+              </div>
+            </div>
+            <ol class="queue-list">
+              <li><span class="queue-index">01</span><div><strong>模型</strong><p id="observer-model">默认模型</p></div></li>
+              <li><span class="queue-index">02</span><div><strong>提示词</strong><p id="observer-profile">未启用 profile</p></div></li>
+              <li><span class="queue-index">03</span><div><strong>反馈</strong><p id="observer-feedback">暂无反馈</p></div></li>
+            </ol>
+          </section>
+          <section class="card side-panel">
+            <div class="toolbar">
+              <div>
+                <div class="section-title">
+                  <span class="title-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+                  <h2>只读终端</h2>
+                </div>
+                <div class="sub">从会话表进入完整 trace。</div>
+              </div>
+            </div>
+            <pre class="terminal-preview">[daemon] websocket connected
+[route] feishu thread -> larkbot session
+[runtime] traex PTY isolated by session
+[card] final answer + evidence refs
+[feedback] owner review queue ready</pre>
+          </section>
+          <section class="card side-panel">
+            <div class="toolbar">
+              <div>
+                <div class="section-title">
+                  <span class="title-icon"><svg class="icon"><use href="#i-clock"></use></svg></span>
+                  <h2>清理策略</h2>
+                </div>
+              </div>
+            </div>
+            <ul class="policy-list">
+              <li><strong>活跃会话</strong><span id="observer-sessions">0</span></li>
+              <li><strong>授权群聊</strong><span id="observer-chats">0</span></li>
+              <li><strong>过程入口</strong><span id="observer-terminal">只读</span></li>
+            </ul>
+            <div class="warn"><svg class="icon sm"><use href="#i-shield"></use></svg><span>关闭会话会终止 runtime；删除只移除 larkbot 路由记录。</span></div>
+          </section>
+        </aside>
+      </div>
+    </section>
   </main>
   <script>
     const form = document.querySelector('#bot-form');
@@ -1048,6 +1404,14 @@ function renderConsoleHtml(): string {
     const refreshFeedbacks = document.querySelector('#refresh-feedbacks');
     const feedbackFilter = document.querySelector('#feedback-filter');
     const feedbackStats = document.querySelector('#feedback-stats');
+    const refreshAll = document.querySelector('#refresh-all');
+    const sideDaemonStatus = document.querySelector('#side-daemon-status');
+    const observerModel = document.querySelector('#observer-model');
+    const observerProfile = document.querySelector('#observer-profile');
+    const observerFeedback = document.querySelector('#observer-feedback');
+    const observerSessions = document.querySelector('#observer-sessions');
+    const observerChats = document.querySelector('#observer-chats');
+    const observerTerminal = document.querySelector('#observer-terminal');
       const summaryBot = document.querySelector('#summary-bot');
       const summaryChats = document.querySelector('#summary-chats');
       const summarySessions = document.querySelector('#summary-sessions');
@@ -1073,10 +1437,23 @@ function renderConsoleHtml(): string {
       if (latestBot) {
         summaryBot.textContent = latestBot.enabled ? '已启用' : '已停用';
         summaryModel.textContent = latestBot.model || '默认模型';
+        sideDaemonStatus.textContent = latestBot.enabled ? 'daemon 运行中' : 'daemon 已停用';
+        observerModel.textContent = latestBot.model || '使用 traex 默认模型';
+        const activeProfile = (latestBot.systemPromptProfiles || []).find((item) => item.id === latestBot.activeSystemPromptProfileId);
+        observerProfile.textContent = activeProfile ? activeProfile.name : '未启用 profile';
       }
       const enabledChats = latestChats.filter((chat) => chat.enabled).length;
+      const openFeedbacks = latestFeedbacks.filter((item) => item.status === 'open').length;
+      const negativeFeedbacks = latestFeedbacks.filter((item) => item.rating === 'negative').length;
+      const activeSessions = latestSessions.filter((session) => session.status === 'active').length;
       summaryChats.textContent = latestChats.length ? enabledChats + ' / ' + latestChats.length : '0';
-      summarySessions.textContent = String(latestSessions.filter((session) => session.status === 'active').length);
+      summarySessions.textContent = String(activeSessions);
+      observerSessions.textContent = String(activeSessions);
+      observerChats.textContent = latestChats.length ? enabledChats + ' / ' + latestChats.length : '0';
+      observerFeedback.textContent = latestFeedbacks.length
+        ? '待处理 ' + openFeedbacks + '，差评 ' + negativeFeedbacks
+        : '暂无反馈';
+      observerTerminal.textContent = activeSessions ? '可进入' : '等待会话';
     }
 
     async function loadModels() {
@@ -1304,6 +1681,7 @@ function renderConsoleHtml(): string {
       if (!res.ok) throw new Error(await res.text());
       const { feedbacks } = await res.json();
       latestFeedbacks = Array.isArray(feedbacks) ? feedbacks : [];
+      updateSummary();
       feedbackStats.innerHTML = feedbackStatsHtml(latestFeedbacks);
       const statusFilter = feedbackFilter.value;
       const visibleFeedbacks = statusFilter
@@ -1447,6 +1825,16 @@ function renderConsoleHtml(): string {
 
     refreshFeedbacks.addEventListener('click', () => {
       loadFeedbacks().catch((error) => alert('刷新反馈失败：' + error.message));
+    });
+
+    refreshAll.addEventListener('click', () => {
+      Promise.all([
+        loadBot(),
+        loadModels(),
+        loadChats(),
+        loadSessions(),
+        loadFeedbacks(),
+      ]).catch((error) => alert('刷新失败：' + error.message));
     });
 
     feedbackFilter.addEventListener('change', () => {
