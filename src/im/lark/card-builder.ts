@@ -246,7 +246,7 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
       ],
     },
   ];
-  if (opts.status === 'completed' && opts.knowledge) {
+  if (opts.status === 'completed' && opts.feedback && opts.knowledge) {
     elements.push({
       tag: 'markdown',
       text_size: 'notation_small_v2',

@@ -103,7 +103,7 @@ describe('buildTerminalCard', () => {
     expect(card.elements.at(-1).content).toContain('larkbot');
   });
 
-  it('分析完成后停止按钮不可点击', () => {
+  it('分析完成后停止按钮不可点击且不展示参考资料', () => {
     const card: any = buildThinkingCard({
       url: 'http://console/terminal/lm-1',
       interruptSessionId: 'lm-1',
@@ -137,9 +137,24 @@ describe('buildTerminalCard', () => {
     ]);
     expect(card.elements[1].actions[2].text.content).toBe('👎 拉完了');
     expect(card.elements[1].actions[2].value).toMatchObject({ action: 'rate_thinking', sessionId: 'lm-1', rating: 'negative' });
-    expect(card.elements[2].content).toContain('本轮参考资料');
-    expect(card.elements[2].content).toContain('docs/qa-log-troubleshooting-prompt.md');
+    expect(JSON.stringify(card.elements)).not.toContain('本轮参考资料');
     expect(card.elements.at(-1).content).toContain('累计 Token ↑15K ↓3.5K');
+  });
+
+  it('好评后的思考卡展示参考资料', () => {
+    const card: any = buildThinkingCard({
+      url: 'http://console/terminal/lm-1',
+      interruptSessionId: 'lm-1',
+      status: 'completed',
+      feedback: 'positive',
+      knowledge: {
+        references: [{ path: 'docs/qa-log-troubleshooting-prompt.md', source: 'trace' }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    }).payload;
+    expect(JSON.stringify(card.elements)).toContain('本轮参考资料');
+    expect(JSON.stringify(card.elements)).toContain('docs/qa-log-troubleshooting-prompt.md');
+    expect(JSON.stringify(card.elements)).toContain('感谢认可');
   });
 
   it('点击差评后隐藏反馈按钮并展示原因快捷按钮', () => {
@@ -148,22 +163,28 @@ describe('buildTerminalCard', () => {
       interruptSessionId: 'lm-1',
       status: 'completed',
       feedback: 'negative_pending',
+      knowledge: {
+        references: [{ path: 'docs/qa-log-troubleshooting-prompt.md', source: 'trace' }],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
       footer: '⏱️ 总耗时：01:02',
     }).payload;
     expect(card.elements[1].actions).toHaveLength(1);
     expect(card.elements[1].actions[0].text.content).toBe('打开分析过程');
-    expect(card.elements[2].content).toContain('已记录差评并通知 Owner');
-    expect(card.elements[3].tag).toBe('action');
-    expect(card.elements[3].actions).toHaveLength(3);
-    expect(card.elements[3].actions[0].text.content).toBe('结论不准确');
-    expect(card.elements[3].actions[0].value).toMatchObject({
+    expect(JSON.stringify(card.elements)).toContain('本轮参考资料');
+    expect(JSON.stringify(card.elements)).toContain('docs/qa-log-troubleshooting-prompt.md');
+    const feedbackNotice = card.elements.find((element: any) => element.content?.includes('已记录差评并通知 Owner'));
+    expect(feedbackNotice.content).toContain('已记录差评并通知 Owner');
+    const reasonActions = card.elements.filter((element: any) => element.tag === 'action').slice(1);
+    expect(reasonActions[0].actions).toHaveLength(3);
+    expect(reasonActions[0].actions[0].text.content).toBe('结论不准确');
+    expect(reasonActions[0].actions[0].value).toMatchObject({
       action: 'submit_negative_feedback',
       sessionId: 'lm-1',
       rating: 'negative',
       reason: '结论不准确',
     });
-    expect(card.elements[4].tag).toBe('action');
-    expect(card.elements[4].actions[1].text.content).toBe('表达不清楚');
+    expect(reasonActions[1].actions[1].text.content).toBe('表达不清楚');
     expect(card.elements.at(-1).content).toContain('总耗时');
   });
 
