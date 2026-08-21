@@ -91,12 +91,20 @@ export type FeedbackStatus = 'open' | 'reviewing' | 'resolved' | 'ignored';
 
 export interface KnowledgeReference {
   path: string;
-  source: 'trace' | 'answer';
+  source: 'trace' | 'answer' | 'structured';
+  evidence?: string;
+}
+
+export interface EvidenceReference {
+  value: string;
+  source: 'structured';
   evidence?: string;
 }
 
 export interface KnowledgeObservation {
   references: KnowledgeReference[];
+  codeReferences?: EvidenceReference[];
+  logReferences?: EvidenceReference[];
   noReferenceReason?: string;
   updatedAt: string;
 }

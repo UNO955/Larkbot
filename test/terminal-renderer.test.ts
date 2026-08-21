@@ -167,4 +167,23 @@ describe('TerminalRenderer', () => {
     expect(r.snapshot().content).toBe('可以。你这条引用的是刚才的“你好”，里面没有具体问题内容。\n\n把要解决的事情直接发我就行。');
     r.dispose();
   });
+
+  it('隐藏最终回答里的 larkbot evidence 结构化证据块', async () => {
+    const r = new TerminalRenderer(120, 30);
+    r.markNewTurn();
+    await r.writeAndFlush([
+      '**结论：进私视频吸底卡 未下发。**',
+      '',
+      '服务端侧直接原因是素材 owner 校验未通过。',
+      '',
+      '<larkbot_evidence>',
+      '{"knowledge_refs":["进私视频带入私信会话"],"code_refs":["pack.go:52"],"log_refs":["20260820205942ECFDEE54DC3DFE43C88E"]}',
+      '</larkbot_evidence>',
+    ].join('\r\n'));
+    const parts = r.snapshotParts();
+    expect(parts.answer).toBe('**结论：进私视频吸底卡 未下发。**\n\n服务端侧直接原因是素材 owner 校验未通过。');
+    expect(parts.answer).not.toContain('larkbot_evidence');
+    expect(parts.answer).not.toContain('knowledge_refs');
+    r.dispose();
+  });
 });

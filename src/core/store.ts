@@ -222,15 +222,27 @@ function isFeedbackRecord(value: unknown): value is FeedbackRecord {
 
 function isKnowledgeObservation(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  const observation = value as { references?: unknown; noReferenceReason?: unknown; updatedAt?: unknown };
+  const observation = value as { references?: unknown; codeReferences?: unknown; logReferences?: unknown; noReferenceReason?: unknown; updatedAt?: unknown };
   return Array.isArray(observation.references)
-    && observation.references.every((item) => {
-      if (!item || typeof item !== 'object') return false;
-      const ref = item as { path?: unknown; source?: unknown; evidence?: unknown };
-      return typeof ref.path === 'string'
-        && (ref.source === 'trace' || ref.source === 'answer')
-        && (ref.evidence === undefined || typeof ref.evidence === 'string');
-    })
+    && observation.references.every(isKnowledgeReference)
+    && (observation.codeReferences === undefined || (Array.isArray(observation.codeReferences) && observation.codeReferences.every(isEvidenceReference)))
+    && (observation.logReferences === undefined || (Array.isArray(observation.logReferences) && observation.logReferences.every(isEvidenceReference)))
     && (observation.noReferenceReason === undefined || typeof observation.noReferenceReason === 'string')
     && typeof observation.updatedAt === 'string';
+}
+
+function isKnowledgeReference(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const ref = item as { path?: unknown; source?: unknown; evidence?: unknown };
+  return typeof ref.path === 'string'
+    && (ref.source === 'trace' || ref.source === 'answer' || ref.source === 'structured')
+    && (ref.evidence === undefined || typeof ref.evidence === 'string');
+}
+
+function isEvidenceReference(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const ref = item as { value?: unknown; source?: unknown; evidence?: unknown };
+  return typeof ref.value === 'string'
+    && ref.source === 'structured'
+    && (ref.evidence === undefined || typeof ref.evidence === 'string');
 }

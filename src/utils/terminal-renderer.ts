@@ -28,7 +28,8 @@ const INPUT_ECHO_RE = /^[›❯]\s+\S/;
 /** 纯空白行 */
 const BLANK_RE = /^\s*$/;
 const ENVELOPE_ECHO_RE = /^\s*▍/;
-const XML_ENVELOPE_RE = /^\s*<\/?(?:larkbot_routing|larkbot_reminder|session_id|system_prompt_profile|user_message|sender|attachments|quoted_message)\b/i;
+const XML_ENVELOPE_RE = /^\s*<\/?(?:larkbot_routing|larkbot_reminder|larkbot_evidence|session_id|system_prompt_profile|user_message|sender|attachments|quoted_message)\b/i;
+const LARKBOT_EVIDENCE_RE = /<larkbot_evidence\b[^>]*>[\s\S]*?<\/larkbot_evidence>/gi;
 const TRAEX_NOISE_RES = [
   /TraeCode CLI/i,
   /^\s*Good (?:morning|afternoon|evening)/i,
@@ -123,10 +124,21 @@ export class TerminalRenderer {
     const startY = Math.max(baseY, requestedStartY ?? baseY);
 
     const lines: string[] = [];
+    let hiddenEvidenceBlock = false;
     for (let y = startY; y < endY; y++) {
       const line = buf.getLine(y);
       if (!line) continue;
       const s = cleanBoxDrawing(line.translateToString(true));
+      if (filter) {
+        if (hiddenEvidenceBlock) {
+          if (/<\/larkbot_evidence>/i.test(s)) hiddenEvidenceBlock = false;
+          continue;
+        }
+        if (/<larkbot_evidence\b/i.test(s)) {
+          hiddenEvidenceBlock = !/<\/larkbot_evidence>/i.test(s);
+          continue;
+        }
+      }
       if (filter && isDisplayNoise(s)) continue;
       lines.push(s);
     }
@@ -164,7 +176,7 @@ function isDisplayNoise(line: string): boolean {
 }
 
 function projectVisibleContent(content: string): { answer: string; trace: string } {
-  const trimmed = content.trim();
+  const trimmed = content.replace(LARKBOT_EVIDENCE_RE, '').trim();
   if (!trimmed) return { answer: '', trace: '' };
 
   const paragraphs = trimmed.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);

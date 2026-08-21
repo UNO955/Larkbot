@@ -717,6 +717,73 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('优先解析 larkbot evidence 结构化证据并从最终回复中隐藏', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionFinal: vi.fn(() => ({
+        key: 'turn-structured-knowledge:done',
+        text: [
+          '**结论：进私视频吸底卡 未下发。**',
+          '',
+          '服务端侧直接原因是素材 owner 校验未通过。',
+          '',
+          '<larkbot_evidence>',
+          '{"knowledge_refs":["进私视频带入私信会话"],"code_refs":["pack.go:52 QueryItemById"],"log_refs":["20260820205942ECFDEE54DC3DFE43C88E"]}',
+          '</larkbot_evidence>',
+        ].join('\n'),
+      })),
+      readyPattern: /❯/,
+      completionPattern: /❯/,
+    };
+    const child = fakePty();
+    const post = vi.fn(async () => 'card-1');
+    const postTrace = vi.fn(async () => 'trace-card-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post,
+      patch: async () => undefined,
+      postTrace,
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+    child.emitData('\r\n❯ ');
+    await vi.waitFor(() => expect(postTrace).toHaveBeenCalled(), { timeout: 1500 });
+    expect(post.mock.calls[0]?.[1]).toContain('素材 owner 校验未通过');
+    expect(post.mock.calls[0]?.[1]).not.toContain('larkbot_evidence');
+    expect(postTrace.mock.calls[0]?.[6]).toMatchObject({
+      references: [expect.objectContaining({
+        path: '知识库《进私视频带入私信会话》',
+        source: 'structured',
+      })],
+      codeReferences: [expect.objectContaining({ value: 'pack.go:52 QueryItemById' })],
+      logReferences: [expect.objectContaining({ value: '20260820205942ECFDEE54DC3DFE43C88E' })],
+    });
+    manager.shutdownAll();
+  });
+
   it('完成回复优先使用 traex rollout 的 task_complete final', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {

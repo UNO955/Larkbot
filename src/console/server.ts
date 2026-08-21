@@ -170,8 +170,8 @@ class TerminalPromptEchoFilter {
   }
 }
 
-const HIDDEN_PROMPT_BLOCK_START_RE = /<\/?(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)\b/i;
-const HIDDEN_PROMPT_BLOCK_END_RE = /<\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i;
+const HIDDEN_PROMPT_BLOCK_START_RE = /<\/?(?:larkbot_routing|larkbot_reminder|larkbot_evidence|system_prompt_profile|user_message|quoted_message|attachments)\b/i;
+const HIDDEN_PROMPT_BLOCK_END_RE = /<\/(?:larkbot_routing|larkbot_reminder|larkbot_evidence|system_prompt_profile|user_message|quoted_message|attachments)>/i;
 const HIDDEN_PROMPT_SINGLE_RE = /<\/?(?:session_id|sender|image|file)\b/i;
 const PROMPT_ECHO_LINE_RE = /^\s*▍/;
 
@@ -1620,13 +1620,13 @@ function renderTerminalHtml(session: Session): string {
       const visible = stripTerminalControl(chunk);
       if (!visible.trim()) return chunk;
       if (hiddenPromptBlock) {
-        if (/<\\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible)) hiddenPromptBlock = false;
+        if (/<\\/(?:larkbot_routing|larkbot_reminder|larkbot_evidence|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible)) hiddenPromptBlock = false;
         return '';
       }
       if (/^\\s*▍/.test(visible)) return '';
       if (/<\\/?(?:session_id|sender|image|file)\\b/i.test(visible)) return '';
-      if (/<\\/?(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)\\b/i.test(visible)) {
-        hiddenPromptBlock = !/<\\/(?:larkbot_routing|larkbot_reminder|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible);
+      if (/<\\/?(?:larkbot_routing|larkbot_reminder|larkbot_evidence|system_prompt_profile|user_message|quoted_message|attachments)\\b/i.test(visible)) {
+        hiddenPromptBlock = !/<\\/(?:larkbot_routing|larkbot_reminder|larkbot_evidence|system_prompt_profile|user_message|quoted_message|attachments)>/i.test(visible);
         return '';
       }
       return chunk;

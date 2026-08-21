@@ -37,6 +37,8 @@ describe('prompt envelope', () => {
     const prompt = buildOpeningPrompt(session, message);
     expect(prompt).toContain('<larkbot_routing>');
     expect(prompt).toContain('禁止调用 botmux-send');
+    expect(prompt).toContain('<larkbot_evidence>');
+    expect(prompt).toContain('"knowledge_refs":[]');
     expect(prompt).toContain('<session_id>lm-1</session_id>');
     expect(prompt).toContain('<user_message>\n检查当前改动\n</user_message>');
     expect(prompt).toContain('<sender type="user" open_id="ou-1" name="MN" />');
@@ -48,6 +50,8 @@ describe('prompt envelope', () => {
   it('跟帖只包含轻量 reminder，不重复 routing', () => {
     const prompt = buildFollowUpPrompt(message);
     expect(prompt).toContain('<larkbot_reminder>');
+    expect(prompt).toContain('<larkbot_evidence>');
+    expect(prompt).toContain('"code_refs":[]');
     expect(prompt).not.toContain('<larkbot_routing>');
     expect(prompt).not.toContain('<session_id>');
   });

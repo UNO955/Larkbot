@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { KnowledgeObservation, KnowledgeReference, ExpiredSession, Session } from './types.js';
+import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -540,10 +540,11 @@ export class ConversationManager {
     if (!answer && !trace && (!changed && runtime.lastCardStatus === status)) return;
     runtime.posting = true;
     const final = status === 'working' ? undefined : await this.waitForSessionFinal(runtime);
-    const sourceAnswer = cleanAnswer(final?.text || answer);
+    const rawAnswer = final?.text || answer;
+    const knowledge = status === 'working' ? undefined : extractKnowledgeObservation(trace, rawAnswer);
+    const sourceAnswer = cleanAnswer(rawAnswer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
-    const knowledge = status === 'working' ? undefined : extractKnowledgeObservation(trace, sourceAnswer);
     const argosSource = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/.test(trace)
       ? `${sourceAnswer}\n${trace}`
       : undefined;
@@ -799,21 +800,115 @@ function pad2(value: number): string {
 }
 
 function cleanAnswer(answer: string): string {
-  const text = answer.trim();
+  const text = stripLarkbotEvidence(answer).trim();
   if (text === 'BOTMUX_NOTHING_TO_SEND') return '';
   return text;
 }
 
 function extractKnowledgeObservation(trace: string, answer: string): KnowledgeObservation {
+  const structured = extractStructuredEvidence(`${answer}\n${trace}`);
   const refs = uniqueKnowledgeReferences([
+    ...structured.knowledgeReferences,
     ...extractKnowledgeReferences(trace, 'trace'),
     ...extractKnowledgeReferences(answer, 'answer'),
   ]);
+  const codeReferences = uniqueEvidenceReferences(structured.codeReferences);
+  const logReferences = uniqueEvidenceReferences(structured.logReferences);
   return {
     references: refs,
-    noReferenceReason: refs.length ? undefined : '未在分析过程或最终回答中检测到知识库文件读取记录。',
+    codeReferences: codeReferences.length ? codeReferences : undefined,
+    logReferences: logReferences.length ? logReferences : undefined,
+    noReferenceReason: refs.length
+      ? undefined
+      : structured.seen
+        ? '本轮结构化证据未上报知识库引用。'
+        : '未在分析过程或最终回答中检测到知识库文件读取记录。',
     updatedAt: new Date().toISOString(),
   };
+}
+
+const LARKBOT_EVIDENCE_RE = /<larkbot_evidence\b[^>]*>([\s\S]*?)<\/larkbot_evidence>/gi;
+
+function stripLarkbotEvidence(text: string): string {
+  return text.replace(LARKBOT_EVIDENCE_RE, '').trim();
+}
+
+function extractStructuredEvidence(text: string): {
+  seen: boolean;
+  knowledgeReferences: KnowledgeReference[];
+  codeReferences: EvidenceReference[];
+  logReferences: EvidenceReference[];
+} {
+  const knowledgeReferences: KnowledgeReference[] = [];
+  const codeReferences: EvidenceReference[] = [];
+  const logReferences: EvidenceReference[] = [];
+  let seen = false;
+  for (const match of text.matchAll(LARKBOT_EVIDENCE_RE)) {
+    seen = true;
+    const payload = parseEvidencePayload(match[1]);
+    if (!payload) continue;
+    for (const ref of structuredValues(payload.knowledge_refs ?? payload.knowledgeRefs)) {
+      const path = normalizeStructuredKnowledgeRef(ref);
+      if (path) knowledgeReferences.push({ path, source: 'structured', evidence: '<larkbot_evidence>' });
+    }
+    for (const ref of structuredValues(payload.code_refs ?? payload.codeRefs)) {
+      const value = normalizeStructuredEvidenceRef(ref, ['path', 'file', 'function', 'symbol', 'value', 'name']);
+      if (value) codeReferences.push({ value, source: 'structured', evidence: '<larkbot_evidence>' });
+    }
+    for (const ref of structuredValues(payload.log_refs ?? payload.logRefs)) {
+      const value = normalizeStructuredEvidenceRef(ref, ['log_id', 'logId', 'argos', 'url', 'psm', 'method', 'value', 'name']);
+      if (value) logReferences.push({ value, source: 'structured', evidence: '<larkbot_evidence>' });
+    }
+  }
+  return { seen, knowledgeReferences, codeReferences, logReferences };
+}
+
+function parseEvidencePayload(raw: string): Record<string, unknown> | undefined {
+  const text = raw.trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  for (const candidate of [text, text.match(/\{[\s\S]*\}/)?.[0]]) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
+}
+
+function structuredValues(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20);
+}
+
+function normalizeStructuredKnowledgeRef(value: unknown): string | undefined {
+  const ref = normalizeStructuredEvidenceRef(value, ['path', 'title', 'name', 'value', 'url']);
+  if (!ref) return undefined;
+  if (/(知识库|knowledge|kb|41-WORK-PROJECT-PUBLIC|one-page|playbook|\.md|docs\/|\/)/i.test(ref)) return ref;
+  return `知识库《${ref}》`;
+}
+
+function normalizeStructuredEvidenceRef(value: unknown, keys: string[]): string | undefined {
+  if (typeof value === 'string') return cleanStructuredRef(value);
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of keys) {
+    const item = record[key];
+    if (typeof item === 'string' && item.trim()) parts.push(item.trim());
+  }
+  if (!parts.length) return undefined;
+  return cleanStructuredRef(parts.join(' '));
+}
+
+function cleanStructuredRef(value: string): string | undefined {
+  const text = value.replace(/[),.;，。；、]+$/g, '').trim();
+  if (!text || text.length < 2) return undefined;
+  return text.slice(0, 300);
 }
 
 function extractKnowledgeReferences(text: string, source: KnowledgeReference['source']): KnowledgeReference[] {
@@ -849,6 +944,18 @@ function uniqueKnowledgeReferences(refs: KnowledgeReference[]): KnowledgeReferen
   const result: KnowledgeReference[] = [];
   for (const ref of refs) {
     const key = `${ref.source}:${ref.path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(ref);
+  }
+  return result.slice(0, 12);
+}
+
+function uniqueEvidenceReferences(refs: EvidenceReference[]): EvidenceReference[] {
+  const seen = new Set<string>();
+  const result: EvidenceReference[] = [];
+  for (const ref of refs) {
+    const key = `${ref.source}:${ref.value}`;
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(ref);
