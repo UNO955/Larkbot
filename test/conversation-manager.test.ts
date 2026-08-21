@@ -361,11 +361,12 @@ describe('ConversationManager', () => {
 
   it('每轮开始加 Get，完成时删 Get 再加 DONE', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
+    let saved: Session[] = [];
     const store: SessionStore = {
       loadBots: async () => [],
       saveBots: async () => undefined,
       loadSessions: async () => [],
-      saveSessions: async () => undefined,
+      saveSessions: async (sessions) => { saved = structuredClone(sessions); },
     };
     const cli: CliAdapter = {
       id: 'traex',
@@ -404,6 +405,10 @@ describe('ConversationManager', () => {
     await vi.waitFor(() => expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1'), { timeout: 1500 });
     await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'DONE'), { timeout: 1500 });
     expect(removeReaction.mock.invocationCallOrder[0]).toBeLessThan(addReaction.mock.invocationCallOrder[1]);
+    expect(saved.at(-1)?.workLogs).toHaveLength(1);
+    expect(saved.at(-1)?.workLogs?.[0]).toMatchObject({ status: 'completed' });
+    expect(saved.at(-1)?.workLogs?.[0].endedAt).toBeTruthy();
+    expect(saved.at(-1)?.workLogs?.[0].durationMs).toEqual(expect.any(Number));
     manager.shutdownAll();
   });
 
@@ -508,6 +513,9 @@ describe('ConversationManager', () => {
     expect(interrupted?.cliSessionId).toBe('trae-new');
     expect(saved.at(-1)?.hasHistory).toBe(true);
     expect(saved.at(-1)?.cliSessionId).toBe('trae-new');
+    expect(saved.at(-1)?.workLogs).toHaveLength(1);
+    expect(saved.at(-1)?.workLogs?.[0]).toMatchObject({ status: 'stopped' });
+    expect(saved.at(-1)?.workLogs?.[0].endedAt).toBeTruthy();
     expect(removeReaction).toHaveBeenCalledWith('om-current-user', 'reaction-1');
     expect(patchTrace).toHaveBeenCalledWith(
       'trace-card-1',

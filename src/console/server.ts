@@ -26,6 +26,35 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
+
+const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
+  overview: {
+    title: '控制台',
+    eyebrow: 'Local operations cockpit',
+    copy: '飞书作为团队入口，本地 daemon 负责路由、执行、观察、打断与反馈复盘。',
+  },
+  config: {
+    title: '配置',
+    eyebrow: 'Configuration',
+    copy: '管理 bot 身份、工作目录、模型、提示词和授权用户。保存后会影响后续新会话。',
+  },
+  chats: {
+    title: '群聊',
+    eyebrow: 'Chat access',
+    copy: '查看 bot 感知到的群聊，并控制哪些群可以让成员直接提问。',
+  },
+  feedback: {
+    title: '反馈',
+    eyebrow: 'Review queue',
+    copy: '集中处理群成员的有用/无用反馈，把坏回答转成可复盘的改进线索。',
+  },
+  sessions: {
+    title: '会话',
+    eyebrow: 'Session routes',
+    copy: '查看飞书话题到 traex runtime 的映射，必要时关闭或删除路由记录。',
+  },
+};
 
 export interface TurnTrace {
   id: string;
@@ -232,8 +261,9 @@ export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Serve
 async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url || '/', 'http://larkbot.local');
-    if (req.method === 'GET' && url.pathname === '/') {
-      sendHtml(res, renderConsoleHtml());
+    const consolePage = consolePageFromPath(url.pathname);
+    if (req.method === 'GET' && consolePage) {
+      sendHtml(res, renderConsoleHtml(consolePage));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/office') {
@@ -670,6 +700,15 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html);
 }
 
+function consolePageFromPath(pathname: string): ConsolePage | undefined {
+  if (pathname === '/') return 'overview';
+  if (pathname === '/config') return 'config';
+  if (pathname === '/chats') return 'chats';
+  if (pathname === '/feedback') return 'feedback';
+  if (pathname === '/sessions') return 'sessions';
+  return undefined;
+}
+
 async function sendThreeBuildFile(res: ServerResponse, filename: 'three.module.js' | 'three.core.js'): Promise<void> {
   const moduleUrl = new URL(`../../node_modules/three/build/${filename}`, import.meta.url);
   const source = await readFile(moduleUrl, 'utf8');
@@ -685,13 +724,15 @@ function writeSse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function renderConsoleHtml(): string {
+function renderConsoleHtml(page: ConsolePage = 'overview'): string {
+  const pageMeta = consolePages[page];
+  const navClass = (item: ConsolePage) => item === page ? 'nav-item active' : 'nav-item';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>larkbot 控制台</title>
+  <title>${escapeHtml(pageMeta.title)} · larkbot 控制台</title>
   <style>
     :root {
       color-scheme: light;
@@ -940,6 +981,12 @@ function renderConsoleHtml(): string {
     .workspace-header h1 { font-size: 30px; letter-spacing: 0; }
     .workspace-copy { margin: 8px 0 0; color: var(--text-soft); line-height: 1.6; max-width: 760px; }
     .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .page-overview #top-save,
+    .page-chats #top-save,
+    .page-feedback #top-save,
+    .page-sessions #top-save {
+      display: none;
+    }
     .content-frame {
       flex: 1;
       min-height: 0;
@@ -948,6 +995,40 @@ function renderConsoleHtml(): string {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 336px;
       gap: 20px;
+    }
+    .page-config .content-frame,
+    .page-chats .content-frame,
+    .page-feedback .content-frame,
+    .page-sessions .content-frame {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .page-overview #region-config,
+    .page-overview #region-chats,
+    .page-overview #region-feedback,
+    .page-overview #region-sessions,
+    .page-config #region-health,
+    .page-config #region-chats,
+    .page-config #region-feedback,
+    .page-config #region-sessions,
+    .page-chats #region-health,
+    .page-chats #region-config,
+    .page-chats #region-feedback,
+    .page-chats #region-sessions,
+    .page-feedback #region-health,
+    .page-feedback #region-config,
+    .page-feedback #region-chats,
+    .page-feedback #region-sessions,
+    .page-sessions #region-health,
+    .page-sessions #region-config,
+    .page-sessions #region-chats,
+    .page-sessions #region-feedback {
+      display: none;
+    }
+    .page-config .observer-column,
+    .page-chats .observer-column,
+    .page-feedback .observer-column,
+    .page-sessions .observer-column {
+      display: none;
     }
     .primary-column,
     .observer-column {
@@ -1368,7 +1449,7 @@ function renderConsoleHtml(): string {
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
     <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
   </svg>
-  <main class="console-shell">
+  <main class="console-shell page-${page}">
     <aside class="console-sidebar" aria-label="控制台导航">
       <div class="brand-block">
         <span class="brand-mark"><svg class="icon"><use href="#i-bot"></use></svg></span>
@@ -1385,12 +1466,12 @@ function renderConsoleHtml(): string {
         </div>
       </div>
       <nav class="side-nav">
-        <a class="nav-item active" href="#region-health"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
+        <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
-        <a class="nav-item" href="#region-config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
-        <a class="nav-item" href="#region-chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
-        <a class="nav-item" href="#region-feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
-        <a class="nav-item" href="#region-sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
+        <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
+        <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
+        <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
+        <a class="${navClass('sessions')}" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
         <svg class="icon sm"><use href="#i-shield"></use></svg>
@@ -1400,9 +1481,9 @@ function renderConsoleHtml(): string {
     <section class="workspace">
       <header class="workspace-header">
         <div>
-          <p class="eyebrow">Local operations cockpit</p>
-          <h1>控制台</h1>
-          <p class="workspace-copy">飞书作为团队入口，本地 daemon 负责路由、执行、观察、打断与反馈复盘。</p>
+          <p class="eyebrow">${escapeHtml(pageMeta.eyebrow)}</p>
+          <h1>${escapeHtml(pageMeta.title)}</h1>
+          <p class="workspace-copy">${escapeHtml(pageMeta.copy)}</p>
         </div>
         <div class="header-actions">
           <button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
@@ -2653,10 +2734,10 @@ function renderOfficeHtml(): string {
       <nav class="side-nav">
         <a class="nav-item" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item active" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
-        <a class="nav-item" href="/#region-config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
-        <a class="nav-item" href="/#region-chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
-        <a class="nav-item" href="/#region-feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
-        <a class="nav-item" href="/#region-sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
+        <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
+        <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
+        <a class="nav-item" href="/feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
+        <a class="nav-item" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
         <svg class="icon sm"><use href="#i-shield"></use></svg>
@@ -2795,20 +2876,34 @@ function renderOfficeHtml(): string {
       };
       const totals = { day: 0, week: 0, month: 0, year: 0 };
       let closedCount = 0;
+      let estimatedCount = 0;
       for (const session of all) {
-        const startMs = Date.parse(session.createdAt || '');
-        const endMs = workEndMs(session, nowMs);
         if (session.status === 'closed') closedCount += 1;
-        totals.day += overlapMs(startMs, endMs, ranges.day, nowMs);
-        totals.week += overlapMs(startMs, endMs, ranges.week, nowMs);
-        totals.month += overlapMs(startMs, endMs, ranges.month, nowMs);
-        totals.year += overlapMs(startMs, endMs, ranges.year, nowMs);
+        const logs = Array.isArray(session.workLogs) ? session.workLogs : [];
+        if (logs.length) {
+          for (const log of logs) {
+            const startMs = Date.parse(log.startedAt || '');
+            const endMs = Date.parse(log.endedAt || '') || (log.status ? startMs : nowMs);
+            totals.day += overlapMs(startMs, endMs, ranges.day, nowMs);
+            totals.week += overlapMs(startMs, endMs, ranges.week, nowMs);
+            totals.month += overlapMs(startMs, endMs, ranges.month, nowMs);
+            totals.year += overlapMs(startMs, endMs, ranges.year, nowMs);
+          }
+        } else {
+          estimatedCount += 1;
+          const startMs = Date.parse(session.createdAt || '');
+          const endMs = workEndMs(session, nowMs);
+          totals.day += overlapMs(startMs, endMs, ranges.day, nowMs);
+          totals.week += overlapMs(startMs, endMs, ranges.week, nowMs);
+          totals.month += overlapMs(startMs, endMs, ranges.month, nowMs);
+          totals.year += overlapMs(startMs, endMs, ranges.year, nowMs);
+        }
       }
       worktimeDay.textContent = formatWorkDuration(totals.day);
       worktimeWeek.textContent = formatWorkDuration(totals.week);
       worktimeMonth.textContent = formatWorkDuration(totals.month);
       worktimeYear.textContent = formatWorkDuration(totals.year);
-      worktimeNote.textContent = '统计 ' + all.length + ' 名员工，包含 ' + closedCount + ' 名已离职。';
+      worktimeNote.textContent = '统计 ' + all.length + ' 名员工，包含 ' + closedCount + ' 名已离职' + (estimatedCount ? '；' + estimatedCount + ' 名历史员工按在岗区间估算。' : '。');
     }
 
     function setRefreshState(state, message) {
@@ -2895,7 +2990,9 @@ function renderOfficeHtml(): string {
       deskLeg: new THREE.MeshStandardMaterial({ color: 0xd4dde9, roughness: 0.78 }),
       chair: new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.58 }),
       laptop: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 }),
-      screen: new THREE.MeshStandardMaterial({ color: 0x8bd3ff, emissive: 0x1d4ed8, emissiveIntensity: 0.18, roughness: 0.25 }),
+      screenOff: new THREE.MeshStandardMaterial({ color: 0x05070d, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.35 }),
+      screenOn: new THREE.MeshStandardMaterial({ color: 0x86d7ff, emissive: 0x2563eb, emissiveIntensity: 0.28, roughness: 0.2 }),
+      screenLine: new THREE.MeshBasicMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.82 }),
       wall: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 }),
       prop: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.78 }),
     };
@@ -2931,7 +3028,7 @@ function renderOfficeHtml(): string {
       ];
       for (const item of emptyDesks) {
         const desk = box(1.65, 0.18, 0.8, materials.desk, item.x, 0.45, item.z);
-        const monitor = box(0.58, 0.34, 0.05, materials.laptop, item.x + 0.18, 0.78, item.z - 0.2);
+        const monitor = box(0.58, 0.34, 0.05, materials.laptop, item.x + 0.18, 0.84, item.z - 0.2);
         monitor.rotation.x = -0.18;
         scene.add(desk, monitor);
       }
@@ -3001,44 +3098,53 @@ function renderOfficeHtml(): string {
       }
 
       const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.14), materials.chair);
-      chairBack.position.set(-0.28, 0.74, 0.45);
+      chairBack.position.set(0.25, 0.74, 0.45);
       chairBack.castShadow = true;
       group.add(chairBack);
       const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 0.58), materials.chair);
-      chairSeat.position.set(-0.28, 0.48, 0.34);
+      chairSeat.position.set(0.25, 0.48, 0.34);
       chairSeat.castShadow = true;
       group.add(chairSeat);
 
-      const laptop = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.36, 0.04), materials.laptop);
-      laptop.position.set(0.25, 0.76, -0.22);
+      const laptop = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.46, 0.045), materials.laptop);
+      laptop.position.set(0.25, 0.88, -0.23);
       laptop.rotation.x = -0.35;
       laptop.castShadow = true;
       group.add(laptop);
 
-      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.025), materials.screen);
-      screen.position.set(0.25, 0.77, -0.247);
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.026), materials.screenOff.clone());
+      screen.position.set(0.25, 0.9, -0.258);
       screen.rotation.x = -0.35;
       group.add(screen);
+      const screenLines = [];
+      for (let i = 0; i < 3; i += 1) {
+        const line = new THREE.Mesh(new THREE.BoxGeometry(0.25 - i * 0.04, 0.018, 0.012), materials.screenLine.clone());
+        line.position.set(0.18 + i * 0.035, 0.93 - i * 0.07, -0.284);
+        line.rotation.x = -0.35;
+        line.visible = false;
+        group.add(line);
+        screenLines.push(line);
+      }
 
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.42, 6, 12), materials.body);
-      body.position.set(-0.24, 0.88, 0.05);
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.34, 6, 12), materials.body);
+      body.position.set(0.25, 0.84, 0.24);
       body.castShadow = true;
       body.userData.pickable = true;
       group.add(body);
 
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.1, 0.06), materials.idleStripe);
-      stripe.position.set(-0.24, 0.99, 0.29);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.085, 0.055), materials.idleStripe);
+      stripe.position.set(0.25, 0.94, 0.46);
       stripe.castShadow = true;
       group.add(stripe);
 
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 16), materials.head);
-      head.position.set(-0.24, 1.32, 0.05);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 24, 16), materials.head);
+      head.position.set(0.25, 1.22, 0.24);
       head.castShadow = true;
       head.userData.pickable = true;
       group.add(head);
 
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.52, 12), materials.head);
-      arm.position.set(0.02, 0.93, -0.12);
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, 0.48, 12), materials.head);
+      arm.position.set(0.34, 0.88, -0.04);
       arm.rotation.z = -1.05;
       arm.rotation.x = 0.6;
       arm.castShadow = true;
@@ -3046,13 +3152,13 @@ function renderOfficeHtml(): string {
 
       const labelMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('待命', 'idle'), transparent: true });
       const label = new THREE.Sprite(labelMaterial);
-      label.position.set(-0.24, 1.88, 0.05);
-      label.scale.set(1.35, 0.45, 1);
+      label.position.set(0.25, 1.72, 0.24);
+      label.scale.set(1.28, 0.42, 1);
       group.add(label);
 
       const reactionMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('马上！', 'slow'), transparent: true, opacity: 0 });
       const reaction = new THREE.Sprite(reactionMaterial);
-      reaction.position.set(0.32, 2.25, 0.12);
+      reaction.position.set(0.72, 2.08, 0.28);
       reaction.scale.set(1.05, 0.36, 1);
       group.add(reaction);
 
@@ -3060,11 +3166,13 @@ function renderOfficeHtml(): string {
         new THREE.SphereGeometry(0.07, 16, 10),
         new THREE.MeshStandardMaterial({ color: 0xf472b6, emissive: 0xbe185d, emissiveIntensity: 0.15, roughness: 0.35 })
       );
-      pop.position.set(0.34, 1.52, 0.08);
+      pop.position.set(0.74, 1.38, 0.24);
       pop.visible = false;
       group.add(pop);
       group.userData.body = body;
       group.userData.stripe = stripe;
+      group.userData.screen = screen;
+      group.userData.screenLines = screenLines;
       group.userData.arm = arm;
       group.userData.label = label;
       group.userData.labelMaterial = labelMaterial;
@@ -3148,8 +3256,10 @@ function renderOfficeHtml(): string {
         const busy = session.runtimeStatus === 'busy';
         const slow = busy && working >= slowMs;
         group.userData.slow = slow;
+        group.userData.screenBusy = busy;
         group.userData.title = session.title || session.sessionId;
         group.userData.stripe.material = slow ? materials.slowStripe : busy ? materials.busyStripe : materials.idleStripe;
+        group.userData.screen.material = busy ? materials.screenOn : materials.screenOff;
         updateLabel(group, busy ? '等 ' + formatDuration(working) : '待命', slow ? 'slow' : busy ? 'busy' : 'idle');
       });
     }
@@ -3186,6 +3296,7 @@ function renderOfficeHtml(): string {
         const nudge = now < group.userData.nudgeUntil;
         const pop = group.userData.pop;
         const reaction = group.userData.reaction;
+        const screenLines = group.userData.screenLines || [];
         const baseRotation = group.userData.baseRotation || 0;
         group.position.x += ((group.userData.targetX ?? group.position.x) - group.position.x) * 0.08;
         group.position.z += ((group.userData.targetZ ?? group.position.z) - group.position.z) * 0.08;
@@ -3193,6 +3304,13 @@ function renderOfficeHtml(): string {
         group.userData.arm.rotation.z = nudge
           ? -1.05 + Math.sin(now / 42) * 0.42
           : busy && !prefersReducedMotion ? -1.05 + Math.sin(now / 190) * 0.16 : -1.05;
+        screenLines.forEach((line, index) => {
+          line.visible = busy;
+          if (!busy) return;
+          const wave = prefersReducedMotion ? 0.65 : 0.45 + Math.abs(Math.sin(now / 260 + index * 0.85)) * 0.5;
+          line.material.opacity = wave;
+          line.scale.x = 0.82 + wave * 0.32;
+        });
         group.position.y = nudge ? Math.abs(Math.sin(now / 52)) * 0.18 : 0;
         if (reaction) {
           reaction.material.opacity = nudge ? 1 : 0;

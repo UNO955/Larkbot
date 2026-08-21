@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session } from './types.js';
+import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -54,6 +54,7 @@ interface Runtime {
   doneReactionSent: boolean;
   turnStopped: boolean;
   turnStartedAtMs?: number;
+  turnWorkLogId?: string;
   lastCardStatus?: CardStatus;
   turnFinalBaselineKey?: string;
   pendingFlushStatus?: CardStatus;
@@ -150,7 +151,7 @@ export class ConversationManager {
         return {
           ...session,
           runtimeStatus: runtime?.status,
-          turnStartedAt: runtime?.turnStartedAtMs ? new Date(runtime.turnStartedAtMs).toISOString() : undefined,
+          turnStartedAt: runtime?.status === 'busy' && runtime.turnStartedAtMs ? new Date(runtime.turnStartedAtMs).toISOString() : undefined,
         };
       })
       .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
@@ -168,6 +169,7 @@ export class ConversationManager {
     const runtime = this.runtimes.get(sessionId);
     if (runtime) {
       runtime.intentionalClose = true;
+      this.endWorkLog(runtime, 'stopped');
       try { runtime.pty.kill(); } catch { /* already exited */ }
       this.teardown(runtime);
     }
@@ -192,6 +194,7 @@ export class ConversationManager {
     if (wasBusy) {
       try { runtime.pty.write('\x03'); } catch { /* process may already be gone */ }
       await this.removeReceivedReaction(runtime);
+      this.endWorkLog(runtime, 'stopped');
     }
     await this.waitForPosting(runtime);
     await this.captureInterruptedCliSession(session);
@@ -208,6 +211,7 @@ export class ConversationManager {
     const runtime = this.runtimes.get(sessionId);
     if (runtime) {
       runtime.intentionalClose = true;
+      this.endWorkLog(runtime, 'stopped');
       try { runtime.pty.kill(); } catch { /* already exited */ }
       this.teardown(runtime);
     }
@@ -233,6 +237,7 @@ export class ConversationManager {
         if (runtime) {
           if (runtime.status === 'busy' || runtime.draining) continue;
           runtime.intentionalClose = true;
+          this.endWorkLog(runtime, 'stopped');
           try { runtime.pty.kill(); } catch { /* already exited */ }
           this.teardown(runtime);
           this.deps.closeTerminal?.(session.sessionId);
@@ -248,6 +253,7 @@ export class ConversationManager {
         session.closedAt = deletedAt;
         if (runtime) {
           runtime.intentionalClose = true;
+          this.endWorkLog(runtime, 'stopped');
           try { runtime.pty.kill(); } catch { /* already exited */ }
           this.teardown(runtime);
           this.deps.closeTerminal?.(session.sessionId);
@@ -416,6 +422,7 @@ export class ConversationManager {
     runtime.doneReactionSent = false;
     runtime.turnStopped = false;
     runtime.turnStartedAtMs = Date.now();
+    runtime.turnWorkLogId = this.beginWorkLog(runtime.route, runtime.turnStartedAtMs);
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
@@ -437,6 +444,7 @@ export class ConversationManager {
       await this.persist();
       logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`);
     } catch (error: any) {
+      this.endWorkLog(runtime, 'failed');
       runtime.status = 'idle';
       await this.removeReceivedReaction(runtime);
       if (runtime.route.threadId) {
@@ -446,6 +454,7 @@ export class ConversationManager {
           runtime.currentReplyAnchorMessageId,
         );
       }
+      await this.persist();
     } finally {
       runtime.draining = false;
       if (runtime.status === 'idle') void this.drain(runtime);
@@ -463,6 +472,8 @@ export class ConversationManager {
       await this.removeReceivedReaction(runtime);
       await this.addReaction(runtime.currentReplyAnchorMessageId, DONE_REACTION);
     }
+    this.endWorkLog(runtime, 'completed');
+    await this.persist();
     void this.drain(runtime);
   }
 
@@ -473,6 +484,8 @@ export class ConversationManager {
     if (!runtime.intentionalClose && runtime.ready && runtime.status === 'busy') {
       await this.flushNow(runtime, 'failed');
       await this.removeReceivedReaction(runtime);
+      this.endWorkLog(runtime, 'failed');
+      await this.persist();
     }
     this.teardown(runtime);
     this.deps.closeTerminal?.(runtime.route.sessionId);
@@ -722,6 +735,31 @@ export class ConversationManager {
     this.deps.closeTerminal?.(runtime.route.sessionId);
   }
 
+  private beginWorkLog(session: Session, startedAtMs: number): string {
+    const startedAt = new Date(startedAtMs).toISOString();
+    const workLogs = session.workLogs ?? [];
+    const id = `${session.sessionId}:${startedAtMs}:${workLogs.length + 1}`;
+    session.workLogs = [...workLogs, { id, startedAt }];
+    return id;
+  }
+
+  private endWorkLog(runtime: Runtime, status: SessionWorkLogStatus): void {
+    const id = runtime.turnWorkLogId;
+    if (!id) return;
+    const workLogs = runtime.route.workLogs;
+    const log = workLogs?.find((item) => item.id === id);
+    if (!log || log.endedAt) {
+      runtime.turnWorkLogId = undefined;
+      return;
+    }
+    const endedAtMs = Date.now();
+    const startedAtMs = Date.parse(log.startedAt);
+    log.endedAt = new Date(endedAtMs).toISOString();
+    log.durationMs = Number.isFinite(startedAtMs) ? Math.max(0, endedAtMs - startedAtMs) : 0;
+    log.status = status;
+    runtime.turnWorkLogId = undefined;
+  }
+
   private persist(): Promise<void> {
     return this.deps.store.saveSessions([...this.sessions.values()]);
   }
@@ -756,6 +794,7 @@ function toExpiredSession(session: Session, deletedAt: string): ExpiredSession {
     lastMessageAt: session.lastMessageAt,
     createdAt: session.createdAt,
     closedAt: session.closedAt,
+    workLogs: session.workLogs,
     deletedAt,
     reason: 'retention_expired',
   };

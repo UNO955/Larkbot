@@ -33,6 +33,16 @@ export interface KnownChat {
 
 export type SessionStatus = 'active' | 'closed';
 
+export type SessionWorkLogStatus = 'completed' | 'failed' | 'stopped';
+
+export interface SessionWorkLog {
+  id: string;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  status?: SessionWorkLogStatus;
+}
+
 export interface Session {
   sessionId: string;        // larkbot 自己的会话 id
   chatId: string;
@@ -61,6 +71,7 @@ export interface Session {
   latestQuestionMessageId?: string;
   latestAnswer?: string;
   latestKnowledge?: KnowledgeObservation;
+  workLogs?: SessionWorkLog[];
   closedAt?: string;
   lastMessageAt: string;
   createdAt: string;
@@ -82,6 +93,7 @@ export interface ExpiredSession {
   lastMessageAt: string;
   createdAt: string;
   closedAt?: string;
+  workLogs?: SessionWorkLog[];
   deletedAt: string;
   reason: 'retention_expired';
 }

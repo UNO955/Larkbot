@@ -57,6 +57,25 @@ describe('JsonSessionStore', () => {
     expect(JSON.parse(await readFile(path, 'utf8'))).toHaveLength(1);
   });
 
+  it('保存并恢复会话工时日志', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
+    dirs.push(dir);
+    const path = join(dir, 'sessions.json');
+    const store = new JsonSessionStore(path);
+    const item = session();
+    item.workLogs = [{
+      id: 'lm-1:1760000000000:1',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      endedAt: '2026-01-01T00:02:00.000Z',
+      durationMs: 120000,
+      status: 'completed',
+    }];
+
+    await store.saveSessions([item]);
+
+    expect(await store.loadSessions()).toEqual([item]);
+  });
+
   it('文件不存在时返回空路由表', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
     dirs.push(dir);
