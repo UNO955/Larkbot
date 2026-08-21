@@ -241,7 +241,11 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       return;
     }
     if (req.method === 'GET' && url.pathname === '/vendor/three.module.js') {
-      await sendThreeModule(res);
+      await sendThreeBuildFile(res, 'three.module.js');
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/vendor/three.core.js') {
+      await sendThreeBuildFile(res, 'three.core.js');
       return;
     }
     const traceMatch = url.pathname.match(/^\/trace\/([^/]+)$/);
@@ -666,8 +670,8 @@ function sendHtml(res: ServerResponse, html: string): void {
   res.end(html);
 }
 
-async function sendThreeModule(res: ServerResponse): Promise<void> {
-  const moduleUrl = new URL('../../node_modules/three/build/three.module.js', import.meta.url);
+async function sendThreeBuildFile(res: ServerResponse, filename: 'three.module.js' | 'three.core.js'): Promise<void> {
+  const moduleUrl = new URL(`../../node_modules/three/build/${filename}`, import.meta.url);
   const source = await readFile(moduleUrl, 'utf8');
   res.writeHead(200, {
     'content-type': 'text/javascript; charset=utf-8',
@@ -692,10 +696,10 @@ function renderConsoleHtml(): string {
     :root {
       color-scheme: light;
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --bg: oklch(97.4% 0.012 255);
+      --bg: oklch(97.8% 0.006 255);
       --surface: oklch(100% 0 0);
       --surface-soft: oklch(98.6% 0.01 255);
-      --surface-tint: oklch(96.5% 0.018 255);
+      --surface-tint: oklch(96.5% 0.016 255);
       --border: oklch(89.8% 0.014 255);
       --border-strong: oklch(84.8% 0.02 255);
       --text: oklch(24% 0.02 255);
@@ -829,7 +833,7 @@ function renderConsoleHtml(): string {
       display: grid;
       grid-template-columns: 260px minmax(0, 1fr);
       gap: 0;
-      background: var(--bg);
+      background: var(--surface);
     }
     .console-sidebar {
       position: sticky;
@@ -2432,10 +2436,93 @@ function renderOfficeHtml(): string {
       min-height: 0;
       overflow: hidden;
       background:
-        radial-gradient(circle at 20% 18%, oklch(97% 0.025 245), transparent 28%),
-        linear-gradient(180deg, oklch(99% 0.008 250), oklch(94% 0.018 245));
+        radial-gradient(circle at 24% 18%, oklch(100% 0 0), transparent 28%),
+        linear-gradient(180deg, oklch(99% 0.004 250), oklch(96% 0.012 248));
+    }
+    .office-clock {
+      position: absolute;
+      left: 20px;
+      top: 18px;
+      z-index: 3;
+      min-width: 176px;
+      padding: 11px 13px;
+      border: 1px solid oklch(100% 0 0 / .68);
+      border-radius: var(--radius);
+      background: oklch(100% 0 0 / .82);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .office-clock strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.15;
+      font-variant-numeric: tabular-nums;
+    }
+    .office-clock span {
+      display: block;
+      margin-top: 3px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .worktime-panel {
+      position: absolute;
+      right: 20px;
+      top: 18px;
+      z-index: 3;
+      width: min(280px, calc(100% - 40px));
+      padding: 12px;
+      border: 1px solid oklch(100% 0 0 / .68);
+      border-radius: var(--radius);
+      background: oklch(100% 0 0 / .84);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .worktime-panel h2 {
+      margin: 0 0 9px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.3;
+      font-weight: 900;
+    }
+    .worktime-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .worktime-item {
+      min-width: 0;
+      padding: 8px 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .worktime-item span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 850;
+    }
+    .worktime-item strong {
+      display: block;
+      margin-top: 3px;
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.2;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .worktime-footnote {
+      margin-top: 8px;
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.45;
     }
     #office-canvas {
+      position: relative;
       width: 100%;
       height: 100%;
       min-height: 520px;
@@ -2452,7 +2539,9 @@ function renderOfficeHtml(): string {
       align-items: flex-end;
       gap: 12px;
       pointer-events: none;
+      z-index: 3;
     }
+    .office-overlay button { pointer-events: auto; }
     #office-status {
       max-width: min(680px, 100%);
       padding: 10px 12px;
@@ -2467,13 +2556,20 @@ function renderOfficeHtml(): string {
     }
     .office-empty {
       position: absolute;
-      inset: 0;
+      left: 50%;
+      top: 52%;
+      z-index: 4;
       display: none;
-      place-items: center;
-      padding: 24px;
-      color: var(--text-muted);
-      font-size: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: oklch(100% 0 0 / .78);
+      color: var(--text-soft);
+      font-size: 13px;
       text-align: center;
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(10px);
+      transform: translate(-50%, -50%);
       pointer-events: none;
     }
     .office-empty.visible { display: grid; }
@@ -2495,6 +2591,17 @@ function renderOfficeHtml(): string {
       white-space: nowrap;
     }
     button:hover { background: var(--surface-tint); transform: translateY(-1px); box-shadow: 0 8px 18px oklch(24% 0.02 255 / .08); }
+    button:disabled {
+      cursor: progress;
+      opacity: .78;
+      transform: none;
+      box-shadow: none;
+    }
+    button.is-success {
+      border-color: oklch(72% 0.12 150);
+      background: var(--success-soft);
+      color: var(--success);
+    }
     @media (max-width: 820px) {
       .console-shell { display: block; }
       .console-sidebar { position: static; height: auto; }
@@ -2502,6 +2609,13 @@ function renderOfficeHtml(): string {
       .office-header { flex-direction: column; align-items: flex-start; padding: 18px; }
       .office-stats { justify-content: flex-start; }
       #office-canvas { min-height: 620px; }
+      .office-clock { left: 14px; top: 14px; min-width: 150px; }
+      .worktime-panel {
+        left: 14px;
+        right: 14px;
+        top: 92px;
+        width: auto;
+      }
       .office-overlay { left: 14px; right: 14px; bottom: 14px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -2563,11 +2677,25 @@ function renderOfficeHtml(): string {
         </div>
       </header>
       <div class="office-stage">
+        <div class="office-clock" aria-label="办公室时间">
+          <strong id="office-time">--:--:--</strong>
+          <span id="office-date">--</span>
+        </div>
+        <section class="worktime-panel" aria-label="办公室累计工作时间">
+          <h2>累计工作时间</h2>
+          <div class="worktime-grid">
+            <div class="worktime-item"><span>今天</span><strong id="worktime-day">0 分钟</strong></div>
+            <div class="worktime-item"><span>本周</span><strong id="worktime-week">0 分钟</strong></div>
+            <div class="worktime-item"><span>本月</span><strong id="worktime-month">0 分钟</strong></div>
+            <div class="worktime-item"><span>本年</span><strong id="worktime-year">0 分钟</strong></div>
+          </div>
+          <div class="worktime-footnote" id="worktime-note">包含已关闭会话。</div>
+        </section>
         <canvas id="office-canvas" aria-label="三维办公室员工视图"></canvas>
         <div id="office-empty" class="office-empty">办公室暂时空着。</div>
         <div class="office-overlay">
           <div id="office-status">办公室加载中</div>
-          <button id="refresh-office" type="button"><svg class="icon sm"><use href="#i-activity"></use></svg>刷新</button>
+          <button id="refresh-office" type="button"><svg class="icon sm"><use href="#i-activity"></use></svg><span>刷新</span></button>
         </div>
       </div>
     </section>
@@ -2582,53 +2710,19 @@ function renderOfficeHtml(): string {
     const statWorking = document.querySelector('#stat-working');
     const statSlow = document.querySelector('#stat-slow');
     const refreshOffice = document.querySelector('#refresh-office');
+    const refreshLabel = refreshOffice.querySelector('span');
+    const officeTime = document.querySelector('#office-time');
+    const officeDate = document.querySelector('#office-date');
+    const worktimeDay = document.querySelector('#worktime-day');
+    const worktimeWeek = document.querySelector('#worktime-week');
+    const worktimeMonth = document.querySelector('#worktime-month');
+    const worktimeYear = document.querySelector('#worktime-year');
+    const worktimeNote = document.querySelector('#worktime-note');
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const slowMs = 3 * 60 * 1000;
     let latestSessions = [];
     let selectedId = '';
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf5f7fb);
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-    camera.position.set(0, 7.2, 8.8);
-    camera.lookAt(0, 0, 0);
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xcbd5e1, 1.8);
-    scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    sun.position.set(4, 8, 5);
-    sun.castShadow = true;
-    scene.add(sun);
-
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(18, 14),
-      new THREE.MeshStandardMaterial({ color: 0xe8eef8, roughness: 0.82 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    scene.add(floor);
-    const grid = new THREE.GridHelper(18, 18, 0xb8c3d5, 0xd9e1ee);
-    grid.position.y = 0.01;
-    scene.add(grid);
-
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-    const workers = new Map();
-    const clickable = [];
-
-    const materials = {
-      idleBody: new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.55 }),
-      busyBody: new THREE.MeshStandardMaterial({ color: 0x4f7df3, roughness: 0.5 }),
-      slowBody: new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5 }),
-      head: new THREE.MeshStandardMaterial({ color: 0xf5c06f, roughness: 0.5 }),
-      desk: new THREE.MeshStandardMaterial({ color: 0x8aa2bd, roughness: 0.75 }),
-      laptop: new THREE.MeshStandardMaterial({ color: 0x263241, roughness: 0.45 }),
-      screen: new THREE.MeshStandardMaterial({ color: 0x8bd3ff, emissive: 0x1d4ed8, emissiveIntensity: 0.18, roughness: 0.25 }),
-    };
+    let refreshOkTimer = 0;
 
     function esc(value) {
       return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -2640,6 +2734,209 @@ function renderOfficeHtml(): string {
       const text = String(value ?? '').trim();
       return text.length > len ? text.slice(0, len - 1) + '…' : text;
     }
+
+    function updateClock() {
+      const now = new Date();
+      officeTime.textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+      officeDate.textContent = now.toLocaleDateString('zh-CN', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
+    }
+
+    function startOfDay(now) {
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    function startOfWeek(now) {
+      const day = now.getDay() || 7;
+      const start = startOfDay(now);
+      start.setDate(start.getDate() - day + 1);
+      return start;
+    }
+
+    function workEndMs(session, nowMs) {
+      const candidates = [
+        session.status === 'active' ? new Date(nowMs).toISOString() : undefined,
+        session.closedAt,
+        session.lastMessageAt,
+        session.createdAt,
+      ];
+      for (const value of candidates) {
+        const parsed = Date.parse(value || '');
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return nowMs;
+    }
+
+    function overlapMs(startMs, endMs, rangeStartMs, rangeEndMs) {
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0;
+      return Math.max(0, Math.min(endMs, rangeEndMs) - Math.max(startMs, rangeStartMs));
+    }
+
+    function formatWorkDuration(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return '0 分钟';
+      const minutes = Math.max(1, Math.round(ms / 60000));
+      if (minutes < 60) return minutes + ' 分钟';
+      const hours = Math.floor(minutes / 60);
+      const rest = minutes % 60;
+      if (hours < 24) return hours + ' 小时' + (rest ? ' ' + rest + ' 分钟' : '');
+      const days = Math.floor(hours / 24);
+      const restHours = hours % 24;
+      return days + ' 天' + (restHours ? ' ' + restHours + ' 小时' : '');
+    }
+
+    function updateWorktimeStats(sessions) {
+      const all = Array.isArray(sessions) ? sessions : [];
+      const now = new Date();
+      const nowMs = now.getTime();
+      const ranges = {
+        day: startOfDay(now).getTime(),
+        week: startOfWeek(now).getTime(),
+        month: new Date(now.getFullYear(), now.getMonth(), 1).getTime(),
+        year: new Date(now.getFullYear(), 0, 1).getTime(),
+      };
+      const totals = { day: 0, week: 0, month: 0, year: 0 };
+      let closedCount = 0;
+      for (const session of all) {
+        const startMs = Date.parse(session.createdAt || '');
+        const endMs = workEndMs(session, nowMs);
+        if (session.status === 'closed') closedCount += 1;
+        totals.day += overlapMs(startMs, endMs, ranges.day, nowMs);
+        totals.week += overlapMs(startMs, endMs, ranges.week, nowMs);
+        totals.month += overlapMs(startMs, endMs, ranges.month, nowMs);
+        totals.year += overlapMs(startMs, endMs, ranges.year, nowMs);
+      }
+      worktimeDay.textContent = formatWorkDuration(totals.day);
+      worktimeWeek.textContent = formatWorkDuration(totals.week);
+      worktimeMonth.textContent = formatWorkDuration(totals.month);
+      worktimeYear.textContent = formatWorkDuration(totals.year);
+      worktimeNote.textContent = '统计 ' + all.length + ' 名员工，包含 ' + closedCount + ' 名已离职。';
+    }
+
+    function setRefreshState(state, message) {
+      window.clearTimeout(refreshOkTimer);
+      refreshOffice.classList.toggle('is-success', state === 'success');
+      refreshOffice.disabled = state === 'loading';
+      refreshOffice.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+      refreshLabel.textContent = state === 'loading' ? '刷新中' : state === 'success' ? '已刷新' : '刷新';
+      if (message) statusEl.textContent = message;
+      if (state === 'success') {
+        refreshOkTimer = window.setTimeout(() => {
+          refreshOffice.classList.remove('is-success');
+          refreshLabel.textContent = '刷新';
+        }, 1200);
+      }
+    }
+
+    function updateOfficeSummary(sessions) {
+      const active = Array.isArray(sessions) ? sessions.filter((session) => session.status === 'active') : [];
+      const now = Date.now();
+      let busyCount = 0;
+      let slowCount = 0;
+      active.forEach((session) => {
+        const workingSince = Date.parse(session.turnStartedAt || '');
+        const working = Number.isFinite(workingSince) ? now - workingSince : 0;
+        const busy = session.runtimeStatus === 'busy';
+        const slow = busy && working >= slowMs;
+        if (busy) busyCount += 1;
+        if (slow) slowCount += 1;
+      });
+      statEmployees.textContent = active.length + ' 员工';
+      statWorking.textContent = busyCount + ' 干活';
+      statSlow.textContent = slowCount + ' 可敲打';
+      updateWorktimeStats(sessions);
+      emptyEl.classList.toggle('visible', active.length === 0);
+      statusEl.textContent = active.length
+        ? active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '')
+        : '办公室暂时空着。';
+      return { active, busyCount, slowCount };
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf9fafb);
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+    camera.position.set(0, 8.8, 10.2);
+    camera.lookAt(0, 0, 0);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xd9e2ec, 2.1);
+    scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(-4, 8, 5);
+    sun.castShadow = true;
+    sun.shadow.mapSize.width = 2048;
+    sun.shadow.mapSize.height = 2048;
+    scene.add(sun);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(22, 16),
+      new THREE.MeshStandardMaterial({ color: 0xf7f9fc, roughness: 0.86 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(22, 22, 0xcbd5e1, 0xe5e7eb);
+    grid.position.y = 0.01;
+    scene.add(grid);
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const workers = new Map();
+    const clickable = [];
+
+    const materials = {
+      body: new THREE.MeshStandardMaterial({ color: 0x101827, roughness: 0.6 }),
+      idleStripe: new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.45 }),
+      busyStripe: new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.45 }),
+      slowStripe: new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45 }),
+      head: new THREE.MeshStandardMaterial({ color: 0xf0b75e, roughness: 0.5 }),
+      desk: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.72 }),
+      deskLeg: new THREE.MeshStandardMaterial({ color: 0xd4dde9, roughness: 0.78 }),
+      chair: new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.58 }),
+      laptop: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 }),
+      screen: new THREE.MeshStandardMaterial({ color: 0x8bd3ff, emissive: 0x1d4ed8, emissiveIntensity: 0.18, roughness: 0.25 }),
+      wall: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 }),
+      prop: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.78 }),
+    };
+
+    function box(width, height, depth, material, x, y, z) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function addOfficeProps() {
+      const backWall = box(21, 0.18, 2.2, materials.wall, 0, 1.1, -7.2);
+      scene.add(backWall);
+      const sideCounter = box(5.2, 0.55, 1, materials.desk, -7.1, 0.52, -5.7);
+      scene.add(sideCounter);
+      for (let i = 0; i < 7; i += 1) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.18, 18), materials.head);
+        cup.position.set(-9 + i * 0.55, 0.92, -5.7 + (i % 2) * 0.18);
+        cup.castShadow = true;
+        scene.add(cup);
+      }
+      const cabinet = box(0.8, 1.15, 0.75, materials.prop, -3.4, 0.7, -6.2);
+      scene.add(cabinet);
+      const sofa = box(2.8, 0.42, 1, materials.prop, -7.2, 0.35, 4.9);
+      scene.add(sofa);
+      const table = box(1.1, 0.18, 0.65, materials.desk, -5.5, 0.35, 4.9);
+      scene.add(table);
+      const emptyDesks = [
+        { x: 4.2, z: -4.6 }, { x: 7.1, z: -4.6 }, { x: 4.2, z: -1.7 },
+        { x: 7.1, z: -1.7 }, { x: 4.2, z: 1.2 }, { x: 7.1, z: 1.2 },
+      ];
+      for (const item of emptyDesks) {
+        const desk = box(1.65, 0.18, 0.8, materials.desk, item.x, 0.45, item.z);
+        const monitor = box(0.58, 0.34, 0.05, materials.laptop, item.x + 0.18, 0.78, item.z - 0.2);
+        monitor.rotation.x = -0.18;
+        scene.add(desk, monitor);
+      }
+    }
+    addOfficeProps();
 
     function formatDuration(ms) {
       if (!Number.isFinite(ms) || ms <= 0) return '刚开始';
@@ -2691,11 +2988,26 @@ function renderOfficeHtml(): string {
       group.userData.sessionId = session.sessionId;
       group.userData.nudgeUntil = 0;
 
-      const desk = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.18, 0.72), materials.desk);
+      const desk = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.18, 0.82), materials.desk);
       desk.position.set(0, 0.45, 0.04);
       desk.castShadow = true;
       desk.receiveShadow = true;
       group.add(desk);
+      for (const [x, z] of [[-0.72, -0.28], [0.72, -0.28], [-0.72, 0.34], [0.72, 0.34]]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.45, 0.06), materials.deskLeg);
+        leg.position.set(x, 0.2, z);
+        leg.castShadow = true;
+        group.add(leg);
+      }
+
+      const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.14), materials.chair);
+      chairBack.position.set(-0.28, 0.74, 0.45);
+      chairBack.castShadow = true;
+      group.add(chairBack);
+      const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 0.58), materials.chair);
+      chairSeat.position.set(-0.28, 0.48, 0.34);
+      chairSeat.castShadow = true;
+      group.add(chairSeat);
 
       const laptop = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.36, 0.04), materials.laptop);
       laptop.position.set(0.25, 0.76, -0.22);
@@ -2708,11 +3020,16 @@ function renderOfficeHtml(): string {
       screen.rotation.x = -0.35;
       group.add(screen);
 
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.42, 6, 12), materials.idleBody);
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.42, 6, 12), materials.body);
       body.position.set(-0.24, 0.88, 0.05);
       body.castShadow = true;
       body.userData.pickable = true;
       group.add(body);
+
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.1, 0.06), materials.idleStripe);
+      stripe.position.set(-0.24, 0.99, 0.29);
+      stripe.castShadow = true;
+      group.add(stripe);
 
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 16), materials.head);
       head.position.set(-0.24, 1.32, 0.05);
@@ -2747,6 +3064,7 @@ function renderOfficeHtml(): string {
       pop.visible = false;
       group.add(pop);
       group.userData.body = body;
+      group.userData.stripe = stripe;
       group.userData.arm = arm;
       group.userData.label = label;
       group.userData.labelMaterial = labelMaterial;
@@ -2771,18 +3089,32 @@ function renderOfficeHtml(): string {
     }
 
     function layoutPosition(index, total) {
-      const cols = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(total))));
-      const rows = Math.ceil(total / cols);
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      return {
-        x: (col - (cols - 1) / 2) * 2.6,
-        z: (row - (rows - 1) / 2) * 2.15,
-      };
+      const seats = [
+        { x: -2.2, z: -3.9, r: 0 },
+        { x: 1.1, z: -3.9, r: 0 },
+        { x: -2.2, z: -1.15, r: 0 },
+        { x: 1.1, z: -1.15, r: 0 },
+        { x: -2.2, z: 1.65, r: 0 },
+        { x: 1.1, z: 1.65, r: 0 },
+        { x: -6.6, z: 1.9, r: -Math.PI / 2 },
+        { x: -6.6, z: -1.2, r: -Math.PI / 2 },
+        { x: 4.6, z: 3.9, r: Math.PI },
+        { x: 7.5, z: 3.9, r: Math.PI },
+        { x: -4.4, z: 4.3, r: Math.PI },
+        { x: 3.9, z: -6.0, r: 0 },
+        { x: 6.8, z: -6.0, r: 0 },
+        { x: -0.7, z: 4.5, r: Math.PI },
+        { x: 8.4, z: -0.2, r: Math.PI / 2 },
+        { x: -8.3, z: -4.0, r: -Math.PI / 2 },
+      ];
+      if (index < seats.length) return seats[index];
+      const overflow = index - seats.length;
+      const angle = overflow * 0.9;
+      return { x: Math.cos(angle) * 8.2, z: Math.sin(angle) * 5.6, r: -angle + Math.PI / 2 };
     }
 
     function renderWorkers() {
-      const active = latestSessions.filter((session) => session.status === 'active');
+      const { active } = updateOfficeSummary(latestSessions);
       const activeIds = new Set(active.map((session) => session.sessionId));
       for (const [id, group] of workers) {
         if (!activeIds.has(id)) {
@@ -2795,47 +3127,45 @@ function renderOfficeHtml(): string {
       }
       clickable.length = 0;
       const now = Date.now();
-      let busyCount = 0;
-      let slowCount = 0;
       active.slice(0, 16).forEach((session, index) => {
         let group = workers.get(session.sessionId);
+        const pos = layoutPosition(index, Math.min(active.length, 16));
         if (!group) {
           group = createWorker(session);
+          group.position.set(pos.x, 0, pos.z);
+          group.rotation.y = pos.r;
           workers.set(session.sessionId, group);
         } else {
           group.traverse((object) => {
             if (object.isMesh && object.userData.pickable) clickable.push(object);
           });
         }
-        const pos = layoutPosition(index, Math.min(active.length, 16));
-        group.position.x += (pos.x - group.position.x) * 0.25;
-        group.position.z += (pos.z - group.position.z) * 0.25;
+        group.userData.targetX = pos.x;
+        group.userData.targetZ = pos.z;
+        group.userData.baseRotation = pos.r;
         const workingSince = Date.parse(session.turnStartedAt || '');
         const working = Number.isFinite(workingSince) ? now - workingSince : 0;
         const busy = session.runtimeStatus === 'busy';
         const slow = busy && working >= slowMs;
-        if (busy) busyCount += 1;
-        if (slow) slowCount += 1;
         group.userData.slow = slow;
         group.userData.title = session.title || session.sessionId;
-        group.userData.body.material = slow ? materials.slowBody : busy ? materials.busyBody : materials.idleBody;
+        group.userData.stripe.material = slow ? materials.slowStripe : busy ? materials.busyStripe : materials.idleStripe;
         updateLabel(group, busy ? '等 ' + formatDuration(working) : '待命', slow ? 'slow' : busy ? 'busy' : 'idle');
       });
-      statEmployees.textContent = active.length + ' 员工';
-      statWorking.textContent = busyCount + ' 干活';
-      statSlow.textContent = slowCount + ' 可敲打';
-      emptyEl.classList.toggle('visible', active.length === 0);
-      statusEl.textContent = active.length
-        ? active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '')
-        : '办公室暂时空着。';
     }
 
-    async function loadOffice() {
+    async function loadOffice(options = {}) {
+      const manual = options.manual === true;
+      if (manual) setRefreshState('loading', '正在刷新办公室...');
       const res = await fetch('/api/sessions');
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        if (manual) setRefreshState('idle', '刷新失败');
+        throw new Error(await res.text());
+      }
       const payload = await res.json();
       latestSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
       renderWorkers();
+      if (manual) setRefreshState('success', '已刷新：' + new Date().toLocaleTimeString('zh-CN', { hour12: false }));
     }
 
     function resize() {
@@ -2844,7 +3174,7 @@ function renderOfficeHtml(): string {
       const height = Math.max(360, rect.height);
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
-      camera.position.set(0, width < 720 ? 8.2 : 7.2, width < 720 ? 10.5 : 8.8);
+      camera.position.set(0, width < 720 ? 9.8 : 8.8, width < 720 ? 12.2 : 10.2);
       camera.updateProjectionMatrix();
     }
 
@@ -2856,7 +3186,10 @@ function renderOfficeHtml(): string {
         const nudge = now < group.userData.nudgeUntil;
         const pop = group.userData.pop;
         const reaction = group.userData.reaction;
-        group.rotation.y = nudge ? Math.sin(now / 30) * 0.28 : 0;
+        const baseRotation = group.userData.baseRotation || 0;
+        group.position.x += ((group.userData.targetX ?? group.position.x) - group.position.x) * 0.08;
+        group.position.z += ((group.userData.targetZ ?? group.position.z) - group.position.z) * 0.08;
+        group.rotation.y = baseRotation + (nudge ? Math.sin(now / 30) * 0.28 : 0);
         group.userData.arm.rotation.z = nudge
           ? -1.05 + Math.sin(now / 42) * 0.42
           : busy && !prefersReducedMotion ? -1.05 + Math.sin(now / 190) * 0.16 : -1.05;
@@ -2902,13 +3235,16 @@ function renderOfficeHtml(): string {
     });
 
     refreshOffice.addEventListener('click', () => {
-      loadOffice().catch((error) => {
+      loadOffice({ manual: true }).catch((error) => {
+        setRefreshState('idle', '刷新失败：' + error.message);
         statusEl.textContent = '刷新失败：' + error.message;
       });
     });
     window.addEventListener('resize', resize);
     resize();
     animate();
+    updateClock();
+    window.setInterval(updateClock, 1000);
     loadOffice().catch((error) => {
       statusEl.textContent = '加载失败：' + error.message;
     });
