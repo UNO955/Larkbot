@@ -1,3 +1,10 @@
+/**
+ * JSON 文件持久化层。
+ *
+ * 当前项目用本地文件而不是数据库，是为了让开发机部署和备份足够轻。
+ * 这里负责两件事：一是把运行状态落到 ~/.larkbot，二是读回时做最小结构校验，
+ * 避免坏文件或旧版本字段把 daemon 启动流程拖垮。
+ */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -20,6 +27,7 @@ export class JsonSessionStore implements SessionStore {
   readonly botsPath: string;
   readonly expiredSessionsPath: string;
   readonly feedbackPath: string;
+  // 同类 JSON 写入串行化，避免并发事件同时 save 时后写入覆盖先写入的完整快照。
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
   private pendingExpiredSessionWrite: Promise<void> = Promise.resolve();
@@ -131,9 +139,13 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, `${snapshot}\n`, 'utf8');
+  // POSIX rename 在同一目录内是原子替换；daemon 崩溃时最多留下 tmp 文件，
+  // 不会把主 JSON 写成半截。
   await rename(tmp, path);
 }
 
+// 下面这些 guard 有意保持宽松：只验证运行依赖的核心字段。
+// 新字段可以向前兼容，缺失的旧字段由上层逻辑兜底。
 function isBot(value: unknown): value is Bot {
   if (!value || typeof value !== 'object') return false;
   const bot = value as Partial<Bot>;

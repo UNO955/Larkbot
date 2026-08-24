@@ -1,3 +1,10 @@
+/**
+ * 构造投给 traex 的消息信封。
+ *
+ * 这些 XML-like 标签不是给用户看的，而是给下游 Agent 提供稳定边界：
+ * 路由规则、发言人、引用消息、附件和当前用户消息分开包裹，避免模型把引用内容
+ * 当成新请求，或误调用飞书发送类能力绕过 larkbot 的统一回贴链路。
+ */
 import type { ImAttachment, ImMessage } from '../im/types.js';
 import type { Session } from './types.js';
 
@@ -82,6 +89,8 @@ function quotedBlock(messageId?: string, content?: string): string {
 }
 
 function evidenceReportingInstruction(): string {
+  // 结构化证据块会被 ConversationManager 从最终回答和 trace 中解析，
+  // 再决定最终回答卡/反馈卡是否展示“本轮参考资料”。
   return [
     '每次最终回答正文之后，必须额外追加一个仅供 larkbot 解析的结构化证据块；不要把它放进 Markdown 代码块：',
     '<larkbot_evidence>',

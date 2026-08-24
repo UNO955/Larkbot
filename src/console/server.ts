@@ -2492,6 +2492,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
 }
 
 function renderOfficeHtml(): string {
+  // 办公室页是独立的 3D 体验页；Three.js 从本地 vendor 路由加载，不依赖 CDN。
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2766,25 +2767,6 @@ function renderOfficeHtml(): string {
       box-shadow: var(--shadow-sm);
       backdrop-filter: blur(10px);
     }
-    .office-empty {
-      position: absolute;
-      left: 50%;
-      top: 52%;
-      z-index: 4;
-      display: none;
-      padding: 10px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: oklch(100% 0 0 / .78);
-      color: var(--text-soft);
-      font-size: 13px;
-      text-align: center;
-      box-shadow: var(--shadow-sm);
-      backdrop-filter: blur(10px);
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-    }
-    .office-empty.visible { display: grid; }
     button {
       height: 36px;
       border: 1px solid var(--border-strong);
@@ -2904,7 +2886,6 @@ function renderOfficeHtml(): string {
           <div class="worktime-footnote" id="worktime-note">包含已关闭会话。</div>
         </section>
         <canvas id="office-canvas" aria-label="三维办公室员工视图"></canvas>
-        <div id="office-empty" class="office-empty">办公室暂时空着。</div>
         <div class="office-overlay">
           <div id="office-status">办公室加载中</div>
           <button id="refresh-office" type="button"><svg class="icon sm"><use href="#i-activity"></use></svg><span>刷新</span></button>
@@ -2917,7 +2898,6 @@ function renderOfficeHtml(): string {
 
     const canvas = document.querySelector('#office-canvas');
     const statusEl = document.querySelector('#office-status');
-    const emptyEl = document.querySelector('#office-empty');
     const statEmployees = document.querySelector('#stat-employees');
     const statWorking = document.querySelector('#stat-working');
     const statSlow = document.querySelector('#stat-slow');
@@ -3021,6 +3001,7 @@ function renderOfficeHtml(): string {
     }
 
     function updateWorktimeStats(sessions) {
+      // 精确工时优先用 workLogs；历史会话没有 workLogs 时，按会话在岗区间估算。
       const all = Array.isArray(sessions) ? sessions : [];
       const now = new Date();
       const nowMs = now.getTime();
@@ -3094,7 +3075,6 @@ function renderOfficeHtml(): string {
       statWorking.textContent = busyCount + ' 干活';
       statSlow.textContent = slowCount + ' 可敲打';
       updateWorktimeStats(sessions);
-      emptyEl.classList.toggle('visible', active.length === 0);
       statusEl.textContent = active.length
         ? active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '')
         : '办公室暂时空着。';
@@ -3162,6 +3142,7 @@ function renderOfficeHtml(): string {
     }
 
     function addOfficeProps() {
+      // 静态办公区道具只创建一次；员工工位由 renderWorkers 根据会话状态增删。
       const backWall = box(21, 0.18, 2.2, materials.wall, 0, 1.1, -7.2);
       scene.add(backWall);
       const sideCounter = box(5.2, 0.55, 1, materials.desk, -7.1, 0.52, -5.7);
@@ -3237,6 +3218,7 @@ function renderOfficeHtml(): string {
     }
 
     function createWorker(session) {
+      // 每个 worker 是一个完整工位 group：桌椅、员工、屏幕、状态气泡一起移动。
       const group = new THREE.Group();
       group.userData.sessionId = session.sessionId;
       group.userData.nudgeUntil = 0;
@@ -3275,6 +3257,7 @@ function renderOfficeHtml(): string {
       group.add(screenFrame);
 
       const screenFace = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.31), materials.screenOff.clone());
+      // 屏幕亮面必须朝向员工，且略微前移，避免被外壳 z-fighting 遮住。
       screenFace.position.set(0.25, 0.918, -0.205);
       screenFace.rotation.x = -0.35;
       screenFace.renderOrder = 2;
@@ -3399,6 +3382,7 @@ function renderOfficeHtml(): string {
     function renderWorkers() {
       const { active } = updateOfficeSummary(latestSessions);
       const activeIds = new Set(active.map((session) => session.sessionId));
+      // 会话关闭后移除对应 3D group，防止旧员工继续占着工位。
       for (const [id, group] of workers) {
         if (!activeIds.has(id)) {
           scene.remove(group);
@@ -3410,6 +3394,7 @@ function renderOfficeHtml(): string {
       }
       clickable.length = 0;
       const now = Date.now();
+      // 同步最多 16 个活跃会话到固定工位，超出数量仍保留在会话表里。
       active.slice(0, 16).forEach((session, index) => {
         let group = workers.get(session.sessionId);
         const pos = layoutPosition(index, Math.min(active.length, 16));
@@ -3502,6 +3487,7 @@ function renderOfficeHtml(): string {
     }
 
     canvas.addEventListener('click', (event) => {
+      // 点击 3D 员工只更新控制台趣味反馈，不会向 traex 发送任何输入。
       const rect = canvas.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;

@@ -42,6 +42,8 @@ async function main(): Promise<void> {
     isAuthorized: ({ openId, chatId }) => isAuthorized(activeBot, openId, chatId),
   });
 
+  // ConversationManager 只依赖“发卡/改卡/回文本”的抽象动作；
+  // 飞书 API 细节留在 adapter 层，核心会话逻辑不绑定具体 IM 平台。
   const sessions = new ConversationManager({
     cli: createTraexAdapter(),
     store,
@@ -318,6 +320,7 @@ async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loa
 }
 
 function isAuthorized(bot: Bot, openId: string, chatId?: string): boolean {
+  // 私聊按人授权；群聊可按 chat_id 开关。Owner 永远允许，便于控制台救场。
   if (!openId) return false;
   if (openId === bot.ownerOpenId) return true;
   if (bot.allowedOpenIds?.includes(openId)) return true;
@@ -529,6 +532,8 @@ async function handleThinkingFeedback(opts: {
   rating: FeedbackRating;
   footer?: string;
 }): Promise<unknown> {
+  // 用户点好评/差评后，原思考卡会被替换成反馈态卡片；
+  // Owner 同时收到一张私聊归档卡，便于后续在控制台跟进。
   const session = opts.sessions.getSession(opts.sessionId);
   const terminalUrl = `${opts.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(opts.sessionId)}`;
   const operatorName = await opts.im.getUserName(opts.action.operatorId, opts.action.chatId).catch(() => undefined);
@@ -608,6 +613,7 @@ async function handleNegativeFeedbackSupplement(opts: {
   reason?: string;
   footer?: string;
 }): Promise<unknown> {
+  // 差评第一跳只记录 rating；第二跳把快捷原因/手写说明补回同一条反馈记录。
   const session = opts.sessions.getSession(opts.sessionId);
   const terminalUrl = `${opts.consolePublicUrl.replace(/\/+$/, '')}/terminal/${encodeURIComponent(opts.sessionId)}`;
   const operatorName = await opts.im.getUserName(opts.action.operatorId, opts.action.chatId).catch(() => undefined);

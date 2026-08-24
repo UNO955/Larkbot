@@ -89,6 +89,7 @@ export function buildTerminalCard(opts: TerminalCardOpts): ImCard {
   if (opts.status === 'completed') {
     const signature = completedFooter(opts.replySignature, opts.replyToId);
     const argosUrl = buildArgosUrl(opts.argosSource ?? opts.body, opts.argosUrlTemplate);
+    // 最终回答卡承担“可复盘结论”职责，因此完成态保留本轮参考资料。
     if (opts.knowledge) {
       elements.push({
         tag: 'markdown',
@@ -246,6 +247,8 @@ export function buildThinkingCard(opts: ThinkingCardOpts): ImCard {
       ],
     },
   ];
+  // 普通思考卡保持清爽；只有好评/差评后的反馈态思考卡展示参考资料，
+  // 方便用户在反馈时回看依据。
   if (opts.status === 'completed' && opts.feedback && opts.knowledge) {
     elements.push({
       tag: 'markdown',

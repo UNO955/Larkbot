@@ -11,6 +11,16 @@ import type { ImAdapter, ImEventHandler, ImCard, MsgFormat } from '../types.js';
 import { parseMessageEvent, type ParsedMessage } from './message-parser.js';
 import { logger } from '../../utils/logger.js';
 
+const sdkLogger = {
+  error: (...msg: any[]) => logger.error(`lark sdk: ${sanitizeSdkLog(msg)}`),
+  warn: (...msg: any[]) => logger.warn(`lark sdk: ${sanitizeSdkLog(msg)}`),
+  info: (...msg: any[]) => logger.info(`lark sdk: ${sanitizeSdkLog(msg)}`),
+  debug: (...msg: any[]) => logger.info(`lark sdk: ${sanitizeSdkLog(msg)}`),
+  trace: (...msg: any[]) => logger.info(`lark sdk: ${sanitizeSdkLog(msg)}`),
+};
+
+// 飞书 SDK 的错误对象会带完整 request config；默认日志可能把
+// Authorization/appSecret 写进 daemon.log。这里接管 SDK logger 并统一脱敏。
 export interface LarkClientOpts {
   appId: string;
   appSecret: string;
@@ -230,7 +240,8 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       wsClient = new lark.WSClient({
         appId: opts.appId,
         appSecret: opts.appSecret,
-        loggerLevel: process.env.DEBUG ? lark.LoggerLevel.info : lark.LoggerLevel.warn,
+        loggerLevel: process.env.DEBUG ? lark.LoggerLevel.info : lark.LoggerLevel.fatal,
+        logger: sdkLogger,
       });
       wsClient.start({ eventDispatcher: dispatcher });
       logger.info('飞书 WSClient 长连接已启动');
@@ -383,6 +394,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
   }
 
   async function fetchQuotedMessage(messageId: string) {
+    // 引用消息只是上下文增强。读取失败不能阻断当前消息，所以回传 unavailable 形态。
     try {
       const res: any = await client.im.v1.message.get({
         path: { message_id: messageId },
@@ -424,6 +436,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
 
   async function downloadAttachments(message: ParsedMessage) {
     if (message.resources.length === 0) return undefined;
+    // 附件属于运行时状态，落到 ~/.larkbot，避免图片/文件被误带进 Git。
     const dir = join(homedir(), '.larkbot', 'attachments', safeName(message.messageId));
     await mkdir(dir, { recursive: true });
     const attachments = [];
@@ -513,4 +526,21 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       return String(value).slice(0, 300);
     }
   }
+}
+
+function sanitizeSdkLog(value: unknown): string {
+  try {
+    return redactSecrets(JSON.stringify(value)).slice(0, 1000);
+  } catch {
+    return redactSecrets(String(value)).slice(0, 1000);
+  }
+}
+
+function redactSecrets(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer <redacted>')
+    .replace(/("Authorization"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("authorization"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("appSecret"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("app_secret"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3');
 }

@@ -1,3 +1,14 @@
+/**
+ * 会话编排核心。
+ *
+ * ConversationManager 把一个飞书话题映射到一个长期 traex PTY：
+ *   Session 是可持久化路由；Runtime 是内存里的进程、队列、终端快照和按钮状态。
+ *
+ * 关键约束：
+ *   - 同一 Session 内消息必须按顺序串行投递，不能并发写 PTY。
+ *   - 飞书卡片 patch 可能慢于 PTY 输出，flush 需要合并状态，避免旧的 working 覆盖 completed。
+ *   - 工时统计以 turn 为单位写 workLogs，关闭/停止/失败都必须补 endedAt。
+ */
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
@@ -35,6 +46,7 @@ interface Runtime {
   detector: IdleDetector;
   renderer: TerminalRenderer;
   queue: QueuedTurn[];
+  // ready=false 表示 PTY 已拉起但还没看到可输入提示符；此时消息先进队列。
   status: 'idle' | 'busy';
   ready: boolean;
   resumeAttempt: boolean;
@@ -106,6 +118,8 @@ export class ConversationManager {
   }
 
   find(chatId: string, rootMessageId: string, threadId?: string, relatedMessageId?: string): Session | undefined {
+    // 飞书事件里不同入口会带 root/thread/被引用 message_id 的不同组合。
+    // 这里集中做“同一话题”的归并，避免引用卡片、回复卡片时误开新会话。
     return [...this.sessions.values()].find((session) =>
       session.status === 'active'
       && session.chatId === chatId
@@ -294,6 +308,7 @@ export class ConversationManager {
       runtime = this.spawn(session, resume);
     }
     runtime.queue.push({
+      // 恢复过原生 CLI 历史或本地已有历史时，只投递 followUp；新会话首轮才投递完整 opening 信封。
       content: runtime.resumeAttempt || session.hasHistory ? followUp : opening,
       fallbackOpening: opening,
       question,
@@ -317,6 +332,8 @@ export class ConversationManager {
   }
 
   private async resolveResume(session: Session): Promise<string | undefined> {
+    // Session 持久化里只保存 larkbot 维度路由；traex 原生 session id 可能来自旧 history。
+    // 找不到时主动降级新上下文，并在话题里透明告知用户。
     if (!session.hasHistory) return undefined;
     const cliSessionId = session.cliSessionId ?? this.deps.cli.findSessionId(session.sessionId);
     if (cliSessionId) {
@@ -381,6 +398,8 @@ export class ConversationManager {
     this.deps.recordTerminalOutput?.(runtime.route.sessionId, chunk);
     runtime.renderer.write(chunk);
     if (!runtime.ready) {
+      // 启动阶段先只喂 IdleDetector 找 readyPattern。ready 前不写用户输入，
+      // 否则可能落进 folder trust / 欢迎页之类的非 composer 界面。
       runtime.detector.feed(chunk);
       if (runtime.detector.ready) {
         runtime.ready = true;
@@ -427,6 +446,7 @@ export class ConversationManager {
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
       : undefined;
+    // 记录本轮开始点，办公室工时统计和 trace footer 都依赖它。
     runtime.pendingFlushStatus = undefined;
     runtime.renderer.markNewTurn();
     runtime.detector.reset();
@@ -500,6 +520,8 @@ export class ConversationManager {
     runtime.route.cliSessionId = undefined;
     runtime.route.hasHistory = false;
     await this.persist();
+    // 只有“恢复旧 traex 会话失败且还没 ready”才自动重开新上下文。
+    // 已经 ready 后退出属于真实运行失败，不能悄悄重跑，避免重复执行命令。
     if (runtime.route.threadId) {
       await this.deps.notify(runtime.route.threadId, 'traex 原生会话恢复失败，已降级为新上下文继续处理。');
     }
@@ -555,6 +577,8 @@ export class ConversationManager {
     if (!runtime.route.threadId) return;
     if (runtime.turnStopped) return;
     if (runtime.posting) {
+      // patch/post 还在飞书网络请求中时，只记录更强的目标状态。
+      // 否则 completed 先到、working 后到，会把最终卡片回滚成处理中。
       runtime.pendingFlushStatus = strongerStatus(runtime.pendingFlushStatus, status);
       return;
     }
@@ -563,6 +587,7 @@ export class ConversationManager {
     runtime.posting = true;
     const final = status === 'working' ? undefined : await this.waitForSessionFinal(runtime);
     const rawAnswer = final?.text || answer;
+    // 参考资料只从完成后的完整 trace/final 中抽取，避免 working 过程里的半截证据污染最终卡。
     const knowledge = status === 'working' ? undefined : extractKnowledgeObservation(trace, rawAnswer);
     const answerCardKnowledge = knowledge?.references.length ? knowledge : undefined;
     const sourceAnswer = cleanAnswer(rawAnswer);
@@ -744,6 +769,8 @@ export class ConversationManager {
   }
 
   private endWorkLog(runtime: Runtime, status: SessionWorkLogStatus): void {
+    // endWorkLog 允许重复调用。中断、PTY 退出、正常完成可能从不同路径抵达，
+    // 第一次写 endedAt 后后续调用应成为 no-op。
     const id = runtime.turnWorkLogId;
     if (!id) return;
     const workLogs = runtime.route.workLogs;
@@ -858,6 +885,7 @@ function cleanAnswer(answer: string): string {
 }
 
 function extractKnowledgeObservation(trace: string, answer: string): KnowledgeObservation {
+  // 优先信任隐藏的 <larkbot_evidence> 结构化上报；文本扫描只作为兼容旧输出的兜底。
   const structured = extractStructuredEvidence(`${answer}\n${trace}`);
   const refs = uniqueKnowledgeReferences([
     ...structured.knowledgeReferences,

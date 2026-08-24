@@ -19,6 +19,7 @@ export interface Bot {
 }
 
 export interface SystemPromptProfile {
+  /** 控制台可维护的系统提示词预设；下一轮消息生效，不强制重启现有 traex 进程。 */
   id: string;
   name: string;
   content: string;
@@ -36,6 +37,7 @@ export type SessionStatus = 'active' | 'closed';
 export type SessionWorkLogStatus = 'completed' | 'failed' | 'stopped';
 
 export interface SessionWorkLog {
+  /** 一轮用户消息对应一条日志，用于办公室精确工时统计。 */
   id: string;
   startedAt: string;
   endedAt?: string;
@@ -44,6 +46,7 @@ export interface SessionWorkLog {
 }
 
 export interface Session {
+  /** 飞书话题到 traex 原生会话的持久化路由。 */
   sessionId: string;        // larkbot 自己的会话 id
   chatId: string;
   rootMessageId: string;    // 飞书话题根消息
@@ -71,6 +74,7 @@ export interface Session {
   latestQuestionMessageId?: string;
   latestAnswer?: string;
   latestKnowledge?: KnowledgeObservation;
+  /** 每轮任务的起止时间；比 createdAt/closedAt 更适合做精确工时。 */
   workLogs?: SessionWorkLog[];
   closedAt?: string;
   lastMessageAt: string;
@@ -114,6 +118,7 @@ export interface EvidenceReference {
 }
 
 export interface KnowledgeObservation {
+  /** 本轮从隐藏结构化证据和兜底文本扫描中提取到的引用来源。 */
   references: KnowledgeReference[];
   codeReferences?: EvidenceReference[];
   logReferences?: EvidenceReference[];
