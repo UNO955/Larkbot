@@ -1,7 +1,29 @@
 node_modules/
 dist/
-*.log
+coverage/
+
+# Local runtime configuration and state
 .env
-.DS_Store
+.env.*
+!.env.example
+.larkbot/
+.trae/
 bots.json
 sessions.json
+expired-sessions.json
+feedback.json
+
+# Logs and transient files
+*.log
+*.log.*
+*.tmp
+*.bak
+*.local
+.DS_Store
+
+# Credentials and private keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

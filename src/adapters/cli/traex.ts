@@ -284,7 +284,8 @@ function extractTaskCompleteFinal(entry: any): SessionFinalMessage | undefined {
 }
 
 function isEmptyFinalSentinel(text: string): boolean {
-  return text === 'BOTMUX_NOTHING_TO_SEND';
+  // BOTMUX_* is kept only for older rollout history.
+  return text === 'LARKBOT_NOTHING_TO_SEND' || text === 'BOTMUX_NOTHING_TO_SEND';
 }
 
 function extractModel(entry: any): string {

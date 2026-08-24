@@ -10,7 +10,7 @@ const ROUTING = [
   '你运行在 larkbot 中。',
   '用户在飞书话题中与你对话；话题内后续消息不一定会 @ 机器人，只要被传入就是当前用户请求。',
   '回复用户时只需要直接输出最终答案，larkbot 桥接层会负责把你的最终答案发回飞书。',
-  '禁止调用 botmux-send、lark-send、飞书发送类技能或任何额外回传机制；不要读取这些技能说明。',
+  '禁止调用任何飞书/IM 发送类技能、CLI 或额外回传机制；不要读取这些技能说明。',
   '如果消息包含 <quoted_message>，它只是用户引用的历史上下文；必须以最后的 <user_message> 作为当前请求。',
   evidenceReportingInstruction(),
 ].join('\n');

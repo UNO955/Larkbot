@@ -36,7 +36,7 @@ describe('prompt envelope', () => {
   it('首轮包含 routing、session 和发送者信息', () => {
     const prompt = buildOpeningPrompt(session, message);
     expect(prompt).toContain('<larkbot_routing>');
-    expect(prompt).toContain('禁止调用 botmux-send');
+    expect(prompt).toContain('禁止调用任何飞书/IM 发送类技能');
     expect(prompt).toContain('<larkbot_evidence>');
     expect(prompt).toContain('"knowledge_refs":[]');
     expect(prompt).toContain('<session_id>lm-1</session_id>');

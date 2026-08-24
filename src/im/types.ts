@@ -67,7 +67,7 @@ export interface ImEventHandler {
   onMention(msg: ImMessage): Promise<void>;
   /** 已存在的话题内收到新消息 —— 入队。 */
   onThreadReply(msg: ImMessage): Promise<void>;
-  /** 表情回复事件（阶段一 no-op；阶段三用于进度指示相关判定）。 */
+  /** 表情回复事件；当前仅保留扩展入口，进度表情由 daemon 主动添加 / 移除。 */
   onReaction(reaction: ImReaction): Promise<void>;
   /** 交互卡片按钮回调。 */
   onCardAction(action: ImCardAction): Promise<unknown>;
@@ -91,7 +91,7 @@ export interface ImAdapter {
   sendDirect(openId: string, content: string): Promise<string>;
   sendDirectCard(openId: string, card: ImCard): Promise<string>;
 
-  /** 给某条消息加表情，返回 reactionId（用于后续删除）。阶段三进度指示用。 */
+  /** 给某条消息加表情，返回 reactionId（用于后续删除）。 */
   addReaction(messageId: string, emojiType: string): Promise<string>;
   /** 删除某条消息上的指定表情。 */
   removeReaction(messageId: string, reactionId: string): Promise<void>;

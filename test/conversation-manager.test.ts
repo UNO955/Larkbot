@@ -865,7 +865,7 @@ describe('ConversationManager', () => {
       findSessionId: () => undefined,
       getSessionFinal: vi.fn(() => ({
         key: 'turn-empty:done',
-        text: 'BOTMUX_NOTHING_TO_SEND',
+        text: 'LARKBOT_NOTHING_TO_SEND',
       })),
       getSessionUsage: vi.fn(() => ({
         inputTokens: 1,
@@ -901,7 +901,7 @@ describe('ConversationManager', () => {
     child.emitData('❯ ');
     await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
 
-    child.emitData('\r\nBOTMUX_NOTHING_TO_SEND\r\nTURN_DONE');
+    child.emitData('\r\nLARKBOT_NOTHING_TO_SEND\r\nTURN_DONE');
     await vi.waitFor(() => expect(postTrace).toHaveBeenCalled(), { timeout: 1500 });
     expect(post).not.toHaveBeenCalled();
     manager.shutdownAll();

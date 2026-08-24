@@ -1,15 +1,14 @@
 /**
- * daemon 入口（阶段一）。
+ * daemon 入口。
  *
  * 装配 config + 飞书长连接 + traex 会话管理，打通命脉：
  *   @机器人一句 → 建话题 → spawn traex → 写入消息 → 输出回贴话题。
  *
- * 有意做薄：具体逻辑在 im/lark 与 core/session-manager，这里只负责编排与生命周期。
+ * 有意做薄：具体逻辑在 im/lark 与 core/conversation-manager，这里只负责编排与生命周期。
  *
- * 说明（阶段一范围）：
- *   - 停止分析由「卡片按钮 / 控制台」触发，不是表情。
- *   - 表情是「关闭流式卡片」后的轻量进度指示（收到→GoGoGo，完成→DONE），
- *     属阶段三卡片体系的一部分，阶段一不实现。
+ * 说明：
+ *   - 停止分析由「卡片按钮 / 控制台」触发，只中断当前 turn。
+ *   - 关闭流式卡片后，使用 Get / DONE 表情做轻量进度指示。
  */
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
@@ -209,10 +208,9 @@ async function main(): Promise<void> {
       }
     },
 
-    // ③ 表情事件：阶段一不处理。
-    //    关会话走卡片按钮/控制台；表情用于「卡片关闭时的进度指示」，均在阶段三实现。
+    // 表情事件暂不作为用户控制入口；停止和反馈统一走卡片按钮/控制台。
     async onReaction(_reaction: ImReaction): Promise<void> {
-      /* no-op（阶段一） */
+      /* no-op */
     },
 
     async onCardAction(action): Promise<unknown> {

@@ -81,10 +81,7 @@ traex 是交互式全屏 CLI，会依赖 TTY、光标控制、备用屏和 ready
 | Traex Adapter | `src/adapters/cli/traex.ts` | traex 启动参数、模型透传、resume、usage/final 读取 |
 | Terminal Renderer | `src/utils/terminal-renderer.ts` | 终端输出清洗、trace/answer 拆分、提示词 echo 隐藏 |
 | Idle Detector | `src/utils/idle-detector.ts` | quiescence + spinner guard + readyPattern idle 判定 |
-| Console Server | `src/console/server.ts` | 控制台 HTML/API、只读 xterm、SSE 输出、模型列表 |
-
-`src/core/session-manager.ts` 是早期阶段遗留实现，当前 daemon 使用的是
-`ConversationManager`。
+| Console Server | `src/console/server.ts` | 控制台 HTML/API、独立页面、只读 xterm、SSE 输出、模型列表 |
 
 ## 4. 关键流程
 
@@ -127,7 +124,12 @@ traex 是交互式全屏 CLI，会依赖 TTY、光标控制、备用屏和 ready
 控制台默认监听 `CONSOLE_PORT`，未配置时为 `8787`。
 
 主要能力：
-- `GET /`：bot 配置、系统提示词 profiles、活跃会话。
+- `GET /`：控制台总览。
+- `GET /config`：bot 配置、系统提示词 profiles、模型和落款。
+- `GET /chats`：群聊发现和授权。
+- `GET /sessions`：按全部 / 活跃 / 已关闭筛选会话路由。
+- `GET /feedback`：查看好评 / 差评反馈。
+- `GET /office`：3D 办公室视图、员工状态和工时统计。
 - `GET /api/models`：执行 `traex models` 获取模型列表。
 - `PATCH /api/bot`：保存 bot 配置，模型只影响新会话。
 - `GET /terminal/:sessionId`：只读 xterm 页面。

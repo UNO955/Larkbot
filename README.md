@@ -28,7 +28,8 @@ larkbot 的目标不是再做一个聊天机器人，而是把开发机上的 tr
 - **停止本轮分析**：卡片按钮 / 控制台只中断当前 turn，不关闭会话；会话后续可继续复用
 - **关闭会话**：控制台关闭并冻结会话路由
 - **表情进度指示**：关闭流式卡片后，用表情在触发消息上标注进度（收到 `Get` → 完成 `DONE`）
-- **本地控制台**：Web 页面配置 bot、群聊授权、系统提示词 profiles、Trae 模型、落款、流式卡片开关，并按发起人和群聊管理活跃 / 历史会话
+- **本地控制台**：Web 页面配置 bot、群聊授权、系统提示词 profiles、Trae 模型、落款、流式卡片开关，并按发起人、群聊和状态管理活跃 / 历史会话
+- **办公室视图**：控制台独立 `/office` 页面用 3D 场景展示当前会话员工、忙闲状态和日 / 周 / 月 / 年工时统计
 - **模型选择**：控制台通过 `/api/models` 执行 `traex models` 动态获取模型列表；保存后只影响新会话
 - **会话恢复**：daemon 重启后恢复会话路由，下一条消息 lazy resume 到 traex 原生会话；恢复失败时降级为新上下文
 - **生命周期清理**：每天凌晨 3 点关闭 3 天未活跃会话、删除 7 天未活跃路由，并私聊 Owner 汇总清理明细
@@ -73,6 +74,22 @@ npm start                  # 运行已编译的 dist/daemon.js
 ```
 
 状态文件默认保存在 `~/.larkbot/`，可通过 `LARKBOT_STATE_DIR` 覆盖。
+
+## 配置与敏感信息
+
+`.env` 只放本机运行配置和飞书凭证，不提交到 Git。仓库只保留 `.env.example` 作为字段说明。
+
+关键配置：
+
+- `LARK_APP_ID` / `LARK_APP_SECRET`：飞书应用凭证。
+- `OWNER_OPEN_ID`：管理员 open_id，默认具备提问和控制台操作权限。
+- `ALLOWED_OPEN_IDS`：额外授权用户列表，支持逗号、分号、空格或换行分隔。
+- `TRAEX_CWD`：traex 的执行工作目录。
+- `TRAEX_BIN`：traex 可执行文件路径。开发机用非登录 shell 启动 daemon 时，建议写绝对路径，例如 `/home/you/.local/bin/traex`。
+- `TRAE_HOME`：larkbot 专用 traex 会话目录，建议与手动 traex 隔离。
+- `LARKBOT_STATE_DIR`：`bots.json`、`sessions.json`、`feedback.json` 等运行状态目录，默认 `~/.larkbot/`。
+
+Git 忽略规则已经覆盖 `.env*`、本地状态目录、日志、临时文件和常见私钥格式。需要新增真实凭证文件时，先补 `.gitignore`，再放文件。
 
 ### 环境说明：node-pty 原生依赖
 

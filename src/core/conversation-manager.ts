@@ -852,7 +852,8 @@ function pad2(value: number): string {
 
 function cleanAnswer(answer: string): string {
   const text = stripLarkbotEvidence(answer).trim();
-  if (text === 'BOTMUX_NOTHING_TO_SEND') return '';
+  // BOTMUX_* is kept only for older rollout history.
+  if (text === 'LARKBOT_NOTHING_TO_SEND' || text === 'BOTMUX_NOTHING_TO_SEND') return '';
   return text;
 }
 

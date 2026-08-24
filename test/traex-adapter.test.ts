@@ -149,6 +149,15 @@ describe('traex adapter spawnSpec', () => {
         payload: {
           type: 'task_complete',
           turn_id: 'turn-empty',
+          last_agent_message: 'LARKBOT_NOTHING_TO_SEND',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-08-13T13:00:01.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-empty-old',
           last_agent_message: 'BOTMUX_NOTHING_TO_SEND',
         },
       }),
