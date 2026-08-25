@@ -3117,13 +3117,12 @@ function renderOfficeHtml(): string {
       worktimeNote.textContent = '统计 ' + all.length + ' 名员工，包含 ' + closedCount + ' 名已离职' + (estimatedCount ? '；' + estimatedCount + ' 名历史员工按在岗区间估算。' : '。');
     }
 
-    function setRefreshState(state, message) {
+    function setRefreshState(state) {
       window.clearTimeout(refreshOkTimer);
       refreshOffice.classList.toggle('is-success', state === 'success');
       refreshOffice.disabled = state === 'loading';
       refreshOffice.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
       refreshLabel.textContent = state === 'loading' ? '刷新中' : state === 'success' ? '已刷新' : '刷新';
-      if (message) statusEl.textContent = message;
       if (state === 'success') {
         refreshOkTimer = window.setTimeout(() => {
           refreshOffice.classList.remove('is-success');
@@ -3655,16 +3654,16 @@ function renderOfficeHtml(): string {
 
     async function loadOffice(options = {}) {
       const manual = options.manual === true;
-      if (manual) setRefreshState('loading', '正在刷新办公室...');
+      if (manual) setRefreshState('loading');
       const res = await fetch('/api/sessions');
       if (!res.ok) {
-        if (manual) setRefreshState('idle', '刷新失败');
+        if (manual) setRefreshState('idle');
         throw new Error(await res.text());
       }
       const payload = await res.json();
       latestSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
       renderWorkers();
-      if (manual) setRefreshState('success', '已刷新');
+      if (manual) setRefreshState('success');
     }
 
     function resize() {
