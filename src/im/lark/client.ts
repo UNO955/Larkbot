@@ -30,7 +30,7 @@ export interface LarkClientOpts {
 }
 
 export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
-  const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret });
+  const client = new lark.Client({ appId: opts.appId, appSecret: opts.appSecret, logger: sdkLogger });
   const staticAllowedOpenIds = new Set([opts.ownerOpenId, ...(opts.allowedOpenIds ?? [])].filter(Boolean));
   let wsClient: lark.WSClient | null = null;
   let botOpenId: string | undefined;
