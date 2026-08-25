@@ -198,6 +198,41 @@ describe('console terminal page', () => {
     expect((await after.json()).chats[0].enabled).toBe(true);
   });
 
+  it('提供只读系统监控页面和状态接口', async () => {
+    const store: SessionStore = {
+      loadBots: async () => [bot],
+      saveBots: async () => undefined,
+      loadSessions: async () => [session],
+      saveSessions: async () => undefined,
+      loadFeedbacks: async () => [],
+      saveFeedbacks: async () => undefined,
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const page = await fetch(`${base}/system`);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('系统监控');
+    expect(html).toContain('/api/system/status');
+
+    const res = await fetch(`${base}/api/system/status`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain('Bearer ');
+    const payload = JSON.parse(text);
+    expect(payload.status.host.hostname).toBeTruthy();
+    expect(payload.status.cpu.cores).toBeGreaterThan(0);
+    expect(payload.status.memory.total).toBeGreaterThan(0);
+    expect(payload.status.sessions.active).toBe(1);
+  });
+
   it('管理反馈记录状态并支持删除', async () => {
     let feedbacks: FeedbackRecord[] = [{
       id: 'fb-1',

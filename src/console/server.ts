@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { readFile, statfs } from 'node:fs/promises';
+import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -26,13 +26,18 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
+type ConsolePage = 'overview' | 'system' | 'config' | 'chats' | 'feedback' | 'sessions';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
     title: '控制台',
     eyebrow: 'Local operations cockpit',
     copy: '飞书作为团队入口，本地 daemon 负责路由、执行、观察、打断与反馈复盘。',
+  },
+  system: {
+    title: '系统监控',
+    eyebrow: 'Machine telemetry',
+    copy: '只读查看开发机 CPU、内存、磁盘、daemon 进程、会话负载和最近日志告警。',
   },
   config: {
     title: '配置',
@@ -325,6 +330,10 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { models: await loadTraexModels() });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/system/status') {
+      sendJson(res, { status: await collectSystemStatus(opts) });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/api/sessions') {
       sendJson(res, { sessions: await listSessions(opts) });
       return;
@@ -384,6 +393,170 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
     const status = error?.statusCode || 500;
     sendJson(res, { error: error?.message || 'internal_error' }, status);
   }
+}
+
+interface CpuTimes {
+  idle: number;
+  total: number;
+}
+
+let lastCpuTimes: CpuTimes | undefined;
+
+async function collectSystemStatus(opts: ConsoleServerOpts): Promise<Record<string, unknown>> {
+  const bot = await requireBot(opts).catch(() => undefined);
+  const sessions = await listSessions(opts).catch(() => []);
+  const feedbacks = await listFeedbacks(opts).catch(() => []);
+  const now = Date.now();
+  const activeSessions = sessions.filter((session) => session.status === 'active');
+  const busySessions = activeSessions.filter((session) => session.runtimeStatus === 'busy');
+  const slowSessions = busySessions.filter((session) => {
+    const started = Date.parse(session.turnStartedAt || '');
+    return Number.isFinite(started) && now - started >= 3 * 60 * 1000;
+  });
+  const cpu = sampleCpu();
+  const memoryTotal = totalmem();
+  const memoryFree = freemem();
+  const memoryUsed = Math.max(0, memoryTotal - memoryFree);
+  const [projectDisk, rootDisk, processCounts, logSummary] = await Promise.all([
+    diskUsage(process.cwd()).catch(() => undefined),
+    diskUsage('/').catch(() => undefined),
+    collectProcessCounts(),
+    readRecentLogWarnings(),
+  ]);
+  const processMemory = process.memoryUsage();
+  return {
+    collectedAt: new Date(now).toISOString(),
+    host: {
+      hostname: hostname(),
+      platform: platform(),
+      arch: arch(),
+      uptimeSeconds: uptime(),
+      nodeVersion: process.version,
+      cwd: process.cwd(),
+    },
+    cpu: {
+      percent: cpu.percent,
+      cores: cpus().length,
+      load1: loadavg()[0],
+      load5: loadavg()[1],
+      load15: loadavg()[2],
+    },
+    memory: {
+      total: memoryTotal,
+      used: memoryUsed,
+      free: memoryFree,
+      percent: memoryTotal > 0 ? memoryUsed / memoryTotal * 100 : 0,
+      processRss: processMemory.rss,
+      processHeapUsed: processMemory.heapUsed,
+      processHeapTotal: processMemory.heapTotal,
+    },
+    disks: {
+      project: projectDisk,
+      root: rootDisk,
+    },
+    processes: {
+      pid: process.pid,
+      uptimeSeconds: process.uptime(),
+      daemonCount: processCounts.daemon,
+      traexCount: processCounts.traex,
+      npmStartCount: processCounts.npmStart,
+    },
+    sessions: {
+      total: sessions.length,
+      active: activeSessions.length,
+      busy: busySessions.length,
+      slow: slowSessions.length,
+      closed: sessions.filter((session) => session.status === 'closed').length,
+    },
+    feedbacks: {
+      total: feedbacks.length,
+      open: feedbacks.filter((item) => item.status === 'open').length,
+      negative: feedbacks.filter((item) => item.rating === 'negative').length,
+    },
+    service: {
+      botEnabled: bot?.enabled ?? false,
+      botName: bot?.name ?? 'larkbot',
+      model: bot?.model ?? '',
+      consolePort: opts.port,
+    },
+    logs: logSummary,
+  };
+}
+
+function sampleCpu(): { percent: number } {
+  const current = cpus().reduce<CpuTimes>((sum, cpu) => {
+    const values = Object.values(cpu.times);
+    return {
+      idle: sum.idle + cpu.times.idle,
+      total: sum.total + values.reduce((acc, item) => acc + item, 0),
+    };
+  }, { idle: 0, total: 0 });
+  if (!lastCpuTimes) {
+    lastCpuTimes = current;
+    return { percent: 0 };
+  }
+  const idleDelta = current.idle - lastCpuTimes.idle;
+  const totalDelta = current.total - lastCpuTimes.total;
+  lastCpuTimes = current;
+  const used = totalDelta > 0 ? (1 - idleDelta / totalDelta) * 100 : 0;
+  return { percent: Math.max(0, Math.min(100, used)) };
+}
+
+async function diskUsage(path: string): Promise<Record<string, unknown>> {
+  const stats = await statfs(path);
+  const total = Number(stats.blocks) * Number(stats.bsize);
+  const free = Number(stats.bavail) * Number(stats.bsize);
+  const used = Math.max(0, total - free);
+  return {
+    path,
+    total,
+    used,
+    free,
+    percent: total > 0 ? used / total * 100 : 0,
+  };
+}
+
+async function collectProcessCounts(): Promise<{ daemon: number; traex: number; npmStart: number }> {
+  const [daemon, traex, npmStart] = await Promise.all([
+    pgrepCount('node dist/daemon.js'),
+    pgrepCount('traex'),
+    pgrepCount('npm start'),
+  ]);
+  return { daemon: Math.max(daemon, 1), traex, npmStart };
+}
+
+async function pgrepCount(pattern: string): Promise<number> {
+  try {
+    const { stdout } = await execFileText('pgrep', ['-fc', pattern], 1_000);
+    return Number.parseInt(stdout.trim(), 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function readRecentLogWarnings(): Promise<Record<string, unknown>> {
+  try {
+    const content = await readFile(`${process.cwd()}/daemon.log`, 'utf8');
+    const lines = content.split(/\r?\n/).filter((line) => /\b(?:WARN|ERROR)\b/.test(line));
+    const recent = lines.slice(-6).map((line) => redactLogLine(line).slice(0, 260));
+    return {
+      warningCount: lines.filter((line) => /\bWARN\b/.test(line)).length,
+      errorCount: lines.filter((line) => /\bERROR\b/.test(line)).length,
+      recent,
+    };
+  } catch {
+    return { warningCount: 0, errorCount: 0, recent: [] };
+  }
+}
+
+function redactLogLine(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer <redacted>')
+    .replace(/Authorization:\s*Bearer\s+[^\r\n'"\\]+/gi, 'Authorization: Bearer <redacted>')
+    .replace(/("Authorization"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("authorization"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("appSecret"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3')
+    .replace(/("app_secret"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3');
 }
 
 async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
@@ -702,6 +875,7 @@ function sendHtml(res: ServerResponse, html: string): void {
 
 function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/') return 'overview';
+  if (pathname === '/system') return 'system';
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
@@ -1022,6 +1196,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       grid-template-columns: minmax(0, 1fr) 336px;
       gap: 20px;
     }
+    .page-system .content-frame,
     .page-config .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
@@ -1031,29 +1206,40 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #region-config,
     .page-overview #region-chats,
     .page-overview #region-feedback,
+    .page-overview #region-system,
     .page-overview #region-sessions,
     .page-config #region-health,
+    .page-config #region-system,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-sessions,
     .page-chats #region-health,
+    .page-chats #region-system,
     .page-chats #region-config,
     .page-chats #region-feedback,
     .page-chats #region-sessions,
     .page-feedback #region-health,
+    .page-feedback #region-system,
     .page-feedback #region-config,
     .page-feedback #region-chats,
     .page-feedback #region-sessions,
     .page-sessions #region-health,
+    .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
-    .page-sessions #region-feedback {
+    .page-sessions #region-feedback,
+    .page-system #region-health,
+    .page-system #region-config,
+    .page-system #region-chats,
+    .page-system #region-feedback,
+    .page-system #region-sessions {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
-    .page-sessions .observer-column {
+    .page-sessions .observer-column,
+    .page-system .observer-column {
       display: none;
     }
     .primary-column,
@@ -1412,6 +1598,196 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       font-size: 12px;
       font-weight: 800;
     }
+    .monitor-shell {
+      display: grid;
+      gap: 18px;
+    }
+    .monitor-hero {
+      padding: 22px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr);
+      gap: 18px;
+      align-items: stretch;
+      background:
+        linear-gradient(135deg, oklch(100% 0 0), oklch(96% 0.018 245));
+    }
+    .monitor-status {
+      min-width: 0;
+      display: grid;
+      align-content: center;
+      gap: 12px;
+    }
+    .monitor-status h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+    .monitor-status p {
+      margin: 0;
+      color: var(--text-soft);
+      line-height: 1.6;
+    }
+    .health-pill {
+      width: fit-content;
+      min-height: 30px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 11px;
+      border: 1px solid oklch(82% 0.08 150);
+      border-radius: 999px;
+      background: var(--success-soft);
+      color: var(--success);
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .health-pill.warn {
+      border-color: oklch(85% 0.09 78);
+      background: var(--warning-soft);
+      color: var(--warning);
+    }
+    .health-pill.danger {
+      border-color: oklch(80% 0.12 24);
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    .monitor-clock {
+      padding: 16px;
+      display: grid;
+      align-content: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .monitor-clock strong {
+      display: block;
+      font-size: 28px;
+      line-height: 1.1;
+      font-variant-numeric: tabular-nums;
+    }
+    .monitor-clock span {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      padding: 0 22px 22px;
+    }
+    .metric-card {
+      min-width: 0;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .metric-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .metric-value {
+      font-size: 26px;
+      line-height: 1.1;
+      font-weight: 900;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .metric-detail {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      min-height: 18px;
+    }
+    .meter {
+      position: relative;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-tint);
+    }
+    .meter span {
+      display: block;
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--primary);
+      transition: width .24s ease, background .24s ease;
+    }
+    .meter.warn span { background: var(--warning); }
+    .meter.danger span { background: var(--danger); }
+    .sparkline {
+      width: 100%;
+      height: 34px;
+      display: block;
+    }
+    .monitor-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, .82fr);
+      gap: 18px;
+    }
+    .info-grid {
+      padding: 18px 22px 22px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .info-item {
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .info-item span {
+      display: block;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .info-item strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 15px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .log-list {
+      padding: 18px 22px 22px;
+      margin: 0;
+      list-style: none;
+      display: grid;
+      gap: 10px;
+    }
+    .log-list li {
+      min-width: 0;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      color: var(--text-soft);
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .log-list .empty-log {
+      font-family: inherit;
+      color: var(--text-muted);
+      text-align: center;
+    }
     @media (max-width: 1180px) {
       .console-shell { grid-template-columns: 220px minmax(0, 1fr); }
       .content-frame { grid-template-columns: 1fr; }
@@ -1421,6 +1797,10 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       .office-floor { border-left: 0; border-top: 1px solid oklch(89.8% 0.014 255 / .7); }
       .pipeline { grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
       .pipeline-step:not(:last-child)::after { display: none; }
+      .monitor-hero,
+      .monitor-columns { grid-template-columns: 1fr; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 820px) {
       .console-shell { display: block; }
@@ -1438,6 +1818,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       .office-copy strong { font-size: 18px; }
       .office-copy p { font-size: 13px; }
       .office-workers { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+      .metric-grid,
+      .info-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 480px) {
       .office-banner { grid-template-columns: 1fr; }
@@ -1494,6 +1876,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       <nav class="side-nav">
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
+        <a class="${navClass('system')}" href="/system"><svg class="icon sm"><use href="#i-cpu"></use></svg><span>系统</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -1555,6 +1938,87 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           <span class="pipeline-step"><svg class="icon"><use href="#i-thumbs"></use></svg>反馈闭环</span>
         </div>
       </header>
+    </section>
+    <section id="region-system">
+      <div class="monitor-shell">
+        <div class="monitor-hero">
+          <div class="monitor-status">
+            <span id="system-health-pill" class="health-pill"><svg class="icon sm"><use href="#i-radio"></use></svg>采集中</span>
+            <h2 id="system-headline">等待开发机状态</h2>
+            <p id="system-copy">面板每 5 秒刷新一次，只读取运行态指标，不展示环境变量、token 或完整请求头。</p>
+          </div>
+          <div class="monitor-clock">
+            <strong id="system-clock">--:--:--</strong>
+            <span id="system-host">--</span>
+            <span id="system-uptime">启动中</span>
+          </div>
+        </div>
+        <div class="metric-grid" aria-label="开发机核心指标">
+          <article class="metric-card">
+            <div class="metric-head"><span><svg class="icon sm"><use href="#i-cpu"></use></svg>CPU</span><span id="system-load">load -</span></div>
+            <div id="system-cpu" class="metric-value">-</div>
+            <div class="meter" id="system-cpu-meter"><span></span></div>
+            <svg id="system-cpu-spark" class="sparkline" viewBox="0 0 120 34" preserveAspectRatio="none"></svg>
+            <div id="system-cpu-detail" class="metric-detail">等待采样</div>
+          </article>
+          <article class="metric-card">
+            <div class="metric-head"><span><svg class="icon sm"><use href="#i-database"></use></svg>内存</span><span id="system-memory-free">-</span></div>
+            <div id="system-memory" class="metric-value">-</div>
+            <div class="meter" id="system-memory-meter"><span></span></div>
+            <svg id="system-memory-spark" class="sparkline" viewBox="0 0 120 34" preserveAspectRatio="none"></svg>
+            <div id="system-memory-detail" class="metric-detail">等待采样</div>
+          </article>
+          <article class="metric-card">
+            <div class="metric-head"><span><svg class="icon sm"><use href="#i-database"></use></svg>项目盘</span><span id="system-disk-free">-</span></div>
+            <div id="system-disk" class="metric-value">-</div>
+            <div class="meter" id="system-disk-meter"><span></span></div>
+            <div id="system-disk-detail" class="metric-detail">等待采样</div>
+          </article>
+          <article class="metric-card">
+            <div class="metric-head"><span><svg class="icon sm"><use href="#i-terminal"></use></svg>进程</span><span id="system-process-pid">-</span></div>
+            <div id="system-process" class="metric-value">-</div>
+            <div id="system-process-detail" class="metric-detail">等待采样</div>
+          </article>
+        </div>
+        <div class="monitor-columns">
+          <section class="card">
+            <div class="toolbar">
+              <div>
+                <div class="section-title">
+                  <span class="title-icon"><svg class="icon"><use href="#i-activity"></use></svg></span>
+                  <h2>服务与会话</h2>
+                </div>
+                <div class="sub">daemon、traex、会话负载和反馈队列的当前快照。</div>
+              </div>
+            </div>
+            <div class="info-grid">
+              <div class="info-item"><span>Bot</span><strong id="system-bot">-</strong></div>
+              <div class="info-item"><span>模型</span><strong id="system-model">默认</strong></div>
+              <div class="info-item"><span>控制台端口</span><strong id="system-port">-</strong></div>
+              <div class="info-item"><span>活跃 / 忙碌 / 慢任务</span><strong id="system-session-load">-</strong></div>
+              <div class="info-item"><span>关闭会话</span><strong id="system-closed-sessions">-</strong></div>
+              <div class="info-item"><span>待处理反馈</span><strong id="system-feedback-load">-</strong></div>
+              <div class="info-item"><span>Node 内存</span><strong id="system-node-memory">-</strong></div>
+              <div class="info-item"><span>Root 磁盘</span><strong id="system-root-disk">-</strong></div>
+              <div class="info-item"><span>采样时间</span><strong id="system-sampled-at">-</strong></div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="toolbar">
+              <div>
+                <div class="section-title">
+                  <span class="title-icon"><svg class="icon"><use href="#i-shield"></use></svg></span>
+                  <h2>最近告警日志</h2>
+                </div>
+                <div class="sub">只展示 WARN / ERROR 的脱敏摘要。</div>
+              </div>
+            </div>
+            <ul id="system-log-list" class="log-list">
+              <li class="empty-log">等待日志采样</li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </section>
     <section id="region-config" class="card">
       <div class="toolbar">
@@ -1836,6 +2300,39 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const observerSessions = document.querySelector('#observer-sessions');
     const observerChats = document.querySelector('#observer-chats');
     const observerTerminal = document.querySelector('#observer-terminal');
+      const systemHealthPill = document.querySelector('#system-health-pill');
+      const systemHeadline = document.querySelector('#system-headline');
+      const systemCopy = document.querySelector('#system-copy');
+      const systemClock = document.querySelector('#system-clock');
+      const systemHost = document.querySelector('#system-host');
+      const systemUptime = document.querySelector('#system-uptime');
+      const systemCpu = document.querySelector('#system-cpu');
+      const systemCpuMeter = document.querySelector('#system-cpu-meter');
+      const systemCpuSpark = document.querySelector('#system-cpu-spark');
+      const systemCpuDetail = document.querySelector('#system-cpu-detail');
+      const systemLoad = document.querySelector('#system-load');
+      const systemMemory = document.querySelector('#system-memory');
+      const systemMemoryFree = document.querySelector('#system-memory-free');
+      const systemMemoryMeter = document.querySelector('#system-memory-meter');
+      const systemMemorySpark = document.querySelector('#system-memory-spark');
+      const systemMemoryDetail = document.querySelector('#system-memory-detail');
+      const systemDisk = document.querySelector('#system-disk');
+      const systemDiskFree = document.querySelector('#system-disk-free');
+      const systemDiskMeter = document.querySelector('#system-disk-meter');
+      const systemDiskDetail = document.querySelector('#system-disk-detail');
+      const systemProcess = document.querySelector('#system-process');
+      const systemProcessPid = document.querySelector('#system-process-pid');
+      const systemProcessDetail = document.querySelector('#system-process-detail');
+      const systemBot = document.querySelector('#system-bot');
+      const systemModel = document.querySelector('#system-model');
+      const systemPort = document.querySelector('#system-port');
+      const systemSessionLoad = document.querySelector('#system-session-load');
+      const systemClosedSessions = document.querySelector('#system-closed-sessions');
+      const systemFeedbackLoad = document.querySelector('#system-feedback-load');
+      const systemNodeMemory = document.querySelector('#system-node-memory');
+      const systemRootDisk = document.querySelector('#system-root-disk');
+      const systemSampledAt = document.querySelector('#system-sampled-at');
+      const systemLogList = document.querySelector('#system-log-list');
       const officeWorkers = document.querySelector('#office-workers');
       const officeStatus = document.querySelector('#office-status');
       const summaryBot = document.querySelector('#summary-bot');
@@ -1853,6 +2350,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestFeedbacks = [];
       let promptProfiles = [];
       let activePromptId = '';
+      const isSystemPage = document.querySelector('.page-system') !== null;
+      const systemHistory = { cpu: [], memory: [] };
 
     function setStatus(text, failed = false) {
       if (status) {
@@ -2071,6 +2570,140 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       const days = Math.floor(hours / 24);
       const restHours = hours % 24;
       return days + ' 天' + (restHours ? ' ' + restHours + ' 小时' : '');
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes < 0) return '-';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let value = bytes;
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return (value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[index];
+    }
+
+    function formatPercent(value) {
+      return Number.isFinite(value) ? Math.max(0, Math.min(100, value)).toFixed(0) + '%' : '-';
+    }
+
+    function formatUptime(seconds) {
+      if (!Number.isFinite(seconds) || seconds <= 0) return '刚启动';
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (days > 0) return days + ' 天 ' + hours + ' 小时';
+      if (hours > 0) return hours + ' 小时 ' + minutes + ' 分钟';
+      return Math.max(1, minutes) + ' 分钟';
+    }
+
+    function setMeter(el, value) {
+      if (!el) return;
+      const pct = Math.max(0, Math.min(100, Number(value) || 0));
+      el.classList.toggle('warn', pct >= 70 && pct < 88);
+      el.classList.toggle('danger', pct >= 88);
+      const bar = el.querySelector('span');
+      if (bar) bar.style.width = pct + '%';
+    }
+
+    function pushHistory(key, value) {
+      const list = systemHistory[key];
+      if (!Array.isArray(list)) return [];
+      list.push(Math.max(0, Math.min(100, Number(value) || 0)));
+      while (list.length > 36) list.shift();
+      return list;
+    }
+
+    function drawSparkline(svg, points) {
+      if (!svg) return;
+      if (!points.length) {
+        svg.innerHTML = '';
+        return;
+      }
+      const width = 120;
+      const height = 34;
+      const step = points.length > 1 ? width / (points.length - 1) : width;
+      const d = points.map((value, index) => {
+        const x = index * step;
+        const y = height - (value / 100) * (height - 4) - 2;
+        return (index ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+      }).join(' ');
+      svg.innerHTML = '<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity=".86"></path>';
+    }
+
+    function healthTone(status) {
+      const cpu = status.cpu?.percent || 0;
+      const memory = status.memory?.percent || 0;
+      const disk = status.disks?.project?.percent || 0;
+      const errors = status.logs?.errorCount || 0;
+      if (cpu >= 88 || memory >= 88 || disk >= 92 || errors > 0) return 'danger';
+      if (cpu >= 70 || memory >= 72 || disk >= 80 || (status.sessions?.slow || 0) > 0) return 'warn';
+      return 'ok';
+    }
+
+    function updateHealthPill(status) {
+      if (!systemHealthPill || !systemHeadline || !systemCopy) return;
+      const tone = healthTone(status);
+      systemHealthPill.classList.toggle('warn', tone === 'warn');
+      systemHealthPill.classList.toggle('danger', tone === 'danger');
+      systemHealthPill.innerHTML = '<svg class="icon sm"><use href="#i-radio"></use></svg>' + (tone === 'danger' ? '需要关注' : tone === 'warn' ? '负载偏高' : '运行正常');
+      systemHeadline.textContent = tone === 'danger'
+        ? '开发机有指标需要处理'
+        : tone === 'warn' ? '开发机负载略高' : '开发机运行稳定';
+      systemCopy.textContent = 'CPU ' + formatPercent(status.cpu?.percent) + '，内存 ' + formatPercent(status.memory?.percent)
+        + '，项目盘 ' + formatPercent(status.disks?.project?.percent) + '，活跃会话 ' + (status.sessions?.active || 0) + ' 个。';
+    }
+
+    function renderSystemStatus(status) {
+      updateHealthPill(status);
+      const collectedAt = new Date(status.collectedAt || Date.now());
+      systemClock.textContent = collectedAt.toLocaleTimeString('zh-CN', { hour12: false });
+      systemHost.textContent = (status.host?.hostname || '-') + ' · ' + (status.host?.platform || '-') + '/' + (status.host?.arch || '-') + ' · ' + (status.host?.nodeVersion || '-');
+      systemUptime.textContent = '系统运行 ' + formatUptime(status.host?.uptimeSeconds) + '，daemon 运行 ' + formatUptime(status.processes?.uptimeSeconds);
+      systemCpu.textContent = formatPercent(status.cpu?.percent);
+      systemLoad.textContent = 'load ' + [status.cpu?.load1, status.cpu?.load5, status.cpu?.load15].map((n) => Number.isFinite(n) ? n.toFixed(2) : '-').join(' / ');
+      systemCpuDetail.textContent = (status.cpu?.cores || 0) + ' 核 · 最近两次采样差值';
+      setMeter(systemCpuMeter, status.cpu?.percent);
+      drawSparkline(systemCpuSpark, pushHistory('cpu', status.cpu?.percent));
+
+      systemMemory.textContent = formatPercent(status.memory?.percent);
+      systemMemoryFree.textContent = 'free ' + formatBytes(status.memory?.free);
+      systemMemoryDetail.textContent = formatBytes(status.memory?.used) + ' / ' + formatBytes(status.memory?.total);
+      setMeter(systemMemoryMeter, status.memory?.percent);
+      drawSparkline(systemMemorySpark, pushHistory('memory', status.memory?.percent));
+
+      const projectDisk = status.disks?.project;
+      systemDisk.textContent = formatPercent(projectDisk?.percent);
+      systemDiskFree.textContent = 'free ' + formatBytes(projectDisk?.free);
+      systemDiskDetail.textContent = (projectDisk?.path || '-') + ' · ' + formatBytes(projectDisk?.used) + ' / ' + formatBytes(projectDisk?.total);
+      setMeter(systemDiskMeter, projectDisk?.percent);
+
+      systemProcess.textContent = (status.processes?.daemonCount || 0) + ' daemon';
+      systemProcessPid.textContent = 'pid ' + (status.processes?.pid || '-');
+      systemProcessDetail.textContent = 'traex ' + (status.processes?.traexCount || 0) + ' · npm start ' + (status.processes?.npmStartCount || 0);
+      systemBot.textContent = (status.service?.botEnabled ? '已启用' : '已停用') + ' · ' + (status.service?.botName || 'larkbot');
+      systemModel.textContent = status.service?.model || '默认模型';
+      systemPort.textContent = String(status.service?.consolePort || '-');
+      systemSessionLoad.textContent = (status.sessions?.active || 0) + ' / ' + (status.sessions?.busy || 0) + ' / ' + (status.sessions?.slow || 0);
+      systemClosedSessions.textContent = String(status.sessions?.closed || 0);
+      systemFeedbackLoad.textContent = '未处理 ' + (status.feedbacks?.open || 0) + ' · 差评 ' + (status.feedbacks?.negative || 0);
+      systemNodeMemory.textContent = 'RSS ' + formatBytes(status.memory?.processRss) + ' · Heap ' + formatBytes(status.memory?.processHeapUsed) + ' / ' + formatBytes(status.memory?.processHeapTotal);
+      const rootDisk = status.disks?.root;
+      systemRootDisk.textContent = rootDisk ? formatPercent(rootDisk.percent) + ' · free ' + formatBytes(rootDisk.free) : '-';
+      systemSampledAt.textContent = collectedAt.toLocaleString('zh-CN');
+      const recentLogs = Array.isArray(status.logs?.recent) ? status.logs.recent : [];
+      systemLogList.innerHTML = recentLogs.length
+        ? recentLogs.map((line) => '<li>' + esc(line) + '</li>').join('')
+        : '<li class="empty-log">暂无 WARN / ERROR</li>';
+    }
+
+    async function loadSystemStatus() {
+      if (!systemHealthPill) return;
+      const res = await fetch('/api/system/status');
+      if (!res.ok) throw new Error(await res.text());
+      const payload = await res.json();
+      renderSystemStatus(payload.status || {});
     }
 
     function renderOffice() {
@@ -2427,6 +3060,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         loadChats(),
         loadSessions(),
         loadFeedbacks(),
+        loadSystemStatus(),
       ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
@@ -2485,6 +3119,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     loadFeedbacks().catch((error) => {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
+    loadSystemStatus().catch((error) => {
+      if (isSystemPage) setStatus('系统状态加载失败：' + error.message, true);
+    });
+    if (isSystemPage) {
+      window.setInterval(() => {
+        loadSystemStatus().catch((error) => setStatus('系统状态刷新失败：' + error.message, true));
+      }, 5000);
+    }
     window.setInterval(renderOffice, 30000);
   </script>
 </body>
@@ -2868,6 +3510,7 @@ function renderOfficeHtml(): string {
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.08V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.08-.4H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.08V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.08.4H21a2 2 0 0 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-5"/></symbol>
     <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8-6-16-3 8H2"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3"/></symbol>
   </svg>
@@ -2890,6 +3533,7 @@ function renderOfficeHtml(): string {
       <nav class="side-nav">
         <a class="nav-item" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item active" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
+        <a class="nav-item" href="/system"><svg class="icon sm"><use href="#i-cpu"></use></svg><span>系统</span></a>
         <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="nav-item" href="/feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
