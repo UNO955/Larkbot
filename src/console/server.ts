@@ -2651,6 +2651,12 @@ function renderOfficeHtml(): string {
       background:
         radial-gradient(circle at 24% 18%, oklch(100% 0 0), transparent 28%),
         linear-gradient(180deg, oklch(99% 0.004 250), oklch(96% 0.012 248));
+      transition: background .3s ease;
+    }
+    .office-stage.is-empty {
+      background:
+        radial-gradient(circle at 24% 18%, oklch(100% 0 0 / .86), transparent 26%),
+        linear-gradient(180deg, oklch(97.2% 0.01 250), oklch(93.5% 0.018 248));
     }
     .office-clock {
       position: absolute;
@@ -2766,6 +2772,43 @@ function renderOfficeHtml(): string {
       line-height: 1.5;
       box-shadow: var(--shadow-sm);
       backdrop-filter: blur(10px);
+    }
+    .office-focus-card {
+      position: absolute;
+      z-index: 4;
+      left: 0;
+      top: 0;
+      width: 230px;
+      padding: 10px 11px;
+      border: 1px solid oklch(100% 0 0 / .72);
+      border-radius: var(--radius);
+      background: oklch(100% 0 0 / .88);
+      color: var(--text);
+      box-shadow: 0 12px 30px oklch(24% 0.02 255 / .12);
+      backdrop-filter: blur(12px);
+      pointer-events: none;
+      opacity: 0;
+      transform: translate3d(0, 4px, 0);
+      transition: opacity .16s ease, transform .16s ease;
+    }
+    .office-focus-card.visible {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+    .office-focus-card strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.35;
+      font-weight: 900;
+      overflow-wrap: anywhere;
+    }
+    .office-focus-card span {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      font-variant-numeric: tabular-nums;
     }
     button {
       height: 36px;
@@ -2886,6 +2929,7 @@ function renderOfficeHtml(): string {
           <div class="worktime-footnote" id="worktime-note">包含已关闭会话。</div>
         </section>
         <canvas id="office-canvas" aria-label="三维办公室员工视图"></canvas>
+        <div id="office-focus-card" class="office-focus-card" aria-hidden="true"></div>
         <div class="office-overlay">
           <div id="office-status">办公室加载中</div>
           <button id="refresh-office" type="button"><svg class="icon sm"><use href="#i-activity"></use></svg><span>刷新</span></button>
@@ -2896,7 +2940,9 @@ function renderOfficeHtml(): string {
   <script type="module">
     import * as THREE from '/vendor/three.module.js';
 
+    const officeStage = document.querySelector('.office-stage');
     const canvas = document.querySelector('#office-canvas');
+    const focusCard = document.querySelector('#office-focus-card');
     const statusEl = document.querySelector('#office-status');
     const statEmployees = document.querySelector('#stat-employees');
     const statWorking = document.querySelector('#stat-working');
@@ -2950,6 +2996,34 @@ function renderOfficeHtml(): string {
     function pickLine(state) {
       const lines = pokeLines[state] || pokeLines.idle;
       return lines[Math.floor(Math.random() * lines.length)];
+    }
+
+    function stateLabel(state) {
+      return state === 'slow' ? '慢工位' : state === 'busy' ? '处理中' : '待命';
+    }
+
+    function stateDetail(session, workingMs) {
+      if (!session) return '';
+      if (session.runtimeStatus === 'busy') return '本轮已等待 ' + formatDuration(workingMs);
+      const updated = Date.parse(session.lastMessageAt || '');
+      if (Number.isFinite(updated)) return '最近活动 ' + formatDuration(Date.now() - updated) + ' 前';
+      return '等待下一轮消息';
+    }
+
+    function showFocusCard(group, event) {
+      if (!focusCard || !group?.userData?.sessionId) return;
+      const rect = officeStage.getBoundingClientRect();
+      const x = Math.min(Math.max(12, rect.width - 246), Math.max(12, event.clientX - rect.left + 14));
+      const y = Math.min(Math.max(12, rect.height - 112), Math.max(12, event.clientY - rect.top + 14));
+      focusCard.style.transform = 'translate3d(' + x + 'px, ' + y + 'px, 0)';
+      focusCard.innerHTML = '<strong>' + esc(compact(group.userData.title, 42)) + '</strong>'
+        + '<span>' + stateLabel(group.userData.state) + ' · ' + esc(group.userData.detail || '') + '</span>';
+      focusCard.classList.add('visible');
+    }
+
+    function hideFocusCard() {
+      if (!focusCard) return;
+      focusCard.classList.remove('visible');
     }
 
     function updateClock() {
@@ -3075,14 +3149,17 @@ function renderOfficeHtml(): string {
       statWorking.textContent = busyCount + ' 干活';
       statSlow.textContent = slowCount + ' 可敲打';
       updateWorktimeStats(sessions);
+      officeStage.classList.toggle('is-empty', active.length === 0);
+      scene.userData.empty = active.length === 0;
       statusEl.textContent = active.length
         ? active.length + ' 个员工在办公室，' + busyCount + ' 个正在干活' + (slowCount ? '，' + slowCount + ' 个超过 3 分钟可敲打' : '')
-        : '办公室暂时空着。';
+        : '办公室暂时空着，工位已进入低亮度待命。';
       return { active, busyCount, slowCount };
     }
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf9fafb);
+    scene.fog = new THREE.Fog(0xf9fafb, 14, 30);
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
     camera.position.set(0, 8.8, 10.2);
     camera.lookAt(0, 0, 0);
@@ -3115,22 +3192,38 @@ function renderOfficeHtml(): string {
     const pointer = new THREE.Vector2();
     const workers = new Map();
     const clickable = [];
+    let hoveredId = '';
 
     const materials = {
       body: new THREE.MeshStandardMaterial({ color: 0x101827, roughness: 0.6 }),
+      shirt: new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.62 }),
+      shirtDark: new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.66 }),
       idleStripe: new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.45 }),
       busyStripe: new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.45 }),
       slowStripe: new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45 }),
       head: new THREE.MeshStandardMaterial({ color: 0xf0b75e, roughness: 0.5 }),
+      hair: new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.7 }),
+      face: new THREE.MeshBasicMaterial({ color: 0x7c2d12, side: THREE.DoubleSide }),
       desk: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.72 }),
       deskLeg: new THREE.MeshStandardMaterial({ color: 0xd4dde9, roughness: 0.78 }),
       chair: new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.58 }),
       laptop: new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 }),
+      keyboard: new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.58 }),
       screenOff: new THREE.MeshStandardMaterial({ color: 0x05070d, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.35 }),
       screenOn: new THREE.MeshBasicMaterial({ color: 0x5ecbff, side: THREE.DoubleSide }),
+      screenGlow: new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.24, side: THREE.DoubleSide, depthWrite: false }),
       screenLine: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false }),
+      statusIdle: new THREE.MeshBasicMaterial({ color: 0x94a3b8, transparent: true, opacity: 0.24, side: THREE.DoubleSide, depthWrite: false }),
+      statusBusy: new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.36, side: THREE.DoubleSide, depthWrite: false }),
+      statusSlow: new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false }),
       wall: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 }),
       prop: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.78 }),
+      path: new THREE.MeshBasicMaterial({ color: 0xe8edf4, transparent: true, opacity: 0.58, depthWrite: false }),
+      rug: new THREE.MeshStandardMaterial({ color: 0xdbeafe, roughness: 0.9 }),
+      meeting: new THREE.MeshStandardMaterial({ color: 0xe0f2fe, roughness: 0.86 }),
+      plant: new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.7 }),
+      pot: new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.76 }),
+      lamp: new THREE.MeshBasicMaterial({ color: 0xfef3c7, transparent: true, opacity: 0.72, depthWrite: false }),
     };
 
     function box(width, height, depth, material, x, y, z) {
@@ -3143,8 +3236,29 @@ function renderOfficeHtml(): string {
 
     function addOfficeProps() {
       // 静态办公区道具只创建一次；员工工位由 renderWorkers 根据会话状态增删。
+      const path = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 14.4), materials.path);
+      path.rotation.x = -Math.PI / 2;
+      path.position.set(2.75, 0.018, -0.4);
+      scene.add(path);
+      const focusRug = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 4.8), materials.rug);
+      focusRug.rotation.x = -Math.PI / 2;
+      focusRug.position.set(-0.55, 0.014, -2.55);
+      focusRug.receiveShadow = true;
+      scene.add(focusRug);
+      const loungeRug = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 2.4), materials.meeting);
+      loungeRug.rotation.x = -Math.PI / 2;
+      loungeRug.position.set(-6.55, 0.015, 4.85);
+      loungeRug.receiveShadow = true;
+      scene.add(loungeRug);
+
       const backWall = box(21, 0.18, 2.2, materials.wall, 0, 1.1, -7.2);
       scene.add(backWall);
+      const whiteboard = box(3.2, 1.1, 0.06, materials.wall, 1.1, 1.35, -7.03);
+      scene.add(whiteboard);
+      const boardTitle = box(1.75, 0.03, 0.045, materials.busyStripe, 0.55, 1.64, -6.96);
+      const boardLineA = box(2.25, 0.025, 0.035, materials.deskLeg, 0.8, 1.4, -6.95);
+      const boardLineB = box(1.4, 0.025, 0.035, materials.deskLeg, 0.42, 1.22, -6.95);
+      scene.add(boardTitle, boardLineA, boardLineB);
       const sideCounter = box(5.2, 0.55, 1, materials.desk, -7.1, 0.52, -5.7);
       scene.add(sideCounter);
       for (let i = 0; i < 7; i += 1) {
@@ -3155,10 +3269,44 @@ function renderOfficeHtml(): string {
       }
       const cabinet = box(0.8, 1.15, 0.75, materials.prop, -3.4, 0.7, -6.2);
       scene.add(cabinet);
+      for (let i = 0; i < 3; i += 1) {
+        const drawerLine = box(0.62, 0.025, 0.035, materials.deskLeg, -3.4, 0.42 + i * 0.28, -5.81);
+        scene.add(drawerLine);
+      }
       const sofa = box(2.8, 0.42, 1, materials.prop, -7.2, 0.35, 4.9);
       scene.add(sofa);
       const table = box(1.1, 0.18, 0.65, materials.desk, -5.5, 0.35, 4.9);
       scene.add(table);
+      const meetingTable = box(2.8, 0.2, 1.2, materials.desk, 5.9, 0.43, 3.15);
+      scene.add(meetingTable);
+      for (const z of [2.35, 3.95]) {
+        for (const x of [4.95, 5.85, 6.75]) {
+          const seat = box(0.42, 0.12, 0.38, materials.chair, x, 0.31, z);
+          scene.add(seat);
+        }
+      }
+      const plantSpots = [
+        { x: -9.2, z: -6.1 }, { x: -9.1, z: 5.9 }, { x: 9.2, z: -6.2 }, { x: 8.9, z: 5.2 },
+      ];
+      for (const spot of plantSpots) {
+        const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.23, 0.32, 18), materials.pot);
+        pot.position.set(spot.x, 0.17, spot.z);
+        pot.castShadow = true;
+        scene.add(pot);
+        for (let i = 0; i < 5; i += 1) {
+          const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.42, 8), materials.plant);
+          leaf.position.set(spot.x + Math.cos(i * 1.25) * 0.1, 0.52, spot.z + Math.sin(i * 1.25) * 0.1);
+          leaf.rotation.z = (i - 2) * 0.18;
+          leaf.castShadow = true;
+          scene.add(leaf);
+        }
+      }
+      for (const x of [-4.9, 0.4, 5.6]) {
+        const light = new THREE.Mesh(new THREE.CircleGeometry(0.62, 32), materials.lamp.clone());
+        light.rotation.x = -Math.PI / 2;
+        light.position.set(x, 2.22, -1.4);
+        scene.add(light);
+      }
       const emptyDesks = [
         { x: 4.2, z: -4.6 }, { x: 7.1, z: -4.6 }, { x: 4.2, z: -1.7 },
         { x: 7.1, z: -1.7 }, { x: 4.2, z: 1.2 }, { x: 7.1, z: 1.2 },
@@ -3167,7 +3315,9 @@ function renderOfficeHtml(): string {
         const desk = box(1.65, 0.18, 0.8, materials.desk, item.x, 0.45, item.z);
         const monitor = box(0.58, 0.34, 0.05, materials.laptop, item.x + 0.18, 0.84, item.z - 0.2);
         monitor.rotation.x = -0.18;
-        scene.add(desk, monitor);
+        const keyboard = box(0.42, 0.035, 0.16, materials.keyboard, item.x + 0.05, 0.58, item.z - 0.03);
+        const chair = box(0.62, 0.16, 0.5, materials.chair, item.x + 0.24, 0.48, item.z + 0.42);
+        scene.add(desk, monitor, keyboard, chair);
       }
     }
     addOfficeProps();
@@ -3234,6 +3384,10 @@ function renderOfficeHtml(): string {
         leg.castShadow = true;
         group.add(leg);
       }
+      const deskMat = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.025, 0.48), materials.prop);
+      deskMat.position.set(0.18, 0.555, -0.12);
+      deskMat.castShadow = true;
+      group.add(deskMat);
 
       const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.14), materials.chair);
       chairBack.position.set(0.25, 0.74, 0.45);
@@ -3243,6 +3397,14 @@ function renderOfficeHtml(): string {
       chairSeat.position.set(0.25, 0.48, 0.34);
       chairSeat.castShadow = true;
       group.add(chairSeat);
+      const chairStem = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.36, 14), materials.chair);
+      chairStem.position.set(0.25, 0.25, 0.34);
+      chairStem.castShadow = true;
+      group.add(chairStem);
+      const chairBase = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.24, 0.045, 24), materials.chair);
+      chairBase.position.set(0.25, 0.055, 0.34);
+      chairBase.castShadow = true;
+      group.add(chairBase);
 
       const laptop = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.46, 0.045), materials.laptop);
       laptop.position.set(0.25, 0.88, -0.23);
@@ -3262,6 +3424,12 @@ function renderOfficeHtml(): string {
       screenFace.rotation.x = -0.35;
       screenFace.renderOrder = 2;
       group.add(screenFace);
+      const screenGlow = new THREE.Mesh(new THREE.PlaneGeometry(0.74, 0.5), materials.screenGlow.clone());
+      screenGlow.position.set(0.25, 0.93, -0.192);
+      screenGlow.rotation.x = -0.35;
+      screenGlow.renderOrder = 1;
+      screenGlow.visible = false;
+      group.add(screenGlow);
       const screenLines = [];
       for (let i = 0; i < 3; i += 1) {
         const line = new THREE.Mesh(new THREE.PlaneGeometry(0.3 - i * 0.045, 0.026), materials.screenLine.clone());
@@ -3272,30 +3440,81 @@ function renderOfficeHtml(): string {
         group.add(line);
         screenLines.push(line);
       }
+      const keyboard = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.035, 0.18), materials.keyboard);
+      keyboard.position.set(0.17, 0.585, -0.03);
+      keyboard.castShadow = true;
+      group.add(keyboard);
+      for (let i = 0; i < 4; i += 1) {
+        const keyLine = new THREE.Mesh(new THREE.BoxGeometry(0.35 - i * 0.03, 0.008, 0.012), materials.deskLeg);
+        keyLine.position.set(0.17, 0.607, -0.082 + i * 0.035);
+        group.add(keyLine);
+      }
+      const mouse = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 8), materials.keyboard);
+      mouse.scale.set(1.15, 0.35, 0.82);
+      mouse.position.set(0.54, 0.602, -0.03);
+      mouse.castShadow = true;
+      group.add(mouse);
 
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.3, 6, 12), materials.body);
-      body.position.set(0.25, 0.8, 0.24);
+      const statusRing = new THREE.Mesh(new THREE.RingGeometry(0.44, 0.56, 48), materials.statusIdle.clone());
+      statusRing.rotation.x = -Math.PI / 2;
+      statusRing.position.set(0.25, 0.018, 0.34);
+      statusRing.renderOrder = 1;
+      group.add(statusRing);
+
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.34, 7, 14), materials.shirt);
+      body.position.set(0.25, 0.83, 0.22);
+      body.rotation.x = -0.12;
+      body.scale.set(1.05, 1, 0.88);
       body.castShadow = true;
       body.userData.pickable = true;
       group.add(body);
 
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.075, 0.052), materials.idleStripe);
-      stripe.position.set(0.25, 0.89, 0.45);
-      stripe.castShadow = true;
-      group.add(stripe);
+      const collar = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.08, 0.055), materials.shirtDark);
+      collar.position.set(0.25, 0.99, 0.105);
+      collar.rotation.x = -0.12;
+      collar.castShadow = true;
+      group.add(collar);
+      const badge = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.035), materials.idleStripe);
+      badge.position.set(0.09, 0.86, 0.055);
+      badge.castShadow = true;
+      group.add(badge);
 
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 24, 16), materials.head);
-      head.position.set(0.25, 1.14, 0.24);
+      head.position.set(0.25, 1.17, 0.17);
       head.castShadow = true;
       head.userData.pickable = true;
       group.add(head);
 
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.42, 12), materials.head);
-      arm.position.set(0.34, 0.84, -0.04);
-      arm.rotation.z = -1.05;
-      arm.rotation.x = 0.6;
-      arm.castShadow = true;
-      group.add(arm);
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(0.174, 24, 10, 0, Math.PI * 2, 0, Math.PI * 0.54), materials.hair);
+      hair.position.set(0.25, 1.226, 0.17);
+      hair.rotation.x = -0.1;
+      hair.castShadow = true;
+      group.add(hair);
+      const faceMark = new THREE.Mesh(new THREE.PlaneGeometry(0.075, 0.018), materials.face);
+      faceMark.position.set(0.25, 1.15, 0.006);
+      faceMark.renderOrder = 4;
+      group.add(faceMark);
+
+      const leftArm = new THREE.Mesh(new THREE.CylinderGeometry(0.033, 0.037, 0.46, 12), materials.head);
+      leftArm.position.set(0.06, 0.78, 0.03);
+      leftArm.rotation.z = 0.72;
+      leftArm.rotation.x = 0.95;
+      leftArm.castShadow = true;
+      group.add(leftArm);
+      const rightArm = new THREE.Mesh(new THREE.CylinderGeometry(0.033, 0.037, 0.46, 12), materials.head);
+      rightArm.position.set(0.45, 0.78, 0.03);
+      rightArm.rotation.z = -0.72;
+      rightArm.rotation.x = 0.95;
+      rightArm.castShadow = true;
+      group.add(rightArm);
+      const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 8), materials.head);
+      leftHand.position.set(0.03, 0.62, -0.09);
+      leftHand.castShadow = true;
+      group.add(leftHand);
+      const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 8), materials.head);
+      rightHand.position.set(0.47, 0.62, -0.09);
+      rightHand.castShadow = true;
+      group.add(rightHand);
 
       const labelMaterial = new THREE.SpriteMaterial({ map: makeLabelTexture('待命', 'idle'), transparent: true });
       const label = new THREE.Sprite(labelMaterial);
@@ -3317,10 +3536,16 @@ function renderOfficeHtml(): string {
       pop.visible = false;
       group.add(pop);
       group.userData.body = body;
-      group.userData.stripe = stripe;
+      group.userData.head = head;
+      group.userData.badge = badge;
       group.userData.screen = screenFace;
+      group.userData.screenGlow = screenGlow;
       group.userData.screenLines = screenLines;
-      group.userData.arm = arm;
+      group.userData.leftArm = leftArm;
+      group.userData.rightArm = rightArm;
+      group.userData.leftHand = leftHand;
+      group.userData.rightHand = rightHand;
+      group.userData.statusRing = statusRing;
       group.userData.label = label;
       group.userData.labelMaterial = labelMaterial;
       group.userData.reaction = reaction;
@@ -3419,8 +3644,11 @@ function renderOfficeHtml(): string {
         group.userData.state = slow ? 'slow' : busy ? 'busy' : 'idle';
         group.userData.screenBusy = busy;
         group.userData.title = session.title || session.sessionId;
-        group.userData.stripe.material = slow ? materials.slowStripe : busy ? materials.busyStripe : materials.idleStripe;
+        group.userData.detail = stateDetail(session, working);
+        group.userData.badge.material = slow ? materials.slowStripe : busy ? materials.busyStripe : materials.idleStripe;
+        group.userData.statusRing.material.color.setHex(slow ? 0xf59e0b : busy ? 0x3b82f6 : 0x94a3b8);
         group.userData.screen.material = busy ? materials.screenOn : materials.screenOff;
+        group.userData.screenGlow.visible = busy;
         updateLabel(group, busy ? '等 ' + formatDuration(working) : '待命', slow ? 'slow' : busy ? 'busy' : 'idle');
       });
     }
@@ -3452,19 +3680,34 @@ function renderOfficeHtml(): string {
     function animate() {
       requestAnimationFrame(animate);
       const now = performance.now();
+      const empty = scene.userData.empty === true;
+      hemi.intensity += ((empty ? 1.35 : 2.1) - hemi.intensity) * 0.04;
+      sun.intensity += ((empty ? 1.45 : 2.2) - sun.intensity) * 0.04;
       for (const group of workers.values()) {
         const busy = group.userData.labelTone === 'busy' || group.userData.labelTone === 'slow';
+        const slow = group.userData.labelTone === 'slow';
         const nudge = now < group.userData.nudgeUntil;
         const pop = group.userData.pop;
         const reaction = group.userData.reaction;
         const screenLines = group.userData.screenLines || [];
+        const screenGlow = group.userData.screenGlow;
+        const statusRing = group.userData.statusRing;
         const baseRotation = group.userData.baseRotation || 0;
+        const isFocused = group.userData.sessionId === selectedId || group.userData.sessionId === hoveredId;
         group.position.x += ((group.userData.targetX ?? group.position.x) - group.position.x) * 0.08;
         group.position.z += ((group.userData.targetZ ?? group.position.z) - group.position.z) * 0.08;
         group.rotation.y = baseRotation + (nudge ? Math.sin(now / 30) * 0.28 : 0);
-        group.userData.arm.rotation.z = nudge
-          ? -1.05 + Math.sin(now / 42) * 0.42
-          : busy && !prefersReducedMotion ? -1.05 + Math.sin(now / 190) * 0.16 : -1.05;
+        const typingWave = prefersReducedMotion ? 0 : Math.sin(now / (slow ? 90 : 150));
+        const nudgeWave = Math.sin(now / 42);
+        group.userData.leftArm.rotation.z = nudge
+          ? 0.72 + nudgeWave * 0.36
+          : busy ? 0.72 + typingWave * 0.09 : 0.72;
+        group.userData.rightArm.rotation.z = nudge
+          ? -0.72 + nudgeWave * 0.36
+          : busy ? -0.72 - typingWave * 0.12 : -0.72;
+        group.userData.leftHand.position.y = busy && !prefersReducedMotion ? 0.62 + Math.abs(typingWave) * 0.035 : 0.62;
+        group.userData.rightHand.position.y = busy && !prefersReducedMotion ? 0.62 + Math.abs(Math.cos(now / 155)) * 0.035 : 0.62;
+        group.userData.head.position.y = busy && !prefersReducedMotion ? 1.17 + Math.sin(now / 420) * 0.018 : 1.17;
         screenLines.forEach((line, index) => {
           line.visible = busy;
           if (!busy) return;
@@ -3472,6 +3715,16 @@ function renderOfficeHtml(): string {
           line.material.opacity = wave;
           line.scale.x = 0.82 + wave * 0.32;
         });
+        if (screenGlow) {
+          screenGlow.visible = busy;
+          screenGlow.material.opacity = busy ? (slow ? 0.34 : 0.22) + (prefersReducedMotion ? 0 : Math.abs(Math.sin(now / 320)) * 0.08) : 0;
+        }
+        if (statusRing) {
+          const pulse = busy && !prefersReducedMotion ? 1 + Math.abs(Math.sin(now / (slow ? 180 : 300))) * (slow ? 0.18 : 0.1) : 1;
+          statusRing.scale.setScalar((isFocused ? 1.14 : 1) * pulse);
+          statusRing.material.opacity = isFocused ? 0.58 : slow ? 0.42 : busy ? 0.34 : 0.22;
+        }
+        group.scale.setScalar(isFocused ? 1.04 : 1);
         group.position.y = nudge ? Math.abs(Math.sin(now / 52)) * 0.18 : 0;
         if (reaction) {
           reaction.material.opacity = nudge ? 1 : 0;
@@ -3509,7 +3762,15 @@ function renderOfficeHtml(): string {
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(clickable, false).find((item) => item.object.parent?.userData?.sessionId);
+      hoveredId = hit?.object?.parent?.userData?.sessionId || '';
       canvas.style.cursor = hit ? 'pointer' : 'default';
+      if (hit) showFocusCard(hit.object.parent, event);
+      else hideFocusCard();
+    });
+    canvas.addEventListener('pointerleave', () => {
+      hoveredId = '';
+      canvas.style.cursor = 'default';
+      hideFocusCard();
     });
 
     refreshOffice.addEventListener('click', () => {
