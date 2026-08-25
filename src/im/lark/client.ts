@@ -171,7 +171,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       botOpenId = res?.bot?.open_id ?? res?.data?.bot?.open_id;
       if (botOpenId) logger.info(`bot open_id = ${botOpenId}`);
     } catch (err: any) {
-      logger.warn(`探测 bot open_id 失败（不阻断启动）: ${err?.message ?? err}`);
+      logger.warn(`探测 bot open_id 失败（不阻断启动）: ${safeErrorMessage(err)}`);
     }
   }
 
@@ -304,7 +304,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         return name;
       }
     } catch (error: any) {
-      logger.warn(`查询发送人名称失败 open_id=${openId.slice(0, 12)}: ${error?.message ?? error}`);
+      logger.warn(`查询发送人名称失败 open_id=${openId.slice(0, 12)}: ${safeErrorMessage(error)}`);
     }
     const memberName = chatId ? await resolveChatMemberName(chatId, openId) : undefined;
     if (memberName) {
@@ -347,7 +347,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         pageToken = res.data.page_token;
       }
     } catch (error: any) {
-      logger.warn(`查询群成员名称失败 chat=${chatId.slice(0, 12)} open_id=${openId.slice(0, 12)}: ${error?.message ?? error}`);
+      logger.warn(`查询群成员名称失败 chat=${chatId.slice(0, 12)} open_id=${openId.slice(0, 12)}: ${safeErrorMessage(error)}`);
     }
     chatMemberNameCache.set(cacheKey, undefined);
     return undefined;
@@ -379,7 +379,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       chatNameCache.set(chatId, name);
       return name;
     } catch (error: any) {
-      logger.warn(`查询群聊名称失败 chat=${chatId.slice(0, 12)}: ${error?.message ?? error}`);
+      logger.warn(`查询群聊名称失败 chat=${chatId.slice(0, 12)}: ${safeErrorMessage(error)}`);
       chatNameCache.set(chatId, undefined);
       return undefined;
     }
@@ -404,7 +404,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
       const content = extractMessageText(item);
       return { messageId, content };
     } catch (error: any) {
-      logger.warn(`读取引用消息失败 message=${messageId}: ${error?.message ?? error}`);
+      logger.warn(`读取引用消息失败 message=${messageId}: ${safeErrorMessage(error)}`);
       return { messageId };
     }
   }
@@ -451,7 +451,7 @@ export function createLarkAdapter(opts: LarkClientOpts): ImAdapter {
         await download.writeFile(path);
         attachments.push({ type: resource.type, path, name: resource.name });
       } catch (error: any) {
-        logger.warn(`下载消息附件失败 message=${message.messageId}: ${error?.message ?? error}`);
+        logger.warn(`下载消息附件失败 message=${message.messageId}: ${safeErrorMessage(error)}`);
       }
     }
     return attachments.length > 0 ? attachments : undefined;
@@ -534,6 +534,23 @@ function sanitizeSdkLog(value: unknown): string {
   } catch {
     return redactSecrets(String(value)).slice(0, 1000);
   }
+}
+
+function safeErrorMessage(error: unknown): string {
+  const err = error as { message?: unknown; status?: unknown; response?: { status?: unknown; statusText?: unknown; data?: { code?: unknown; msg?: unknown } } };
+  const status = err?.response?.status ?? err?.status;
+  const statusText = err?.response?.statusText;
+  const apiCode = err?.response?.data?.code;
+  const apiMsg = err?.response?.data?.msg;
+  const message = typeof err?.message === 'string' ? err.message : String(error);
+  const parts = [
+    message,
+    status ? `status=${status}` : '',
+    statusText ? `statusText=${statusText}` : '',
+    apiCode ? `code=${apiCode}` : '',
+    apiMsg ? `msg=${apiMsg}` : '',
+  ].filter(Boolean);
+  return redactSecrets(parts.join(' ')).slice(0, 500);
 }
 
 function redactSecrets(value: string): string {
