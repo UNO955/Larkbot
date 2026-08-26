@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { SessionStore } from '../core/store.js';
-import type { AppLogCategory, AppLogLevel, AppLogRecord, Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile, Ticket, TicketStatus, TicketTraceEvent } from '../core/types.js';
+import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -26,7 +26,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'tickets' | 'logs' | 'sessions';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -48,16 +48,6 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '反馈',
     eyebrow: 'Review queue',
     copy: '集中处理群成员的有用/无用反馈，把坏回答转成可复盘的改进线索。',
-  },
-  tickets: {
-    title: '工单',
-    eyebrow: 'Ticket ledger',
-    copy: '长期保留每个问题的状态、会话关联和分析事件。删除会话不会删除工单。',
-  },
-  logs: {
-    title: '日志',
-    eyebrow: 'App log lookup',
-    copy: '按内部 log id、级别、分类、会话和工单查询 larkbot 自己的结构化运行日志。',
   },
   sessions: {
     title: '会话',
@@ -264,10 +254,7 @@ export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Serve
     });
   });
   const address = server.address() as AddressInfo;
-  logger.info(`控制台已启动 http://${address.address}:${address.port}`, {
-    category: 'console',
-    data: { host: address.address, port: address.port },
-  });
+  logger.info(`控制台已启动 http://${address.address}:${address.port}`);
   return server;
 }
 
@@ -352,52 +339,6 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
     }
     if (req.method === 'GET' && url.pathname === '/api/feedbacks') {
       sendJson(res, { feedbacks: await listFeedbacks(opts) });
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/api/tickets') {
-      sendJson(res, { tickets: await listTickets(opts) });
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/api/tickets/search') {
-      sendJson(res, await searchTicketRecords(opts, {
-        query: url.searchParams.get('q') || '',
-        status: url.searchParams.get('status') || '',
-        kind: url.searchParams.get('kind') || '',
-        offset: Number(url.searchParams.get('offset') || '0'),
-        limit: Number(url.searchParams.get('limit') || '25'),
-      }));
-      return;
-    }
-    if (req.method === 'GET' && url.pathname === '/api/logs/search') {
-      sendJson(res, await searchAppLogRecords(opts, {
-        query: url.searchParams.get('q') || '',
-        level: url.searchParams.get('level') || '',
-        category: url.searchParams.get('category') || '',
-        sessionId: url.searchParams.get('sessionId') || '',
-        ticketId: url.searchParams.get('ticketId') || '',
-        offset: Number(url.searchParams.get('offset') || '0'),
-        limit: Number(url.searchParams.get('limit') || '50'),
-      }));
-      return;
-    }
-    const appLogMatch = url.pathname.match(/^\/api\/logs\/([^/]+)$/);
-    if (appLogMatch && req.method === 'GET') {
-      const log = await getAppLogRecord(opts, decodeURIComponent(appLogMatch[1]));
-      if (!log) throw httpError(404, 'log_not_found');
-      sendJson(res, { log });
-      return;
-    }
-    const ticketMatch = url.pathname.match(/^\/api\/tickets\/([^/]+)$/);
-    if (ticketMatch && req.method === 'PATCH') {
-      const ticketId = decodeURIComponent(ticketMatch[1]);
-      const body = await readJsonBody(req);
-      sendJson(res, { ticket: await updateTicket(opts, ticketId, body) });
-      return;
-    }
-    const ticketEventsMatch = url.pathname.match(/^\/api\/tickets\/([^/]+)\/events$/);
-    if (req.method === 'GET' && ticketEventsMatch) {
-      const ticketId = decodeURIComponent(ticketEventsMatch[1]);
-      sendJson(res, { events: await listTicketEvents(opts, ticketId) });
       return;
     }
     const feedbackMatch = url.pathname.match(/^\/api\/feedbacks\/([^/]+)$/);
@@ -658,275 +599,6 @@ async function listFeedbacks(opts: ConsoleServerOpts): Promise<FeedbackRecord[]>
   if (!opts.store.loadFeedbacks) return [];
   const feedbacks = await opts.store.loadFeedbacks();
   return [...feedbacks].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-}
-
-type PublicTicket = Ticket & { feedbackCount: number; negativeFeedbackCount: number };
-
-async function listTickets(opts: ConsoleServerOpts): Promise<PublicTicket[]> {
-  if (!opts.store.loadTickets) return [];
-  const [tickets, feedbacks] = await Promise.all([
-    opts.store.loadTickets(),
-    opts.store.loadFeedbacks?.() ?? Promise.resolve([]),
-  ]);
-  return [...tickets]
-    .map((ticket) => {
-      const relatedFeedbacks = feedbacks.filter((item) => item.ticketId === ticket.id || ticket.sessionIds.includes(item.sessionId));
-      return {
-        ...ticket,
-        feedbackCount: relatedFeedbacks.length,
-        negativeFeedbackCount: relatedFeedbacks.filter((item) => item.rating === 'negative').length,
-      };
-    })
-    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-}
-
-async function listTicketEvents(opts: ConsoleServerOpts, ticketId: string): Promise<TicketTraceEvent[]> {
-  if (!opts.store.loadTicketTraceEvents) return [];
-  const events = await opts.store.loadTicketTraceEvents();
-  return events
-    .filter((event) => event.ticketId === ticketId)
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-}
-
-interface AppLogSearchParams {
-  query: string;
-  level: string;
-  category: string;
-  sessionId: string;
-  ticketId: string;
-  offset: number;
-  limit: number;
-}
-
-async function getAppLogRecord(opts: ConsoleServerOpts, id: string): Promise<AppLogRecord | undefined> {
-  if (!opts.store.loadAppLogs) return undefined;
-  const logs = await opts.store.loadAppLogs();
-  return logs.find((log) => log.id === id);
-}
-
-async function searchAppLogRecords(opts: ConsoleServerOpts, params: AppLogSearchParams): Promise<{ results: AppLogRecord[]; total: number; offset: number; limit: number }> {
-  const offset = Number.isFinite(params.offset) && params.offset > 0 ? Math.floor(params.offset) : 0;
-  const limit = Number.isFinite(params.limit) && params.limit > 0 ? Math.min(Math.floor(params.limit), 200) : 50;
-  if (!opts.store.loadAppLogs) return { results: [], total: 0, offset, limit };
-  const query = params.query.trim().toLowerCase();
-  const level = isAppLogLevel(params.level) ? params.level : '';
-  const category = isAppLogCategory(params.category) ? params.category : '';
-  const sessionId = params.sessionId.trim();
-  const ticketId = params.ticketId.trim();
-  const logs = await opts.store.loadAppLogs();
-  const filtered = logs.filter((log) => {
-    if (level && log.level !== level) return false;
-    if (category && log.category !== category) return false;
-    if (sessionId && log.sessionId !== sessionId) return false;
-    if (ticketId && log.ticketId !== ticketId) return false;
-    if (!query) return true;
-    return [
-      log.id,
-      log.level,
-      log.category,
-      log.message,
-      log.sessionId,
-      log.ticketId,
-      log.turnId,
-      log.traceEventId,
-      log.requestId,
-      log.data ? JSON.stringify(log.data) : '',
-    ].filter(Boolean).join('\n').toLowerCase().includes(query);
-  }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return {
-    results: filtered.slice(offset, offset + limit),
-    total: filtered.length,
-    offset,
-    limit,
-  };
-}
-
-interface TicketSearchResult {
-  kind: 'ticket' | 'feedback' | 'trace_event' | 'log';
-  ticketId?: string;
-  ticketStatus?: TicketStatus;
-  sessionId?: string;
-  logId?: string;
-  title: string;
-  excerpt: string;
-  createdAt?: string;
-}
-
-interface TicketSearchParams {
-  query: string;
-  status: string;
-  kind: string;
-  offset: number;
-  limit: number;
-}
-
-async function searchTicketRecords(opts: ConsoleServerOpts, params: TicketSearchParams): Promise<{ results: TicketSearchResult[]; total: number; offset: number; limit: number }> {
-  const query = params.query.trim().toLowerCase();
-  const status = isTicketStatus(params.status) ? params.status : '';
-  const kind = params.kind === 'ticket' || params.kind === 'feedback' || params.kind === 'trace_event' || params.kind === 'log' ? params.kind : '';
-  const offset = Number.isFinite(params.offset) && params.offset > 0 ? Math.floor(params.offset) : 0;
-  const limit = Number.isFinite(params.limit) && params.limit > 0 ? Math.min(Math.floor(params.limit), 100) : 25;
-  if (!query) return { results: [], total: 0, offset, limit };
-  const [tickets, feedbacks, events] = await Promise.all([
-    opts.store.loadTickets?.() ?? Promise.resolve([]),
-    opts.store.loadFeedbacks?.() ?? Promise.resolve([]),
-    opts.store.loadTicketTraceEvents?.() ?? Promise.resolve([]),
-  ]);
-  const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
-  const results: TicketSearchResult[] = [];
-  for (const ticket of tickets.filter((item) => !status || item.status === status)) {
-    if (kind && kind !== 'ticket') continue;
-    const haystack = [
-      ticket.id,
-      ticket.title,
-      ticket.status,
-      ticket.chatId,
-      ticket.chatName,
-      ticket.currentSessionId,
-      ...ticket.sessionIds,
-    ].filter(Boolean).join('\n').toLowerCase();
-    if (haystack.includes(query)) {
-      results.push({
-        kind: 'ticket',
-        ticketId: ticket.id,
-        ticketStatus: ticket.status,
-        sessionId: ticket.currentSessionId,
-        title: ticket.title || ticket.id,
-        excerpt: `状态：${ticket.status} · 会话 ${ticket.sessionIds.length}`,
-        createdAt: ticket.updatedAt,
-      });
-    }
-  }
-  for (const feedback of feedbacks) {
-    if (kind && kind !== 'feedback') continue;
-    const ticket = feedback.ticketId ? ticketById.get(feedback.ticketId) : undefined;
-    if (status && ticket?.status !== status) continue;
-    const haystack = [
-      feedback.id,
-      feedback.ticketId,
-      feedback.sessionId,
-      feedback.sessionTitle,
-      feedback.reason,
-      feedback.note,
-      feedback.reviewNote,
-      feedback.question,
-      feedback.answer,
-      feedback.traceExcerpt,
-    ].filter(Boolean).join('\n').toLowerCase();
-    if (haystack.includes(query)) {
-      results.push({
-        kind: 'feedback',
-        ticketId: feedback.ticketId,
-        ticketStatus: ticket?.status,
-        sessionId: feedback.sessionId,
-        title: feedback.sessionTitle || feedback.ticketId || feedback.sessionId,
-        excerpt: feedback.reason || feedback.note || feedback.reviewNote || feedback.question || feedback.answer || feedback.traceExcerpt || feedback.rating,
-        createdAt: feedback.updatedAt,
-      });
-    }
-  }
-  for (const event of events) {
-    if (kind && kind !== 'trace_event') continue;
-    const ticket = ticketById.get(event.ticketId);
-    if (status && ticket?.status !== status) continue;
-    const haystack = [
-      event.id,
-      event.ticketId,
-      event.sessionId,
-      event.turnId,
-      event.kind,
-      event.message,
-      event.question,
-      event.answer,
-      event.trace,
-    ].filter(Boolean).join('\n').toLowerCase();
-    if (haystack.includes(query)) {
-      results.push({
-        kind: 'trace_event',
-        ticketId: event.ticketId,
-        ticketStatus: ticket?.status,
-        sessionId: event.sessionId,
-        title: ticket?.title || event.ticketId,
-        excerpt: event.message || event.question || event.answer || event.trace || event.kind,
-        createdAt: event.createdAt,
-      });
-    }
-  }
-  if ((!kind || kind === 'log') && !status) {
-    const appLogs = await searchAppLogRecords(opts, { query, level: '', category: '', sessionId: '', ticketId: '', offset: 0, limit: 500 });
-    results.push(...appLogs.results.map((log) => ({
-      kind: 'log' as const,
-      ticketId: log.ticketId,
-      ticketStatus: log.ticketId ? ticketById.get(log.ticketId)?.status : undefined,
-      sessionId: log.sessionId,
-      logId: log.id,
-      title: `${log.level.toUpperCase()} ${log.category}`,
-      excerpt: log.message,
-      createdAt: log.createdAt,
-    })));
-  }
-  const sorted = results.sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''));
-  return {
-    results: sorted.slice(offset, offset + limit),
-    total: sorted.length,
-    offset,
-    limit,
-  };
-}
-
-async function updateTicket(opts: ConsoleServerOpts, ticketId: string, patch: unknown): Promise<Ticket> {
-  if (!opts.store.loadTickets || !opts.store.saveTickets) throw httpError(404, 'ticket_store_not_available');
-  if (!patch || typeof patch !== 'object') throw httpError(400, 'invalid_json');
-  const input = patch as { status?: unknown; priority?: unknown };
-  const tickets = await opts.store.loadTickets();
-  const index = tickets.findIndex((ticket) => ticket.id === ticketId);
-  if (index < 0) throw httpError(404, 'ticket_not_found');
-  const ticket = { ...tickets[index] };
-  if (input.status !== undefined) {
-    if (!isTicketStatus(input.status)) throw httpError(400, 'invalid_status');
-    ticket.status = input.status;
-    if (input.status === 'closed' || input.status === 'archived' || input.status === 'resolved') {
-      ticket.closedAt = ticket.closedAt || new Date().toISOString();
-    } else {
-      delete ticket.closedAt;
-    }
-  }
-  if (input.priority !== undefined) {
-    if (!isTicketPriority(input.priority)) throw httpError(400, 'invalid_priority');
-    ticket.priority = input.priority;
-  }
-  ticket.updatedAt = new Date().toISOString();
-  tickets[index] = ticket;
-  await opts.store.saveTickets(tickets.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)));
-  return ticket;
-}
-
-function isTicketStatus(value: unknown): value is TicketStatus {
-  return value === 'open'
-    || value === 'analyzing'
-    || value === 'waiting_user'
-    || value === 'resolved'
-    || value === 'closed'
-    || value === 'failed'
-    || value === 'archived';
-}
-
-function isTicketPriority(value: unknown): value is Ticket['priority'] {
-  return value === 'low' || value === 'normal' || value === 'high' || value === 'urgent';
-}
-
-function isAppLogLevel(value: unknown): value is AppLogLevel {
-  return value === 'info' || value === 'warn' || value === 'error';
-}
-
-function isAppLogCategory(value: unknown): value is AppLogCategory {
-  return value === 'daemon'
-    || value === 'lark'
-    || value === 'traex'
-    || value === 'ticket'
-    || value === 'console'
-    || value === 'cleanup'
-    || value === 'system';
 }
 
 async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
@@ -1202,8 +874,6 @@ function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
-  if (pathname === '/tickets') return 'tickets';
-  if (pathname === '/logs') return 'logs';
   if (pathname === '/sessions') return 'sessions';
   return undefined;
 }
@@ -1332,7 +1002,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .context-lines { display: grid; gap: 5px; }
     .context-line { color: var(--text-soft); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .context-line strong { color: var(--text); font-weight: 800; }
-    mark { background: color-mix(in srgb, var(--warning) 28%, transparent); color: inherit; border-radius: 4px; padding: 0 2px; }
     .feedback-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .feedback-controls select { width: auto; min-width: 124px; height: 34px; }
     .session-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1346,10 +1015,10 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .session-table th:last-child { z-index: 2; }
     .status { display: inline-flex; align-items: center; min-width: 56px; justify-content: center; gap: 6px; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; line-height: 1.4; }
     .status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
-    .status.active, .status.positive, .status.resolved, .status.waiting_user { background: var(--success-soft); color: var(--success); }
-    .status.closed, .status.ignored, .status.archived { background: var(--surface-tint); color: var(--text-soft); }
-    .status.negative, .status.open, .status.failed { background: var(--danger-soft); color: var(--danger); }
-    .status.reviewing, .status.analyzing { background: var(--warning-soft); color: var(--warning); }
+    .status.active, .status.positive, .status.resolved { background: var(--success-soft); color: var(--success); }
+    .status.closed, .status.ignored { background: var(--surface-tint); color: var(--text-soft); }
+    .status.negative, .status.open { background: var(--danger-soft); color: var(--danger); }
+    .status.reviewing { background: var(--warning-soft); color: var(--warning); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
       .actions select { height: 30px; max-width: 116px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 800; }
@@ -1510,7 +1179,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
-    .page-logs #top-save,
     .page-sessions #top-save {
       display: none;
     }
@@ -1526,66 +1194,38 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-config .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
-    .page-tickets .content-frame,
-    .page-logs .content-frame,
     .page-sessions .content-frame {
       grid-template-columns: minmax(0, 1fr);
     }
     .page-overview #region-config,
     .page-overview #region-chats,
     .page-overview #region-feedback,
-    .page-overview #region-tickets,
-    .page-overview #region-logs,
     .page-overview #region-sessions,
     .page-config #region-health,
     .page-config #region-system,
     .page-config #region-chats,
     .page-config #region-feedback,
-    .page-config #region-tickets,
-    .page-config #region-logs,
     .page-config #region-sessions,
     .page-chats #region-health,
     .page-chats #region-system,
     .page-chats #region-config,
     .page-chats #region-feedback,
-    .page-chats #region-tickets,
-    .page-chats #region-logs,
     .page-chats #region-sessions,
     .page-feedback #region-health,
     .page-feedback #region-system,
     .page-feedback #region-config,
     .page-feedback #region-chats,
-    .page-feedback #region-tickets,
-    .page-feedback #region-logs,
     .page-feedback #region-sessions,
-    .page-tickets #region-health,
-    .page-tickets #region-system,
-    .page-tickets #region-config,
-    .page-tickets #region-chats,
-    .page-tickets #region-feedback,
-    .page-tickets #region-logs,
-    .page-tickets #region-sessions,
-    .page-logs #region-health,
-    .page-logs #region-system,
-    .page-logs #region-config,
-    .page-logs #region-chats,
-    .page-logs #region-feedback,
-    .page-logs #region-tickets,
-    .page-logs #region-sessions,
     .page-sessions #region-health,
     .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
-    .page-sessions #region-feedback,
-    .page-sessions #region-tickets,
-    .page-sessions #region-logs {
+    .page-sessions #region-feedback {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
-    .page-tickets .observer-column,
-    .page-logs .observer-column,
     .page-sessions .observer-column {
       display: none;
     }
@@ -2201,7 +1841,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
     <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
   </svg>
@@ -2227,8 +1866,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
-        <a class="${navClass('tickets')}" href="/tickets"><svg class="icon sm"><use href="#i-database"></use></svg><span>工单</span></a>
-        <a class="${navClass('logs')}" href="/logs"><svg class="icon sm"><use href="#i-search"></use></svg><span>日志</span></a>
         <a class="${navClass('sessions')}" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
@@ -2525,126 +2162,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         </table>
       </div>
     </section>
-    <section id="region-tickets" class="card">
-      <div class="toolbar">
-        <div>
-          <div class="section-title">
-            <span class="title-icon"><svg class="icon"><use href="#i-database"></use></svg></span>
-            <h2>工单档案</h2>
-          </div>
-          <div class="sub">工单独立于 runtime 会话保留。展开事件可以看到每轮分析开始、过程快照、完成、失败或停止记录。</div>
-        </div>
-        <div class="session-controls">
-          <input id="ticket-search" type="text" placeholder="搜工单 / 反馈 / 分析过程" aria-label="搜索工单">
-          <select id="ticket-search-kind" aria-label="筛选搜索结果类型">
-            <option value="">全部结果</option>
-            <option value="ticket">工单</option>
-            <option value="feedback">反馈</option>
-            <option value="trace_event">分析事件</option>
-            <option value="log">运行日志</option>
-          </select>
-          <button id="search-tickets" type="button" class="ghost"><svg class="icon sm"><use href="#i-search"></use></svg>搜索</button>
-          <button id="ticket-search-prev" type="button" class="ghost" disabled>上一页</button>
-          <button id="ticket-search-next" type="button" class="ghost" disabled>下一页</button>
-          <span id="ticket-search-summary" class="muted"></span>
-          <select id="ticket-filter" aria-label="筛选工单状态">
-            <option value="">全部工单</option>
-            <option value="open">未开始</option>
-            <option value="analyzing">分析中</option>
-            <option value="waiting_user">等待用户</option>
-            <option value="failed">失败</option>
-            <option value="closed">已关闭</option>
-            <option value="archived">已归档</option>
-          </select>
-          <button id="refresh-tickets" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
-        </div>
-      </div>
-      <div class="sessions">
-        <table class="session-table">
-          <colgroup>
-            <col style="width: 320px">
-            <col style="width: 120px">
-            <col style="width: 170px">
-            <col style="width: 190px">
-            <col style="width: 210px">
-            <col style="width: 130px">
-            <col style="width: 120px">
-          </colgroup>
-          <thead>
-            <tr>
-              <th>工单</th>
-              <th>状态</th>
-              <th>群聊 / 发起人</th>
-              <th>当前会话</th>
-              <th>关联</th>
-              <th>时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="tickets-body">
-            <tr><td colspan="7" class="muted">加载中…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-    <section id="region-logs" class="card">
-      <div class="toolbar">
-        <div>
-          <div class="section-title">
-            <span class="title-icon"><svg class="icon"><use href="#i-search"></use></svg></span>
-            <h2>内部运行日志</h2>
-          </div>
-          <div class="sub">每条结构化日志都有内部 log id，可按 id、级别、分类、会话或工单反查。</div>
-        </div>
-        <div class="session-controls">
-          <input id="app-log-search" type="text" placeholder="搜 log id / 消息 / session / ticket" aria-label="搜索内部日志">
-          <select id="app-log-level" aria-label="筛选日志级别">
-            <option value="">全部级别</option>
-            <option value="info">INFO</option>
-            <option value="warn">WARN</option>
-            <option value="error">ERROR</option>
-          </select>
-          <select id="app-log-category" aria-label="筛选日志分类">
-            <option value="">全部分类</option>
-            <option value="daemon">daemon</option>
-            <option value="lark">lark</option>
-            <option value="traex">traex</option>
-            <option value="ticket">ticket</option>
-            <option value="console">console</option>
-            <option value="cleanup">cleanup</option>
-            <option value="system">system</option>
-          </select>
-          <button id="search-app-logs" type="button" class="ghost"><svg class="icon sm"><use href="#i-search"></use></svg>查询</button>
-        </div>
-      </div>
-      <div class="sessions">
-        <table class="session-table">
-          <colgroup>
-            <col style="width: 260px">
-            <col style="width: 90px">
-            <col style="width: 110px">
-            <col style="width: 360px">
-            <col style="width: 180px">
-            <col style="width: 180px">
-            <col style="width: 160px">
-          </colgroup>
-          <thead>
-            <tr>
-              <th>Log ID</th>
-              <th>级别</th>
-              <th>分类</th>
-              <th>消息</th>
-              <th>会话</th>
-              <th>工单</th>
-              <th>时间</th>
-            </tr>
-          </thead>
-          <tbody id="app-logs-body">
-            <tr><td colspan="7" class="muted">加载中…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
     <section id="region-sessions" class="card">
       <div class="toolbar">
         <div>
@@ -2761,20 +2278,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const refreshFeedbacks = document.querySelector('#refresh-feedbacks');
     const feedbackFilter = document.querySelector('#feedback-filter');
     const feedbackStats = document.querySelector('#feedback-stats');
-    const ticketsBody = document.querySelector('#tickets-body');
-    const refreshTickets = document.querySelector('#refresh-tickets');
-    const ticketFilter = document.querySelector('#ticket-filter');
-    const ticketSearch = document.querySelector('#ticket-search');
-    const ticketSearchKind = document.querySelector('#ticket-search-kind');
-    const searchTickets = document.querySelector('#search-tickets');
-    const ticketSearchPrev = document.querySelector('#ticket-search-prev');
-    const ticketSearchNext = document.querySelector('#ticket-search-next');
-    const ticketSearchSummary = document.querySelector('#ticket-search-summary');
-    const appLogsBody = document.querySelector('#app-logs-body');
-    const appLogSearch = document.querySelector('#app-log-search');
-    const appLogLevel = document.querySelector('#app-log-level');
-    const appLogCategory = document.querySelector('#app-log-category');
-    const searchAppLogs = document.querySelector('#search-app-logs');
     const refreshAll = document.querySelector('#refresh-all');
     const sideDaemonStatus = document.querySelector('#side-daemon-status');
     const observerModel = document.querySelector('#observer-model');
@@ -2831,9 +2334,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestChats = [];
       let latestSessions = [];
       let latestFeedbacks = [];
-      let latestTickets = [];
-      let latestAppLogs = [];
-      let ticketSearchState = { query: '', offset: 0, limit: 25, total: 0 };
       let promptProfiles = [];
       let activePromptId = '';
       const isOverviewPage = document.querySelector('.page-overview') !== null;
@@ -3239,26 +2739,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       return value === 'active' ? '运行中' : value === 'closed' ? '已关闭' : value;
     }
 
-    function ticketStatusText(value) {
-      return value === 'open' ? '未开始'
-        : value === 'analyzing' ? '分析中'
-        : value === 'waiting_user' ? '等待用户'
-        : value === 'resolved' ? '已解决'
-        : value === 'closed' ? '已关闭'
-        : value === 'failed' ? '失败'
-        : value === 'archived' ? '已归档'
-        : value || '';
-    }
-
-    function ticketEventText(value) {
-      return value === 'turn_started' ? '开始分析'
-        : value === 'trace_snapshot' ? '过程快照'
-        : value === 'turn_completed' ? '分析完成'
-        : value === 'turn_failed' ? '分析失败'
-        : value === 'turn_stopped' ? '分析停止'
-        : value || '';
-    }
-
     function sourceText(value) {
       return value === 'bot_added' ? '入群事件' : '群消息';
     }
@@ -3305,7 +2785,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     }
 
     function renderSessions() {
-      const statusFilter = sessionFilter.value;
+      const statusFilter = sessionFilter?.value || '';
       const visibleSessions = statusFilter
         ? latestSessions.filter((session) => session.status === statusFilter)
         : latestSessions;
@@ -3336,142 +2816,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }).join('');
     }
 
-    function renderTickets() {
-      const statusFilter = ticketFilter.value;
-      const visibleTickets = statusFilter
-        ? latestTickets.filter((ticket) => ticket.status === statusFilter)
-        : latestTickets;
-      if (!latestTickets.length) {
-        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无工单</span></td></tr>';
-        return;
-      }
-      if (!visibleTickets.length) {
-        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无' + esc(ticketStatusText(statusFilter)) + '工单</span></td></tr>';
-        return;
-      }
-      ticketsBody.innerHTML = visibleTickets.map((ticket) => (
-        '<tr data-ticket-row="' + esc(ticket.id) + '">' +
-          '<td><span class="line"><strong>' + esc(ticket.title || ticket.id) + '</strong></span><span class="line muted"><code>' + esc(ticket.id) + '</code></span></td>' +
-          '<td><span class="status ' + esc(ticket.status) + '">' + esc(ticketStatusText(ticket.status)) + '</span></td>' +
-          '<td><span class="line">' + esc(ticket.chatName || ticket.chatId || '-') + '</span><span class="line muted">' + esc(ticket.createdByName || ticket.createdByOpenId || '-') + '</span></td>' +
-          '<td><span class="line"><code>' + esc(ticket.currentSessionId || '-') + '</code></span><span class="line muted">' + esc(ticket.currentSessionId ? '会话仍关联' : '无活跃会话') + '</span></td>' +
-          '<td><span class="line muted">会话 ' + esc(String(ticket.sessionIds?.length || 0)) + '</span><span class="line muted">反馈 ' + esc(String(ticket.feedbackCount || 0)) + ' / 差评 ' + esc(String(ticket.negativeFeedbackCount || 0)) + '</span></td>' +
-          '<td><span class="line muted">创建 ' + esc(formatTime(ticket.createdAt)) + '</span><span class="line muted">更新 ' + esc(formatTime(ticket.updatedAt)) + '</span></td>' +
-          '<td><div class="actions">' +
-            '<select class="ticket-status-select ' + esc(ticket.status) + '" data-ticket-status="' + esc(ticket.id) + '" aria-label="工单状态">' + ticketStatusOptions(ticket.status) + '</select>' +
-            '<button type="button" class="ghost" data-ticket-events="' + esc(ticket.id) + '"><svg class="icon sm"><use href="#i-message"></use></svg>事件</button>' +
-          '</div></td>' +
-        '</tr>'
-      )).join('');
-    }
-
-    function ticketStatusOptions(current) {
-      const options = [
-        ['open', '未开始'],
-        ['analyzing', '分析中'],
-        ['waiting_user', '等待用户'],
-        ['resolved', '已解决'],
-        ['closed', '已关闭'],
-        ['failed', '失败'],
-        ['archived', '已归档'],
-      ];
-      return options.map(([value, label]) => '<option value="' + value + '"' + (current === value ? ' selected' : '') + '>' + label + '</option>').join('');
-    }
-
-    function renderTicketEvents(events) {
-      if (!events.length) return '<div class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无分析事件</div>';
-      return '<div class="context-lines">' + events.map((event) => (
-        '<div class="context-line"><strong>' + esc(formatTime(event.createdAt)) + ' · ' + esc(ticketEventText(event.kind)) + '</strong> ' +
-        esc(oneLine(event.message || event.question || event.answer || event.trace || '-', 180)) + '</div>'
-      )).join('') + '</div>';
-    }
-
-    function renderTicketSearchResults(payload) {
-      const results = Array.isArray(payload.results) ? payload.results : [];
-      ticketSearchState.total = Number(payload.total || 0);
-      ticketSearchState.offset = Number(payload.offset || 0);
-      ticketSearchState.limit = Number(payload.limit || ticketSearchState.limit);
-      const end = Math.min(ticketSearchState.total, ticketSearchState.offset + results.length);
-      ticketSearchPrev.disabled = ticketSearchState.offset <= 0;
-      ticketSearchNext.disabled = end >= ticketSearchState.total;
-      ticketSearchSummary.textContent = ticketSearchState.total
-        ? (String(ticketSearchState.offset + 1) + '-' + String(end) + ' / ' + String(ticketSearchState.total))
-        : '';
-      if (!results.length) {
-        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>没有匹配结果</span></td></tr>';
-        return;
-      }
-      ticketsBody.innerHTML = results.map((result) => (
-        '<tr>' +
-          '<td><span class="line"><strong>' + highlight(result.logId || result.title || result.ticketId || result.sessionId || '-') + '</strong></span><span class="line muted">' + esc(searchKindText(result.kind)) + (result.logId ? ' · ' + esc(result.title || '') : '') + '</span></td>' +
-          '<td><span class="status ' + esc(result.ticketStatus || 'reviewing') + '">' + esc(result.ticketStatus ? ticketStatusText(result.ticketStatus) : '结果') + '</span></td>' +
-          '<td><span class="line muted">' + highlight(result.ticketId || '-') + '</span></td>' +
-          '<td><span class="line"><code>' + highlight(result.sessionId || '-') + '</code></span></td>' +
-          '<td colspan="2"><span class="line">' + highlight(oneLine(result.excerpt || '-', 180)) + '</span><span class="line muted">' + esc(formatTime(result.createdAt)) + '</span></td>' +
-          '<td><div class="actions">' + (result.ticketId ? '<button type="button" class="ghost" data-ticket-events="' + esc(result.ticketId) + '"><svg class="icon sm"><use href="#i-message"></use></svg>事件</button>' : '') + '</div></td>' +
-        '</tr>'
-      )).join('');
-    }
-
-    function highlight(value) {
-      const query = ticketSearchState.query;
-      const text = String(value ?? '');
-      if (!query) return esc(text);
-      const lower = text.toLowerCase();
-      const needle = query.toLowerCase();
-      let index = 0;
-      let html = '';
-      while (true) {
-        const found = lower.indexOf(needle, index);
-        if (found < 0) break;
-        html += esc(text.slice(index, found)) + '<mark>' + esc(text.slice(found, found + needle.length)) + '</mark>';
-        index = found + needle.length;
-      }
-      return html + esc(text.slice(index));
-    }
-
-    function searchKindText(kind) {
-      return kind === 'ticket' ? '工单'
-        : kind === 'feedback' ? '反馈'
-        : kind === 'trace_event' ? '分析事件'
-        : kind === 'log' ? '运行日志'
-        : kind || '';
-    }
-
-    function renderAppLogs(logs) {
-      if (!appLogsBody) return;
-      if (!logs.length) {
-        appLogsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无匹配日志</span></td></tr>';
-        return;
-      }
-      appLogsBody.innerHTML = logs.map((log) => (
-        '<tr>' +
-          '<td><span class="line"><code>' + esc(log.id || '-') + '</code></span><span class="line muted">' + esc(log.traceEventId || log.requestId || '-') + '</span></td>' +
-          '<td><span class="status ' + esc(log.level === 'error' ? 'failed' : log.level === 'warn' ? 'waiting_user' : 'resolved') + '">' + esc(String(log.level || '').toUpperCase()) + '</span></td>' +
-          '<td><span class="source-pill">' + esc(log.category || '-') + '</span></td>' +
-          '<td><span class="line">' + esc(oneLine(log.message || '-', 150)) + '</span><span class="line muted">' + esc(log.data ? oneLine(JSON.stringify(log.data), 150) : '') + '</span></td>' +
-          '<td><span class="line"><code>' + esc(log.sessionId || '-') + '</code></span></td>' +
-          '<td><span class="line"><code>' + esc(log.ticketId || '-') + '</code></span></td>' +
-          '<td><span class="line muted">' + esc(formatTime(log.createdAt)) + '</span></td>' +
-        '</tr>'
-      )).join('');
-    }
-
-    async function loadAppLogs() {
-      if (!appLogsBody) return;
-      const params = new URLSearchParams({
-        q: appLogSearch?.value?.trim() || '',
-        level: appLogLevel?.value || '',
-        category: appLogCategory?.value || '',
-        limit: '100',
-      });
-      const res = await fetch('/api/logs/search?' + params.toString());
-      if (!res.ok) throw new Error(await res.text());
-      const payload = await res.json();
-      latestAppLogs = Array.isArray(payload.results) ? payload.results : [];
-      renderAppLogs(latestAppLogs);
-    }
-
     async function loadSessions() {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(await res.text());
@@ -3479,14 +2823,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       latestSessions = Array.isArray(sessions) ? sessions : [];
       updateSummary();
       renderSessions();
-    }
-
-    async function loadTickets() {
-      const res = await fetch('/api/tickets');
-      if (!res.ok) throw new Error(await res.text());
-      const { tickets } = await res.json();
-      latestTickets = Array.isArray(tickets) ? tickets : [];
-      renderTickets();
     }
 
     async function loadChats() {
@@ -3580,54 +2916,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }
     });
 
-    ticketsBody.addEventListener('click', async (event) => {
-      const button = event.target.closest('button[data-ticket-events]');
-      if (!button) return;
-      const id = button.dataset.ticketEvents;
-      const existing = ticketsBody.querySelector('tr[data-ticket-events-row="' + CSS.escape(id) + '"]');
-      if (existing) {
-        existing.remove();
-        return;
-      }
-      try {
-        await withButtonFeedback(button, { loading: '加载中', success: '已展开', failure: '失败' }, async () => {
-          const res = await fetch('/api/tickets/' + encodeURIComponent(id) + '/events');
-          if (!res.ok) throw new Error(await res.text());
-          const { events } = await res.json();
-          const row = document.createElement('tr');
-          row.dataset.ticketEventsRow = id;
-          row.innerHTML = '<td colspan="7">' + renderTicketEvents(Array.isArray(events) ? events : []) + '</td>';
-          const parent = button.closest('tr');
-          parent?.insertAdjacentElement('afterend', row);
-        });
-        setStatus('工单事件已展开');
-      } catch (error) {
-        setStatus('加载工单事件失败：' + error.message, true);
-      }
-    });
-
-    ticketsBody.addEventListener('change', async (event) => {
-      const select = event.target.closest('select[data-ticket-status]');
-      if (!select) return;
-      const id = select.dataset.ticketStatus;
-      const status = select.value;
-      select.disabled = true;
-      try {
-        const res = await fetch('/api/tickets/' + encodeURIComponent(id), {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ status }),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        await loadTickets();
-        setStatus('工单状态已更新');
-      } catch (error) {
-        setStatus('更新工单状态失败：' + error.message, true);
-      } finally {
-        select.disabled = false;
-      }
-    });
-
     officeWorkers?.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-office-nudge]');
       if (!button) return;
@@ -3655,95 +2943,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     sessionFilter?.addEventListener('change', () => {
       renderSessions();
     });
-
-    refreshTickets.addEventListener('click', () => {
-      ticketSearch.value = '';
-      ticketSearchState = { query: '', offset: 0, limit: 25, total: 0 };
-      ticketSearchPrev.disabled = true;
-      ticketSearchNext.disabled = true;
-      ticketSearchSummary.textContent = '';
-      withButtonFeedback(refreshTickets, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadTickets)
-        .then(() => setStatus('工单已刷新'))
-        .catch((error) => setStatus('刷新工单失败：' + error.message, true));
-    });
-
-    ticketFilter?.addEventListener('change', () => {
-      if (ticketSearch.value.trim()) {
-        ticketSearchState.offset = 0;
-        searchTickets.click();
-        return;
-      }
-      renderTickets();
-    });
-
-    async function runTicketSearch() {
-      const query = ticketSearch.value.trim();
-      if (!query) {
-        ticketSearchState = { query: '', offset: 0, limit: 25, total: 0 };
-        ticketSearchPrev.disabled = true;
-        ticketSearchNext.disabled = true;
-        ticketSearchSummary.textContent = '';
-        renderTickets();
-        return;
-      }
-      if (ticketSearchState.query !== query) ticketSearchState.offset = 0;
-      ticketSearchState.query = query;
-      const params = new URLSearchParams({
-        q: query,
-        status: ticketFilter.value,
-        kind: ticketSearchKind.value,
-        offset: String(ticketSearchState.offset),
-        limit: String(ticketSearchState.limit),
-      });
-      const res = await fetch('/api/tickets/search?' + params.toString());
-      if (!res.ok) throw new Error(await res.text());
-      renderTicketSearchResults(await res.json());
-    }
-
-    searchTickets.addEventListener('click', () => {
-      withButtonFeedback(searchTickets, { loading: '搜索中', success: '已搜索', failure: '失败' }, runTicketSearch)
-        .then(() => setStatus('搜索完成'))
-        .catch((error) => setStatus('搜索失败：' + error.message, true));
-    });
-
-    ticketSearch.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      ticketSearchState.offset = 0;
-      searchTickets.click();
-    });
-
-    ticketSearchKind.addEventListener('change', () => {
-      if (!ticketSearch.value.trim()) return;
-      ticketSearchState.offset = 0;
-      searchTickets.click();
-    });
-
-    ticketSearchPrev.addEventListener('click', () => {
-      ticketSearchState.offset = Math.max(0, ticketSearchState.offset - ticketSearchState.limit);
-      searchTickets.click();
-    });
-
-    ticketSearchNext.addEventListener('click', () => {
-      if (ticketSearchState.offset + ticketSearchState.limit >= ticketSearchState.total) return;
-      ticketSearchState.offset += ticketSearchState.limit;
-      searchTickets.click();
-    });
-
-    searchAppLogs?.addEventListener('click', () => {
-      withButtonFeedback(searchAppLogs, { loading: '查询中', success: '已查询', failure: '失败' }, loadAppLogs)
-        .then(() => setStatus('日志查询完成'))
-        .catch((error) => setStatus('日志查询失败：' + error.message, true));
-    });
-
-    appLogSearch?.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      searchAppLogs.click();
-    });
-
-    appLogLevel?.addEventListener('change', () => searchAppLogs?.click());
-    appLogCategory?.addEventListener('change', () => searchAppLogs?.click());
 
     chatsBody.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-chat]');
@@ -3847,9 +3046,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         loadChats(),
         loadSessions(),
         loadFeedbacks(),
-        loadTickets(),
         loadSystemStatus(),
-        loadAppLogs(),
       ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
@@ -3907,12 +3104,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
     loadFeedbacks().catch((error) => {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
-    });
-    loadTickets().catch((error) => {
-      ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
-    });
-    loadAppLogs().catch((error) => {
-      if (appLogsBody) appLogsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     loadSystemStatus().catch((error) => {
       if (isOverviewPage) setStatus('系统状态加载失败：' + error.message, true);
@@ -4331,7 +3522,6 @@ function renderOfficeHtml(): string {
         <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="nav-item" href="/feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
-        <a class="nav-item" href="/tickets"><svg class="icon sm"><use href="#i-database"></use></svg><span>工单</span></a>
         <a class="nav-item" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">

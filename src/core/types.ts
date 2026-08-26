@@ -36,66 +36,6 @@ export type SessionStatus = 'active' | 'closed';
 
 export type SessionWorkLogStatus = 'completed' | 'failed' | 'stopped';
 
-export type TicketSource = 'feishu_dm' | 'feishu_group' | 'console' | 'manual';
-export type TicketStatus = 'open' | 'analyzing' | 'waiting_user' | 'resolved' | 'closed' | 'failed' | 'archived';
-export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
-
-export interface Ticket {
-  /** 长期问题档案。Session 只是某次执行上下文，Ticket 删除/保留策略独立于会话。 */
-  id: string;
-  source: TicketSource;
-  title: string;
-  status: TicketStatus;
-  priority: TicketPriority;
-  ownerOpenId?: string;
-  createdByOpenId?: string;
-  createdByName?: string;
-  chatId?: string;
-  chatName?: string;
-  messageId?: string;
-  rootMessageId?: string;
-  threadId?: string;
-  currentSessionId?: string;
-  sessionIds: string[];
-  createdAt: string;
-  updatedAt: string;
-  closedAt?: string;
-}
-
-export type TicketTraceEventKind = 'turn_started' | 'trace_snapshot' | 'turn_completed' | 'turn_failed' | 'turn_stopped';
-
-export interface TicketTraceEvent {
-  id: string;
-  ticketId: string;
-  sessionId: string;
-  turnId?: string;
-  kind: TicketTraceEventKind;
-  status?: SessionWorkLogStatus | 'working';
-  message?: string;
-  question?: string;
-  answer?: string;
-  trace?: string;
-  createdAt: string;
-}
-
-export type AppLogLevel = 'info' | 'warn' | 'error';
-export type AppLogCategory = 'daemon' | 'lark' | 'traex' | 'ticket' | 'console' | 'cleanup' | 'system';
-
-export interface AppLogRecord {
-  /** larkbot 内部日志 id，用于从控制台或聊天上下文反查一条运行日志。 */
-  id: string;
-  level: AppLogLevel;
-  category: AppLogCategory;
-  message: string;
-  sessionId?: string;
-  ticketId?: string;
-  turnId?: string;
-  traceEventId?: string;
-  requestId?: string;
-  data?: Record<string, unknown>;
-  createdAt: string;
-}
-
 export interface SessionWorkLog {
   /** 一轮用户消息对应一条日志，用于办公室精确工时统计。 */
   id: string;
@@ -108,7 +48,6 @@ export interface SessionWorkLog {
 export interface Session {
   /** 飞书话题到 traex 原生会话的持久化路由。 */
   sessionId: string;        // larkbot 自己的会话 id
-  ticketId?: string;
   chatId: string;
   rootMessageId: string;    // 飞书话题根消息
   threadId?: string;
@@ -144,7 +83,6 @@ export interface Session {
 
 export interface ExpiredSession {
   sessionId: string;
-  ticketId?: string;
   chatId: string;
   chatName?: string;
   rootMessageId: string;
@@ -190,7 +128,6 @@ export interface KnowledgeObservation {
 
 export interface FeedbackRecord {
   id: string;
-  ticketId?: string;
   rating: FeedbackRating;
   status: FeedbackStatus;
   sessionId: string;

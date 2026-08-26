@@ -13,12 +13,11 @@ import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
-import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus, Ticket, TicketStatus, TicketTraceEvent } from './types.js';
+import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -114,8 +113,7 @@ export class ConversationManager {
   async restore(): Promise<Session[]> {
     const sessions = await this.deps.store.loadSessions();
     for (const session of sessions) this.sessions.set(session.sessionId, session);
-    await this.backfillTickets(sessions);
-    logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`, { category: 'daemon' });
+    logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`);
     return sessions;
   }
 
@@ -151,7 +149,6 @@ export class ConversationManager {
 
   async add(session: Session): Promise<void> {
     this.sessions.set(session.sessionId, session);
-    await this.ensureTicketForSession(session);
     await this.persist();
   }
 
@@ -212,18 +209,13 @@ export class ConversationManager {
       try { runtime.pty.write('\x03'); } catch { /* process may already be gone */ }
       await this.removeReceivedReaction(runtime);
       this.endWorkLog(runtime, 'stopped');
-      await this.appendTicketTraceEvent(session, {
-        kind: 'turn_stopped',
-        status: 'stopped',
-        message: '本轮分析被手动停止',
-      });
     }
     await this.waitForPosting(runtime);
     await this.captureInterruptedCliSession(session);
     await this.patchTraceStopped(runtime);
     this.disposeRuntime(runtime);
     await this.persist();
-    logger.info(`已停止本轮分析 session=${sessionId.slice(0, 8)}`, { category: 'traex', sessionId });
+    logger.info(`已停止本轮分析 session=${sessionId.slice(0, 8)}`);
     return session;
   }
 
@@ -239,7 +231,6 @@ export class ConversationManager {
     }
     this.sessions.delete(sessionId);
     await this.persist();
-    await this.detachTicketSession(session);
     return true;
   }
 
@@ -267,7 +258,6 @@ export class ConversationManager {
         }
         this.sessions.delete(session.sessionId);
         deletedSessions.push(toExpiredSession(session, deletedAt));
-        await this.detachTicketSession(session);
         continue;
       }
       if (session.status === 'active' && opts.idleCloseMs > 0 && idleMs >= opts.idleCloseMs) {
@@ -312,7 +302,6 @@ export class ConversationManager {
   }
 
   async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string, question?: string): Promise<void> {
-    await this.ensureTicketForSession(session);
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -396,21 +385,12 @@ export class ConversationManager {
     runtime.detector.onIdle((source) => {
       if (runtime.status !== 'busy') return;
       runtime.status = 'idle';
-    logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`, {
-      category: 'traex',
-      sessionId: session.sessionId,
-      ticketId: session.ticketId,
-    });
+      logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`);
       void this.finishTurn(runtime);
     });
     child.onData((chunk) => this.onData(runtime, chunk));
     child.onExit(({ exitCode }) => void this.onExit(runtime, exitCode));
-    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} cli=${resumeSessionId ?? 'new'} pid=${child.pid}`, {
-      category: 'traex',
-      sessionId: session.sessionId,
-      ticketId: session.ticketId,
-      data: { cliSessionId: resumeSessionId ?? 'new', pid: child.pid },
-    });
+    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} cli=${resumeSessionId ?? 'new'} pid=${child.pid}`);
     return runtime;
   }
 
@@ -425,11 +405,7 @@ export class ConversationManager {
         runtime.ready = true;
         this.clearFirstPromptFallback(runtime);
         runtime.detector.reset();
-        logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`, {
-          category: 'traex',
-          sessionId: runtime.route.sessionId,
-          ticketId: runtime.route.ticketId,
-        });
+        logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`);
         void this.drain(runtime);
       }
       return;
@@ -466,17 +442,10 @@ export class ConversationManager {
     runtime.turnStopped = false;
     runtime.turnStartedAtMs = Date.now();
     runtime.turnWorkLogId = this.beginWorkLog(runtime.route, runtime.turnStartedAtMs);
-    await this.appendTicketTraceEvent(runtime.route, {
-      kind: 'turn_started',
-      status: 'working',
-      question: turn.question,
-      message: '用户消息进入分析队列',
-    });
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
       : undefined;
-    await this.updateTicketStatus(runtime.route, 'analyzing');
     // 记录本轮开始点，办公室工时统计和 trace footer 都依赖它。
     runtime.pendingFlushStatus = undefined;
     runtime.renderer.markNewTurn();
@@ -493,19 +462,9 @@ export class ConversationManager {
       runtime.route.hasHistory = true;
       if (result.cliSessionId) runtime.route.cliSessionId = result.cliSessionId;
       await this.persist();
-      logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`, {
-        category: 'traex',
-        sessionId: runtime.route.sessionId,
-        ticketId: runtime.route.ticketId,
-      });
+      logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`);
     } catch (error: any) {
       this.endWorkLog(runtime, 'failed');
-      await this.updateTicketStatus(runtime.route, 'failed');
-      await this.appendTicketTraceEvent(runtime.route, {
-        kind: 'turn_failed',
-        status: 'failed',
-        message: `消息投递失败：${error?.message ?? error}`,
-      });
       runtime.status = 'idle';
       await this.removeReceivedReaction(runtime);
       if (runtime.route.threadId) {
@@ -534,7 +493,6 @@ export class ConversationManager {
       await this.addReaction(runtime.currentReplyAnchorMessageId, DONE_REACTION);
     }
     this.endWorkLog(runtime, 'completed');
-    await this.updateTicketStatus(runtime.route, 'waiting_user');
     await this.persist();
     void this.drain(runtime);
   }
@@ -547,22 +505,11 @@ export class ConversationManager {
       await this.flushNow(runtime, 'failed');
       await this.removeReceivedReaction(runtime);
       this.endWorkLog(runtime, 'failed');
-      await this.updateTicketStatus(runtime.route, 'failed');
-      await this.appendTicketTraceEvent(runtime.route, {
-        kind: 'turn_failed',
-        status: 'failed',
-        message: `traex 退出，退出码 ${exitCode}`,
-      });
       await this.persist();
     }
     this.teardown(runtime);
     this.deps.closeTerminal?.(runtime.route.sessionId);
-    logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`, {
-      category: 'traex',
-      sessionId: runtime.route.sessionId,
-      ticketId: runtime.route.ticketId,
-      data: { exitCode },
-    });
+    logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`);
     if (!recover) {
       if (!runtime.intentionalClose && !runtime.ready && runtime.route.threadId) {
         await this.deps.notify(runtime.route.threadId, `traex 启动失败（退出码 ${exitCode}），消息未被处理。`);
@@ -608,11 +555,7 @@ export class ConversationManager {
       if (runtime.ready || runtime.status !== 'idle' || runtime.queue.length === 0) return;
       runtime.ready = true;
       runtime.detector.reset();
-      logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`, {
-        category: 'traex',
-        sessionId: runtime.route.sessionId,
-        ticketId: runtime.route.ticketId,
-      });
+      logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`);
       void this.drain(runtime);
     }, FIRST_PROMPT_FALLBACK_MS);
     runtime.firstPromptTimer.unref?.();
@@ -650,15 +593,6 @@ export class ConversationManager {
     const sourceAnswer = cleanAnswer(rawAnswer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
-    if (changed || status !== 'working') {
-      await this.appendTicketTraceEvent(runtime.route, {
-        kind: status === 'working' ? 'trace_snapshot' : status === 'completed' ? 'turn_completed' : status === 'stopped' ? 'turn_stopped' : 'turn_failed',
-        status,
-        answer: status === 'working' ? undefined : answerBody,
-        trace: traceBody,
-        message: status === 'working' ? '分析过程更新' : undefined,
-      });
-    }
     const argosSource = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/.test(trace)
       ? `${sourceAnswer}\n${trace}`
       : undefined;
@@ -857,112 +791,6 @@ export class ConversationManager {
     return this.deps.store.saveSessions([...this.sessions.values()]);
   }
 
-  private async backfillTickets(sessions: Session[]): Promise<void> {
-    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
-    let changed = false;
-    for (const session of sessions) {
-      const before = session.ticketId;
-      await this.ensureTicketForSession(session);
-      if (session.ticketId !== before) changed = true;
-    }
-    if (changed) await this.persist();
-  }
-
-  private async ensureTicketForSession(session: Session): Promise<Ticket | undefined> {
-    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return undefined;
-    const tickets = await this.deps.store.loadTickets();
-    const now = new Date().toISOString();
-    let ticket = session.ticketId ? tickets.find((item) => item.id === session.ticketId) : undefined;
-    ticket ??= tickets.find((item) =>
-      item.sessionIds.includes(session.sessionId)
-      || (!!session.rootMessageId && item.rootMessageId === session.rootMessageId)
-      || (!!session.threadId && item.threadId === session.threadId));
-    if (!ticket) {
-      ticket = createTicketFromSession(session, now);
-      tickets.unshift(ticket);
-    } else {
-      ticket.updatedAt = now;
-      ticket.title = ticket.title || session.title;
-      ticket.ownerOpenId ??= session.ownerOpenId;
-      ticket.createdByOpenId ??= session.createdByOpenId;
-      ticket.createdByName ??= session.createdByName;
-      ticket.chatId ??= session.chatId;
-      ticket.chatName ??= session.chatName;
-      ticket.rootMessageId ??= session.rootMessageId;
-      ticket.threadId ??= session.threadId;
-      ticket.currentSessionId = session.status === 'active' ? session.sessionId : ticket.currentSessionId;
-      if (!ticket.sessionIds.includes(session.sessionId)) ticket.sessionIds.push(session.sessionId);
-    }
-    session.ticketId = ticket.id;
-    await this.deps.store.saveTickets(sortTickets(tickets));
-    return ticket;
-  }
-
-  private async updateTicketStatus(session: Session, status: TicketStatus): Promise<void> {
-    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
-    const ticket = await this.ensureTicketForSession(session);
-    if (!ticket) return;
-    const tickets = await this.deps.store.loadTickets();
-    const stored = tickets.find((item) => item.id === ticket.id);
-    if (!stored) return;
-    stored.status = status;
-    stored.updatedAt = new Date().toISOString();
-    if (status === 'closed') stored.closedAt = stored.updatedAt;
-    await this.deps.store.saveTickets(sortTickets(tickets));
-  }
-
-  private async detachTicketSession(session: Session): Promise<void> {
-    if (!session.ticketId || !this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
-    const tickets = await this.deps.store.loadTickets();
-    const ticket = tickets.find((item) => item.id === session.ticketId);
-    if (!ticket) return;
-    if (ticket.currentSessionId === session.sessionId) ticket.currentSessionId = undefined;
-    if (!ticket.sessionIds.includes(session.sessionId)) ticket.sessionIds.push(session.sessionId);
-    ticket.updatedAt = new Date().toISOString();
-    await this.deps.store.saveTickets(sortTickets(tickets));
-  }
-
-  private async appendTicketTraceEvent(
-    session: Session,
-    input: Omit<TicketTraceEvent, 'id' | 'ticketId' | 'sessionId' | 'turnId' | 'createdAt'>,
-  ): Promise<void> {
-    if (!this.deps.store.loadTicketTraceEvents || !this.deps.store.saveTicketTraceEvents) return;
-    const ticket = await this.ensureTicketForSession(session);
-    if (!ticket) return;
-    const now = new Date().toISOString();
-    const events = await this.deps.store.loadTicketTraceEvents();
-    const latestTurn = session.workLogs?.at(-1);
-    const event: TicketTraceEvent = {
-      id: randomUUID(),
-      ticketId: ticket.id,
-      sessionId: session.sessionId,
-      turnId: latestTurn?.id,
-      kind: input.kind,
-      status: input.status,
-      message: input.message,
-      question: input.question,
-      answer: input.answer,
-      trace: input.trace,
-      createdAt: now,
-    };
-    events.push(event);
-    await this.deps.store.saveTicketTraceEvents(events.slice(-5000));
-    logger.info(input.message || ticketTraceEventText(input.kind), {
-      category: 'ticket',
-      sessionId: session.sessionId,
-      ticketId: ticket.id,
-      turnId: event.turnId,
-      traceEventId: event.id,
-      data: {
-        kind: event.kind,
-        status: event.status,
-        hasQuestion: Boolean(event.question),
-        hasAnswer: Boolean(event.answer),
-        hasTrace: Boolean(event.trace),
-      },
-    });
-  }
-
   private async persistExpiredSessions(deleted: ExpiredSession[], nowMs: number): Promise<void> {
     if (!this.deps.store.loadExpiredSessions || !this.deps.store.saveExpiredSessions) return;
     const cutoffMs = nowMs - 30 * 24 * 60 * 60 * 1000;
@@ -976,46 +804,9 @@ export class ConversationManager {
   }
 }
 
-function createTicketFromSession(session: Session, now: string): Ticket {
-  return {
-    id: randomUUID(),
-    source: session.chatId.startsWith('ou_') ? 'feishu_dm' : 'feishu_group',
-    title: session.title || session.latestQuestion || '飞书工单',
-    status: session.status === 'active' ? 'open' : 'closed',
-    priority: 'normal',
-    ownerOpenId: session.ownerOpenId,
-    createdByOpenId: session.createdByOpenId,
-    createdByName: session.createdByName,
-    chatId: session.chatId,
-    chatName: session.chatName,
-    messageId: session.anchorMessageId,
-    rootMessageId: session.rootMessageId,
-    threadId: session.threadId,
-    currentSessionId: session.status === 'active' ? session.sessionId : undefined,
-    sessionIds: [session.sessionId],
-    createdAt: session.createdAt || now,
-    updatedAt: now,
-    closedAt: session.closedAt,
-  };
-}
-
-function sortTickets(tickets: Ticket[]): Ticket[] {
-  return [...tickets].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-}
-
-function ticketTraceEventText(kind: TicketTraceEvent['kind']): string {
-  return kind === 'turn_started' ? '工单分析开始'
-    : kind === 'trace_snapshot' ? '工单分析快照已记录'
-    : kind === 'turn_completed' ? '工单分析完成'
-    : kind === 'turn_failed' ? '工单分析失败'
-    : kind === 'turn_stopped' ? '工单分析停止'
-    : kind;
-}
-
 function toExpiredSession(session: Session, deletedAt: string): ExpiredSession {
   return {
     sessionId: session.sessionId,
-    ticketId: session.ticketId,
     chatId: session.chatId,
     chatName: session.chatName,
     rootMessageId: session.rootMessageId,

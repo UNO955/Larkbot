@@ -73,8 +73,7 @@ npm run typecheck          # TypeScript 类型检查
 npm start                  # 运行已编译的 dist/daemon.js
 ```
 
-状态默认保存在 `~/.larkbot/larkbot.sqlite`。首次启动 SQLite store 时会从同目录下的旧 JSON 状态文件导入；
-如需临时退回旧 JSON 文件存储，可设置 `LARKBOT_STORE=json`。
+状态文件默认保存在 `~/.larkbot/`，可通过 `LARKBOT_STATE_DIR` 覆盖。
 
 ## 配置与敏感信息
 
@@ -88,9 +87,7 @@ npm start                  # 运行已编译的 dist/daemon.js
 - `TRAEX_CWD`：traex 的执行工作目录。
 - `TRAEX_BIN`：traex 可执行文件路径。开发机用非登录 shell 启动 daemon 时，建议写绝对路径，例如 `/home/you/.local/bin/traex`。
 - `TRAE_HOME`：larkbot 专用 traex 会话目录，建议与手动 traex 隔离。
-- `LARKBOT_STATE_DIR`：运行状态目录，默认 `~/.larkbot/`。
-- `LARKBOT_STORE`：状态存储后端，默认优先使用内置 SQLite；设置为 `json` 时强制使用旧 JSON 文件。
-- `LARKBOT_DB_PATH`：SQLite 数据库路径，默认 `${LARKBOT_STATE_DIR}/larkbot.sqlite`。
+- `LARKBOT_STATE_DIR`：`bots.json`、`sessions.json`、`feedback.json` 等运行状态目录，默认 `~/.larkbot/`。
 
 Git 忽略规则已经覆盖 `.env*`、本地状态目录、日志、临时文件和常见私钥格式。需要新增真实凭证文件时，先补 `.gitignore`，再放文件。
 

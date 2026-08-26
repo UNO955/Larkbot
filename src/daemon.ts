@@ -12,11 +12,11 @@
  */
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
-import { configureAppLogger, flushAppLogger, logger } from './utils/logger.js';
+import { logger } from './utils/logger.js';
 import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
-import { createDefaultSessionStore } from './core/store.js';
+import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildFeedbackOwnerCard, buildMaintenanceCard, buildTerminalCard, buildThinkingCard, type FeedbackRating } from './im/lark/card-builder.js';
@@ -29,12 +29,8 @@ const DAILY_CLEANUP_HOUR = 3;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const store = await createDefaultSessionStore();
-  configureAppLogger(store);
-  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`, {
-    category: 'daemon',
-    data: { cwd: cfg.traexCwd, traeHome: process.env.TRAE_HOME?.trim() || '~/.trae' },
-  });
+  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`);
+  const store = new JsonSessionStore();
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
 
@@ -99,11 +95,11 @@ async function main(): Promise<void> {
     sessionManager: sessions,
     onBotUpdated(bot) {
       activeBot = bot;
-      logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`, { category: 'daemon', data: { botId: bot.id, cwd: bot.cwd } });
+      logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`);
     },
   });
   await backfillSessionUserNames(store, im).catch((error: any) => {
-    logger.warn(`回填会话发起人名称失败: ${error?.message ?? error}`, { category: 'daemon' });
+    logger.warn(`回填会话发起人名称失败: ${error?.message ?? error}`);
   });
   const restored = await sessions.restore();
   for (const session of restored) {
@@ -118,14 +114,11 @@ async function main(): Promise<void> {
         closedRetentionMs: cfg.sessionClosedRetentionMs,
       });
       if (result.closed || result.deleted) {
-        logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`, {
-          category: 'cleanup',
-          data: { closed: result.closed, deleted: result.deleted },
-        });
+        logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`);
         await notifyCleanupResult(im, activeBot, result);
       }
     } catch (error: any) {
-      logger.warn(`会话清理失败: ${error?.message ?? error}`, { category: 'cleanup' });
+      logger.warn(`会话清理失败: ${error?.message ?? error}`);
     }
   };
   const cleanupTimer = scheduleDailyCleanup(cleanupSessions, DAILY_CLEANUP_HOUR);
@@ -135,7 +128,7 @@ async function main(): Promise<void> {
       await rememberChat(store, activeBot, chat).then((bot) => {
         if (bot) activeBot = bot;
       }).catch((error: any) => {
-        logger.warn(`记录群聊失败 chat=${chat.chatId}: ${error?.message ?? error}`, { category: 'lark', data: { chatId: chat.chatId } });
+        logger.warn(`记录群聊失败 chat=${chat.chatId}: ${error?.message ?? error}`);
       });
     },
 
@@ -284,25 +277,24 @@ async function main(): Promise<void> {
 
   // 优雅退出
   const shutdown = () => {
-    logger.info('收到退出信号，关闭所有会话…', { category: 'daemon' });
+    logger.info('收到退出信号，关闭所有会话…');
     cleanupTimer.cancel();
     sessions.shutdownAll();
     consoleServer.close();
-    im.stop().finally(() => flushAppLogger().finally(() => process.exit(0)));
+    im.stop().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  logger.info('larkbot 就绪，等待飞书消息…', { category: 'daemon' });
+  logger.info('larkbot 就绪，等待飞书消息…');
 }
 
-main().catch(async (err) => {
-  logger.error(`启动失败: ${err?.message ?? err}`, { category: 'daemon' });
-  await flushAppLogger();
+main().catch((err) => {
+  logger.error(`启动失败: ${err?.message ?? err}`);
   process.exit(1);
 });
 
-async function loadActiveBot(store: SessionStore, cfg: ReturnType<typeof loadConfig>): Promise<Bot> {
+async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loadConfig>): Promise<Bot> {
   const bots = await store.loadBots();
   const existing = bots.find((bot) => bot.enabled) ?? bots[0];
   if (existing) return existing;
@@ -335,7 +327,7 @@ function isAuthorized(bot: Bot, openId: string, chatId?: string): boolean {
   return !!chatId && !!bot.allowedChatIds?.includes(chatId);
 }
 
-async function rememberChat(store: SessionStore, activeBot: Bot, chat: ImChat): Promise<Bot | undefined> {
+async function rememberChat(store: JsonSessionStore, activeBot: Bot, chat: ImChat): Promise<Bot | undefined> {
   if (!chat.chatId || chat.chatType === 'p2p') return undefined;
   const bots = await store.loadBots();
   const index = bots.findIndex((bot) => bot.id === activeBot.id);
@@ -363,7 +355,7 @@ async function rememberChat(store: SessionStore, activeBot: Bot, chat: ImChat): 
   return bot;
 }
 
-async function backfillKnownChatNames(store: SessionStore, activeBot: Bot, im: ImAdapter): Promise<Bot | undefined> {
+async function backfillKnownChatNames(store: JsonSessionStore, activeBot: Bot, im: ImAdapter): Promise<Bot | undefined> {
   const missing = (activeBot.knownChats ?? []).filter((chat) => !chat.name?.trim());
   if (missing.length === 0) return undefined;
   const bots = await store.loadBots();
@@ -387,7 +379,7 @@ async function backfillKnownChatNames(store: SessionStore, activeBot: Bot, im: I
   return bot;
 }
 
-async function backfillSessionUserNames(store: SessionStore, im: ImAdapter): Promise<void> {
+async function backfillSessionUserNames(store: JsonSessionStore, im: ImAdapter): Promise<void> {
   const sessions = await store.loadSessions();
   let changed = false;
   for (const session of sessions) {
@@ -548,7 +540,6 @@ async function handleThinkingFeedback(opts: {
   const traceExcerpt = opts.terminalStore.snapshot(opts.sessionId, 2600);
   const record: FeedbackRecord = {
     id: randomUUID(),
-    ticketId: session?.ticketId,
     rating: opts.rating,
     status: 'open',
     sessionId: opts.sessionId,
@@ -632,7 +623,6 @@ async function handleNegativeFeedbackSupplement(opts: {
   const record = await updateNegativeFeedbackSupplement(opts.store, {
     feedbackId: opts.feedbackId,
     sessionId: opts.sessionId,
-    ticketId: session?.ticketId,
     sessionTitle: session?.title || opts.sessionId,
     chatName: session?.chatName || (session ? chatName(opts.bot, session.chatId) : undefined),
     chatId: session?.chatId || opts.action.chatId,
@@ -741,7 +731,6 @@ async function appendFeedback(store: SessionStore, record: FeedbackRecord): Prom
 async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
   feedbackId?: string;
   sessionId: string;
-  ticketId?: string;
   sessionTitle: string;
   chatName?: string;
   chatId?: string;
@@ -770,7 +759,6 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
       id: randomUUID(),
       rating: 'negative',
       status: 'open',
-      ticketId: input.ticketId,
       sessionId: input.sessionId,
       sessionTitle: input.sessionTitle,
       chatId: input.chatId,
@@ -788,7 +776,6 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
     feedbacks.unshift(record);
   }
   record.reason = input.reason || record.reason;
-  record.ticketId = input.ticketId || record.ticketId;
   record.note = input.note || record.note;
   record.question = input.question || record.question;
   record.answer = input.answer || record.answer;
