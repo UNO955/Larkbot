@@ -16,7 +16,7 @@ import { logger } from './utils/logger.js';
 import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
-import { JsonSessionStore } from './core/store.js';
+import { createDefaultSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
 import { buildFeedbackOwnerCard, buildMaintenanceCard, buildTerminalCard, buildThinkingCard, type FeedbackRating } from './im/lark/card-builder.js';
@@ -30,7 +30,7 @@ const DAILY_CLEANUP_HOUR = 3;
 async function main(): Promise<void> {
   const cfg = loadConfig();
   logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`);
-  const store = new JsonSessionStore();
+  const store = await createDefaultSessionStore();
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
 
@@ -294,7 +294,7 @@ main().catch((err) => {
   process.exit(1);
 });
 
-async function loadActiveBot(store: JsonSessionStore, cfg: ReturnType<typeof loadConfig>): Promise<Bot> {
+async function loadActiveBot(store: SessionStore, cfg: ReturnType<typeof loadConfig>): Promise<Bot> {
   const bots = await store.loadBots();
   const existing = bots.find((bot) => bot.enabled) ?? bots[0];
   if (existing) return existing;
@@ -327,7 +327,7 @@ function isAuthorized(bot: Bot, openId: string, chatId?: string): boolean {
   return !!chatId && !!bot.allowedChatIds?.includes(chatId);
 }
 
-async function rememberChat(store: JsonSessionStore, activeBot: Bot, chat: ImChat): Promise<Bot | undefined> {
+async function rememberChat(store: SessionStore, activeBot: Bot, chat: ImChat): Promise<Bot | undefined> {
   if (!chat.chatId || chat.chatType === 'p2p') return undefined;
   const bots = await store.loadBots();
   const index = bots.findIndex((bot) => bot.id === activeBot.id);
@@ -355,7 +355,7 @@ async function rememberChat(store: JsonSessionStore, activeBot: Bot, chat: ImCha
   return bot;
 }
 
-async function backfillKnownChatNames(store: JsonSessionStore, activeBot: Bot, im: ImAdapter): Promise<Bot | undefined> {
+async function backfillKnownChatNames(store: SessionStore, activeBot: Bot, im: ImAdapter): Promise<Bot | undefined> {
   const missing = (activeBot.knownChats ?? []).filter((chat) => !chat.name?.trim());
   if (missing.length === 0) return undefined;
   const bots = await store.loadBots();
@@ -379,7 +379,7 @@ async function backfillKnownChatNames(store: JsonSessionStore, activeBot: Bot, i
   return bot;
 }
 
-async function backfillSessionUserNames(store: JsonSessionStore, im: ImAdapter): Promise<void> {
+async function backfillSessionUserNames(store: SessionStore, im: ImAdapter): Promise<void> {
   const sessions = await store.loadSessions();
   let changed = false;
   for (const session of sessions) {

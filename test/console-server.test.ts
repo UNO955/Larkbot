@@ -236,7 +236,7 @@ describe('console terminal page', () => {
   });
 
   it('提供工单控制台页面和分析事件接口', async () => {
-    const tickets: Ticket[] = [{
+    let tickets: Ticket[] = [{
       id: 'tk-1',
       source: 'feishu_group',
       title: '排查错误日志',
@@ -248,6 +248,18 @@ describe('console terminal page', () => {
       sessionIds: ['lm-1'],
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:02:00.000Z',
+    }, {
+      id: 'tk-2',
+      source: 'feishu_group',
+      title: '排查错误日志后续',
+      status: 'archived',
+      priority: 'normal',
+      chatId: 'oc-1',
+      rootMessageId: 'om-2',
+      currentSessionId: 'lm-2',
+      sessionIds: ['lm-2'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
     }];
     const events: TicketTraceEvent[] = [{
       id: 'ev-1',
@@ -278,7 +290,7 @@ describe('console terminal page', () => {
       loadFeedbacks: async () => feedbacks,
       saveFeedbacks: async () => undefined,
       loadTickets: async () => tickets,
-      saveTickets: async () => undefined,
+      saveTickets: async (next) => { tickets = structuredClone(next); },
       loadTicketTraceEvents: async () => events,
       saveTicketTraceEvents: async () => undefined,
     };
@@ -311,11 +323,21 @@ describe('console terminal page', () => {
     expect(eventRes.status).toBe(200);
     expect((await eventRes.json()).events).toEqual(events);
 
-    const searchRes = await fetch(`${base}/api/tickets/search?q=${encodeURIComponent('错误原因')}`);
+    const patchRes = await fetch(`${base}/api/tickets/tk-1`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'closed' }),
+    });
+    expect(patchRes.status).toBe(200);
+    expect((await patchRes.json()).ticket).toMatchObject({ id: 'tk-1', status: 'closed' });
+    expect(tickets.find((ticket) => ticket.id === 'tk-1')?.closedAt).toBeTruthy();
+
+    const searchRes = await fetch(`${base}/api/tickets/search?q=${encodeURIComponent('错误日志')}&status=archived&kind=ticket&limit=1`);
     expect(searchRes.status).toBe(200);
     const searchJson = await searchRes.json();
+    expect(searchJson).toMatchObject({ total: 1, offset: 0, limit: 1 });
     expect(searchJson.results).toEqual([
-      expect.objectContaining({ kind: 'trace_event', ticketId: 'tk-1', sessionId: 'lm-1' }),
+      expect.objectContaining({ kind: 'ticket', ticketId: 'tk-2', ticketStatus: 'archived' }),
     ]);
   });
 
