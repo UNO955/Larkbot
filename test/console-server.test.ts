@@ -296,6 +296,7 @@ describe('console terminal page', () => {
     const html = await page.text();
     expect(html).toContain('工单档案');
     expect(html).toContain('/api/tickets');
+    expect(html).toContain('/api/tickets/search');
 
     const ticketRes = await fetch(`${base}/api/tickets`);
     expect(ticketRes.status).toBe(200);
@@ -309,6 +310,13 @@ describe('console terminal page', () => {
     const eventRes = await fetch(`${base}/api/tickets/tk-1/events`);
     expect(eventRes.status).toBe(200);
     expect((await eventRes.json()).events).toEqual(events);
+
+    const searchRes = await fetch(`${base}/api/tickets/search?q=${encodeURIComponent('错误原因')}`);
+    expect(searchRes.status).toBe(200);
+    const searchJson = await searchRes.json();
+    expect(searchJson.results).toEqual([
+      expect.objectContaining({ kind: 'trace_event', ticketId: 'tk-1', sessionId: 'lm-1' }),
+    ]);
   });
 
   it('管理反馈记录状态并支持删除', async () => {

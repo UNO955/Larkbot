@@ -350,6 +350,10 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { tickets: await listTickets(opts) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/tickets/search') {
+      sendJson(res, { results: await searchTicketRecords(opts, url.searchParams.get('q') || '') });
+      return;
+    }
     const ticketEventsMatch = url.pathname.match(/^\/api\/tickets\/([^/]+)\/events$/);
     if (req.method === 'GET' && ticketEventsMatch) {
       const ticketId = decodeURIComponent(ticketEventsMatch[1]);
@@ -642,6 +646,99 @@ async function listTicketEvents(opts: ConsoleServerOpts, ticketId: string): Prom
   return events
     .filter((event) => event.ticketId === ticketId)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+}
+
+interface TicketSearchResult {
+  kind: 'ticket' | 'feedback' | 'trace_event';
+  ticketId?: string;
+  sessionId?: string;
+  title: string;
+  excerpt: string;
+  createdAt?: string;
+}
+
+async function searchTicketRecords(opts: ConsoleServerOpts, rawQuery: string): Promise<TicketSearchResult[]> {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) return [];
+  const [tickets, feedbacks, events] = await Promise.all([
+    opts.store.loadTickets?.() ?? Promise.resolve([]),
+    opts.store.loadFeedbacks?.() ?? Promise.resolve([]),
+    opts.store.loadTicketTraceEvents?.() ?? Promise.resolve([]),
+  ]);
+  const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+  const results: TicketSearchResult[] = [];
+  for (const ticket of tickets) {
+    const haystack = [
+      ticket.id,
+      ticket.title,
+      ticket.status,
+      ticket.chatId,
+      ticket.chatName,
+      ticket.currentSessionId,
+      ...ticket.sessionIds,
+    ].filter(Boolean).join('\n').toLowerCase();
+    if (haystack.includes(query)) {
+      results.push({
+        kind: 'ticket',
+        ticketId: ticket.id,
+        sessionId: ticket.currentSessionId,
+        title: ticket.title || ticket.id,
+        excerpt: `状态：${ticket.status} · 会话 ${ticket.sessionIds.length}`,
+        createdAt: ticket.updatedAt,
+      });
+    }
+  }
+  for (const feedback of feedbacks) {
+    const haystack = [
+      feedback.id,
+      feedback.ticketId,
+      feedback.sessionId,
+      feedback.sessionTitle,
+      feedback.reason,
+      feedback.note,
+      feedback.reviewNote,
+      feedback.question,
+      feedback.answer,
+      feedback.traceExcerpt,
+    ].filter(Boolean).join('\n').toLowerCase();
+    if (haystack.includes(query)) {
+      results.push({
+        kind: 'feedback',
+        ticketId: feedback.ticketId,
+        sessionId: feedback.sessionId,
+        title: feedback.sessionTitle || feedback.ticketId || feedback.sessionId,
+        excerpt: feedback.reason || feedback.note || feedback.reviewNote || feedback.question || feedback.answer || feedback.traceExcerpt || feedback.rating,
+        createdAt: feedback.updatedAt,
+      });
+    }
+  }
+  for (const event of events) {
+    const haystack = [
+      event.id,
+      event.ticketId,
+      event.sessionId,
+      event.turnId,
+      event.kind,
+      event.message,
+      event.question,
+      event.answer,
+      event.trace,
+    ].filter(Boolean).join('\n').toLowerCase();
+    if (haystack.includes(query)) {
+      const ticket = ticketById.get(event.ticketId);
+      results.push({
+        kind: 'trace_event',
+        ticketId: event.ticketId,
+        sessionId: event.sessionId,
+        title: ticket?.title || event.ticketId,
+        excerpt: event.message || event.question || event.answer || event.trace || event.kind,
+        createdAt: event.createdAt,
+      });
+    }
+  }
+  return results
+    .sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''))
+    .slice(0, 100);
 }
 
 async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
@@ -1898,6 +1995,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
     <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
   </svg>
@@ -2230,6 +2328,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           <div class="sub">工单独立于 runtime 会话保留。展开事件可以看到每轮分析开始、过程快照、完成、失败或停止记录。</div>
         </div>
         <div class="session-controls">
+          <input id="ticket-search" type="text" placeholder="搜工单 / 反馈 / 分析过程" aria-label="搜索工单">
+          <button id="search-tickets" type="button" class="ghost"><svg class="icon sm"><use href="#i-search"></use></svg>搜索</button>
           <select id="ticket-filter" aria-label="筛选工单状态">
             <option value="">全部工单</option>
             <option value="open">未开始</option>
@@ -2389,6 +2489,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const ticketsBody = document.querySelector('#tickets-body');
     const refreshTickets = document.querySelector('#refresh-tickets');
     const ticketFilter = document.querySelector('#ticket-filter');
+    const ticketSearch = document.querySelector('#ticket-search');
+    const searchTickets = document.querySelector('#search-tickets');
     const refreshAll = document.querySelector('#refresh-all');
     const sideDaemonStatus = document.querySelector('#side-daemon-status');
     const observerModel = document.querySelector('#observer-model');
@@ -2982,6 +3084,30 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       )).join('') + '</div>';
     }
 
+    function renderTicketSearchResults(results) {
+      if (!results.length) {
+        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>没有匹配结果</span></td></tr>';
+        return;
+      }
+      ticketsBody.innerHTML = results.map((result) => (
+        '<tr>' +
+          '<td><span class="line"><strong>' + esc(result.title || result.ticketId || result.sessionId || '-') + '</strong></span><span class="line muted">' + esc(searchKindText(result.kind)) + '</span></td>' +
+          '<td><span class="status reviewing">结果</span></td>' +
+          '<td><span class="line muted">' + esc(result.ticketId || '-') + '</span></td>' +
+          '<td><span class="line"><code>' + esc(result.sessionId || '-') + '</code></span></td>' +
+          '<td colspan="2"><span class="line">' + esc(oneLine(result.excerpt || '-', 180)) + '</span><span class="line muted">' + esc(formatTime(result.createdAt)) + '</span></td>' +
+          '<td><div class="actions">' + (result.ticketId ? '<button type="button" class="ghost" data-ticket-events="' + esc(result.ticketId) + '"><svg class="icon sm"><use href="#i-message"></use></svg>事件</button>' : '') + '</div></td>' +
+        '</tr>'
+      )).join('');
+    }
+
+    function searchKindText(kind) {
+      return kind === 'ticket' ? '工单'
+        : kind === 'feedback' ? '反馈'
+        : kind === 'trace_event' ? '分析事件'
+        : kind || '';
+    }
+
     async function loadSessions() {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(await res.text());
@@ -3145,6 +3271,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
 
     refreshTickets.addEventListener('click', () => {
+      ticketSearch.value = '';
       withButtonFeedback(refreshTickets, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadTickets)
         .then(() => setStatus('工单已刷新'))
         .catch((error) => setStatus('刷新工单失败：' + error.message, true));
@@ -3152,6 +3279,30 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
 
     ticketFilter?.addEventListener('change', () => {
       renderTickets();
+    });
+
+    async function runTicketSearch() {
+      const query = ticketSearch.value.trim();
+      if (!query) {
+        renderTickets();
+        return;
+      }
+      const res = await fetch('/api/tickets/search?q=' + encodeURIComponent(query));
+      if (!res.ok) throw new Error(await res.text());
+      const { results } = await res.json();
+      renderTicketSearchResults(Array.isArray(results) ? results : []);
+    }
+
+    searchTickets.addEventListener('click', () => {
+      withButtonFeedback(searchTickets, { loading: '搜索中', success: '已搜索', failure: '失败' }, runTicketSearch)
+        .then(() => setStatus('搜索完成'))
+        .catch((error) => setStatus('搜索失败：' + error.message, true));
+    });
+
+    ticketSearch.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      searchTickets.click();
     });
 
     chatsBody.addEventListener('click', async (event) => {
