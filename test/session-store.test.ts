@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JsonSessionStore } from '../src/core/store.js';
-import type { Bot, Session, Ticket } from '../src/core/types.js';
+import type { Bot, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
 
 const dirs: string[] = [];
 
@@ -120,5 +120,33 @@ describe('JsonSessionStore', () => {
 
     expect(await store.loadTickets()).toEqual([ticket]);
     expect(JSON.parse(await readFile(join(dir, 'tickets.json'), 'utf8'))).toHaveLength(1);
+  });
+
+  it('保存并恢复工单分析事件', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
+    dirs.push(dir);
+    const store = new JsonSessionStore(
+      join(dir, 'sessions.json'),
+      join(dir, 'bots.json'),
+      join(dir, 'expired-sessions.json'),
+      join(dir, 'feedback.json'),
+      join(dir, 'tickets.json'),
+      join(dir, 'ticket-trace-events.json'),
+    );
+    const event: TicketTraceEvent = {
+      id: 'ev-1',
+      ticketId: 'tk-1',
+      sessionId: 'lm-1',
+      turnId: 'lm-1:1760000000000:1',
+      kind: 'trace_snapshot',
+      status: 'working',
+      trace: 'searching logs',
+      createdAt: '2026-01-01T00:01:00.000Z',
+    };
+
+    await store.saveTicketTraceEvents([event]);
+
+    expect(await store.loadTicketTraceEvents()).toEqual([event]);
+    expect(JSON.parse(await readFile(join(dir, 'ticket-trace-events.json'), 'utf8'))).toHaveLength(1);
   });
 });

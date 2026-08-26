@@ -18,7 +18,7 @@ import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus, Ticket, TicketStatus } from './types.js';
+import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus, Ticket, TicketStatus, TicketTraceEvent } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -212,6 +212,11 @@ export class ConversationManager {
       try { runtime.pty.write('\x03'); } catch { /* process may already be gone */ }
       await this.removeReceivedReaction(runtime);
       this.endWorkLog(runtime, 'stopped');
+      await this.appendTicketTraceEvent(session, {
+        kind: 'turn_stopped',
+        status: 'stopped',
+        message: '本轮分析被手动停止',
+      });
     }
     await this.waitForPosting(runtime);
     await this.captureInterruptedCliSession(session);
@@ -448,6 +453,12 @@ export class ConversationManager {
     runtime.turnStopped = false;
     runtime.turnStartedAtMs = Date.now();
     runtime.turnWorkLogId = this.beginWorkLog(runtime.route, runtime.turnStartedAtMs);
+    await this.appendTicketTraceEvent(runtime.route, {
+      kind: 'turn_started',
+      status: 'working',
+      question: turn.question,
+      message: '用户消息进入分析队列',
+    });
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
@@ -473,6 +484,11 @@ export class ConversationManager {
     } catch (error: any) {
       this.endWorkLog(runtime, 'failed');
       await this.updateTicketStatus(runtime.route, 'failed');
+      await this.appendTicketTraceEvent(runtime.route, {
+        kind: 'turn_failed',
+        status: 'failed',
+        message: `消息投递失败：${error?.message ?? error}`,
+      });
       runtime.status = 'idle';
       await this.removeReceivedReaction(runtime);
       if (runtime.route.threadId) {
@@ -515,6 +531,11 @@ export class ConversationManager {
       await this.removeReceivedReaction(runtime);
       this.endWorkLog(runtime, 'failed');
       await this.updateTicketStatus(runtime.route, 'failed');
+      await this.appendTicketTraceEvent(runtime.route, {
+        kind: 'turn_failed',
+        status: 'failed',
+        message: `traex 退出，退出码 ${exitCode}`,
+      });
       await this.persist();
     }
     this.teardown(runtime);
@@ -603,6 +624,15 @@ export class ConversationManager {
     const sourceAnswer = cleanAnswer(rawAnswer);
     const answerBody = sourceAnswer.length > 3800 ? sourceAnswer.slice(-3800) : sourceAnswer;
     const traceBody = trace.length > 20000 ? trace.slice(-20000) : trace;
+    if (changed || status !== 'working') {
+      await this.appendTicketTraceEvent(runtime.route, {
+        kind: status === 'working' ? 'trace_snapshot' : status === 'completed' ? 'turn_completed' : status === 'stopped' ? 'turn_stopped' : 'turn_failed',
+        status,
+        answer: status === 'working' ? undefined : answerBody,
+        trace: traceBody,
+        message: status === 'working' ? '分析过程更新' : undefined,
+      });
+    }
     const argosSource = /https?:\/\/aiops-argos\.byted\.org\/agent_center\/s\/[A-Za-z0-9_-]+/.test(trace)
       ? `${sourceAnswer}\n${trace}`
       : undefined;
@@ -864,6 +894,33 @@ export class ConversationManager {
     if (!ticket.sessionIds.includes(session.sessionId)) ticket.sessionIds.push(session.sessionId);
     ticket.updatedAt = new Date().toISOString();
     await this.deps.store.saveTickets(sortTickets(tickets));
+  }
+
+  private async appendTicketTraceEvent(
+    session: Session,
+    input: Omit<TicketTraceEvent, 'id' | 'ticketId' | 'sessionId' | 'turnId' | 'createdAt'>,
+  ): Promise<void> {
+    if (!this.deps.store.loadTicketTraceEvents || !this.deps.store.saveTicketTraceEvents) return;
+    const ticket = await this.ensureTicketForSession(session);
+    if (!ticket) return;
+    const now = new Date().toISOString();
+    const events = await this.deps.store.loadTicketTraceEvents();
+    const latestTurn = session.workLogs?.at(-1);
+    const event: TicketTraceEvent = {
+      id: randomUUID(),
+      ticketId: ticket.id,
+      sessionId: session.sessionId,
+      turnId: latestTurn?.id,
+      kind: input.kind,
+      status: input.status,
+      message: input.message,
+      question: input.question,
+      answer: input.answer,
+      trace: input.trace,
+      createdAt: now,
+    };
+    events.push(event);
+    await this.deps.store.saveTicketTraceEvents(events.slice(-5000));
   }
 
   private async persistExpiredSessions(deleted: ExpiredSession[], nowMs: number): Promise<void> {

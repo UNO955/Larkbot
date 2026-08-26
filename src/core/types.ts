@@ -62,6 +62,22 @@ export interface Ticket {
   closedAt?: string;
 }
 
+export type TicketTraceEventKind = 'turn_started' | 'trace_snapshot' | 'turn_completed' | 'turn_failed' | 'turn_stopped';
+
+export interface TicketTraceEvent {
+  id: string;
+  ticketId: string;
+  sessionId: string;
+  turnId?: string;
+  kind: TicketTraceEventKind;
+  status?: SessionWorkLogStatus | 'working';
+  message?: string;
+  question?: string;
+  answer?: string;
+  trace?: string;
+  createdAt: string;
+}
+
 export interface SessionWorkLog {
   /** 一轮用户消息对应一条日志，用于办公室精确工时统计。 */
   id: string;

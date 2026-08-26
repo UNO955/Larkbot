@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile, Ticket } from './types.js';
+import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile, Ticket, TicketTraceEvent } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
@@ -22,6 +22,8 @@ export interface SessionStore {
   saveFeedbacks?(feedbacks: FeedbackRecord[]): Promise<void>;
   loadTickets?(): Promise<Ticket[]>;
   saveTickets?(tickets: Ticket[]): Promise<void>;
+  loadTicketTraceEvents?(): Promise<TicketTraceEvent[]>;
+  saveTicketTraceEvents?(events: TicketTraceEvent[]): Promise<void>;
 }
 
 export class JsonSessionStore implements SessionStore {
@@ -30,12 +32,14 @@ export class JsonSessionStore implements SessionStore {
   readonly expiredSessionsPath: string;
   readonly feedbackPath: string;
   readonly ticketsPath: string;
+  readonly ticketTraceEventsPath: string;
   // 同类 JSON 写入串行化，避免并发事件同时 save 时后写入覆盖先写入的完整快照。
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
   private pendingExpiredSessionWrite: Promise<void> = Promise.resolve();
   private pendingFeedbackWrite: Promise<void> = Promise.resolve();
   private pendingTicketWrite: Promise<void> = Promise.resolve();
+  private pendingTicketTraceEventWrite: Promise<void> = Promise.resolve();
 
   constructor(
     sessionsPath = defaultSessionsPath(),
@@ -43,12 +47,14 @@ export class JsonSessionStore implements SessionStore {
     expiredSessionsPath = defaultExpiredSessionsPath(),
     feedbackPath = defaultFeedbackPath(),
     ticketsPath = defaultTicketsPath(),
+    ticketTraceEventsPath = defaultTicketTraceEventsPath(),
   ) {
     this.sessionsPath = sessionsPath;
     this.botsPath = botsPath;
     this.expiredSessionsPath = expiredSessionsPath;
     this.feedbackPath = feedbackPath;
     this.ticketsPath = ticketsPath;
+    this.ticketTraceEventsPath = ticketTraceEventsPath;
   }
 
   async loadBots(): Promise<Bot[]> {
@@ -136,6 +142,24 @@ export class JsonSessionStore implements SessionStore {
       .then(() => writeJsonAtomic(this.ticketsPath, tickets));
     await this.pendingTicketWrite;
   }
+
+  async loadTicketTraceEvents(): Promise<TicketTraceEvent[]> {
+    try {
+      const parsed = JSON.parse(await readFile(this.ticketTraceEventsPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isTicketTraceEvent);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  async saveTicketTraceEvents(events: TicketTraceEvent[]): Promise<void> {
+    this.pendingTicketTraceEventWrite = this.pendingTicketTraceEventWrite
+      .catch(() => undefined)
+      .then(() => writeJsonAtomic(this.ticketTraceEventsPath, events));
+    await this.pendingTicketTraceEventWrite;
+  }
 }
 
 function defaultSessionsPath(): string {
@@ -161,6 +185,11 @@ function defaultFeedbackPath(): string {
 function defaultTicketsPath(): string {
   const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'tickets.json');
+}
+
+function defaultTicketTraceEventsPath(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'ticket-trace-events.json');
 }
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
@@ -298,6 +327,22 @@ function isTicket(value: unknown): value is Ticket {
     && typeof ticket.createdAt === 'string'
     && typeof ticket.updatedAt === 'string'
     && (ticket.closedAt === undefined || typeof ticket.closedAt === 'string');
+}
+
+function isTicketTraceEvent(value: unknown): value is TicketTraceEvent {
+  if (!value || typeof value !== 'object') return false;
+  const event = value as Partial<TicketTraceEvent>;
+  return typeof event.id === 'string'
+    && typeof event.ticketId === 'string'
+    && typeof event.sessionId === 'string'
+    && (event.turnId === undefined || typeof event.turnId === 'string')
+    && (event.kind === 'turn_started' || event.kind === 'trace_snapshot' || event.kind === 'turn_completed' || event.kind === 'turn_failed' || event.kind === 'turn_stopped')
+    && (event.status === undefined || event.status === 'working' || event.status === 'completed' || event.status === 'failed' || event.status === 'stopped')
+    && (event.message === undefined || typeof event.message === 'string')
+    && (event.question === undefined || typeof event.question === 'string')
+    && (event.answer === undefined || typeof event.answer === 'string')
+    && (event.trace === undefined || typeof event.trace === 'string')
+    && typeof event.createdAt === 'string';
 }
 
 function isKnowledgeObservation(value: unknown): boolean {

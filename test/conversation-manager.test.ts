@@ -3,7 +3,7 @@ import type { IPty } from 'node-pty';
 import type { CliAdapter, SpawnOptions } from '../src/adapters/cli/types.js';
 import { ConversationManager } from '../src/core/conversation-manager.js';
 import type { SessionStore } from '../src/core/store.js';
-import type { Session, Ticket } from '../src/core/types.js';
+import type { Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
 
 function route(over: Partial<Session> = {}): Session {
   return {
@@ -235,6 +235,58 @@ describe('ConversationManager', () => {
     expect(tickets).toHaveLength(1);
     expect(tickets[0].currentSessionId).toBeUndefined();
     expect(tickets[0].sessionIds).toEqual(['lm-1']);
+  });
+
+  it('持久化工单分析事件流', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    let tickets: Ticket[] = [];
+    let events: TicketTraceEvent[] = [];
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+      loadTickets: async () => tickets,
+      saveTickets: async (next) => { tickets = structuredClone(next); },
+      loadTicketTraceEvents: async () => events,
+      saveTicketTraceEvents: async (next) => { events = structuredClone(next); },
+    };
+    const child = fakePty();
+    const manager = new ConversationManager({
+      cli: {
+        id: 'traex',
+        spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+        writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+        findSessionId: () => undefined,
+        readyPattern: /❯/,
+        completionPattern: /TURN_DONE/,
+      },
+      store,
+      spawnPty: () => child,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction: async () => 'reaction-1',
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user', undefined, undefined, undefined, undefined, '怎么排查');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(events.some((event) => event.kind === 'turn_started')).toBe(true));
+
+    child.emitData('正在查询日志\n最终答案\nTURN_DONE');
+
+    await vi.waitFor(() => expect(events.some((event) => event.kind === 'turn_completed')).toBe(true));
+    expect(events.map((event) => event.ticketId)).toEqual(events.map(() => session.ticketId));
+    expect(events.find((event) => event.kind === 'turn_started')?.question).toBe('怎么排查');
+    manager.shutdownAll();
   });
 
   it('定期清理会关闭闲置会话并删除过期关闭记录', async () => {
