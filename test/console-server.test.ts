@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { startConsoleServer, TerminalStreamStore } from '../src/console/server.js';
 import type { SessionStore } from '../src/core/store.js';
-import type { Bot, FeedbackRecord, Session } from '../src/core/types.js';
+import type { Bot, FeedbackRecord, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
 
 const bot: Bot = {
   id: 'bot-1',
@@ -233,6 +233,82 @@ describe('console terminal page', () => {
     expect(payload.status.cpu.cores).toBeGreaterThan(0);
     expect(payload.status.memory.total).toBeGreaterThan(0);
     expect(payload.status.sessions.active).toBe(1);
+  });
+
+  it('提供工单控制台页面和分析事件接口', async () => {
+    const tickets: Ticket[] = [{
+      id: 'tk-1',
+      source: 'feishu_group',
+      title: '排查错误日志',
+      status: 'waiting_user',
+      priority: 'normal',
+      chatId: 'oc-1',
+      rootMessageId: 'om-1',
+      currentSessionId: 'lm-1',
+      sessionIds: ['lm-1'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:02:00.000Z',
+    }];
+    const events: TicketTraceEvent[] = [{
+      id: 'ev-1',
+      ticketId: 'tk-1',
+      sessionId: 'lm-1',
+      kind: 'turn_completed',
+      status: 'completed',
+      answer: '定位到错误原因',
+      createdAt: '2026-01-01T00:02:00.000Z',
+    }];
+    const feedbacks: FeedbackRecord[] = [{
+      id: 'fb-1',
+      ticketId: 'tk-1',
+      rating: 'negative',
+      status: 'open',
+      sessionId: 'lm-1',
+      sessionTitle: '排查错误日志',
+      operatorId: 'ou-1',
+      terminalUrl: 'http://console/terminal/lm-1',
+      createdAt: '2026-01-01T00:03:00.000Z',
+      updatedAt: '2026-01-01T00:03:00.000Z',
+    }];
+    const store: SessionStore = {
+      loadBots: async () => [bot],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+      loadFeedbacks: async () => feedbacks,
+      saveFeedbacks: async () => undefined,
+      loadTickets: async () => tickets,
+      saveTickets: async () => undefined,
+      loadTicketTraceEvents: async () => events,
+      saveTicketTraceEvents: async () => undefined,
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const page = await fetch(`${base}/tickets`);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('工单档案');
+    expect(html).toContain('/api/tickets');
+
+    const ticketRes = await fetch(`${base}/api/tickets`);
+    expect(ticketRes.status).toBe(200);
+    const ticketJson = await ticketRes.json();
+    expect(ticketJson.tickets[0]).toMatchObject({
+      id: 'tk-1',
+      feedbackCount: 1,
+      negativeFeedbackCount: 1,
+    });
+
+    const eventRes = await fetch(`${base}/api/tickets/tk-1/events`);
+    expect(eventRes.status).toBe(200);
+    expect((await eventRes.json()).events).toEqual(events);
   });
 
   it('管理反馈记录状态并支持删除', async () => {

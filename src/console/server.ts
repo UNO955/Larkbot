@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { SessionStore } from '../core/store.js';
-import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
+import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile, Ticket, TicketTraceEvent } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -26,7 +26,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'tickets' | 'sessions';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -48,6 +48,11 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '反馈',
     eyebrow: 'Review queue',
     copy: '集中处理群成员的有用/无用反馈，把坏回答转成可复盘的改进线索。',
+  },
+  tickets: {
+    title: '工单',
+    eyebrow: 'Ticket ledger',
+    copy: '长期保留每个问题的状态、会话关联和分析事件。删除会话不会删除工单。',
   },
   sessions: {
     title: '会话',
@@ -341,6 +346,16 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { feedbacks: await listFeedbacks(opts) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/tickets') {
+      sendJson(res, { tickets: await listTickets(opts) });
+      return;
+    }
+    const ticketEventsMatch = url.pathname.match(/^\/api\/tickets\/([^/]+)\/events$/);
+    if (req.method === 'GET' && ticketEventsMatch) {
+      const ticketId = decodeURIComponent(ticketEventsMatch[1]);
+      sendJson(res, { events: await listTicketEvents(opts, ticketId) });
+      return;
+    }
     const feedbackMatch = url.pathname.match(/^\/api\/feedbacks\/([^/]+)$/);
     if (feedbackMatch && req.method === 'PATCH') {
       const feedbackId = decodeURIComponent(feedbackMatch[1]);
@@ -599,6 +614,34 @@ async function listFeedbacks(opts: ConsoleServerOpts): Promise<FeedbackRecord[]>
   if (!opts.store.loadFeedbacks) return [];
   const feedbacks = await opts.store.loadFeedbacks();
   return [...feedbacks].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+type PublicTicket = Ticket & { feedbackCount: number; negativeFeedbackCount: number };
+
+async function listTickets(opts: ConsoleServerOpts): Promise<PublicTicket[]> {
+  if (!opts.store.loadTickets) return [];
+  const [tickets, feedbacks] = await Promise.all([
+    opts.store.loadTickets(),
+    opts.store.loadFeedbacks?.() ?? Promise.resolve([]),
+  ]);
+  return [...tickets]
+    .map((ticket) => {
+      const relatedFeedbacks = feedbacks.filter((item) => item.ticketId === ticket.id || ticket.sessionIds.includes(item.sessionId));
+      return {
+        ...ticket,
+        feedbackCount: relatedFeedbacks.length,
+        negativeFeedbackCount: relatedFeedbacks.filter((item) => item.rating === 'negative').length,
+      };
+    })
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+async function listTicketEvents(opts: ConsoleServerOpts, ticketId: string): Promise<TicketTraceEvent[]> {
+  if (!opts.store.loadTicketTraceEvents) return [];
+  const events = await opts.store.loadTicketTraceEvents();
+  return events
+    .filter((event) => event.ticketId === ticketId)
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
 async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
@@ -874,6 +917,7 @@ function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
+  if (pathname === '/tickets') return 'tickets';
   if (pathname === '/sessions') return 'sessions';
   return undefined;
 }
@@ -1015,10 +1059,10 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .session-table th:last-child { z-index: 2; }
     .status { display: inline-flex; align-items: center; min-width: 56px; justify-content: center; gap: 6px; border-radius: 999px; padding: 3px 9px; font-weight: 700; font-size: 12px; line-height: 1.4; }
     .status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
-    .status.active, .status.positive, .status.resolved { background: var(--success-soft); color: var(--success); }
-    .status.closed, .status.ignored { background: var(--surface-tint); color: var(--text-soft); }
-    .status.negative, .status.open { background: var(--danger-soft); color: var(--danger); }
-    .status.reviewing { background: var(--warning-soft); color: var(--warning); }
+    .status.active, .status.positive, .status.resolved, .status.waiting_user { background: var(--success-soft); color: var(--success); }
+    .status.closed, .status.ignored, .status.archived { background: var(--surface-tint); color: var(--text-soft); }
+    .status.negative, .status.open, .status.failed { background: var(--danger-soft); color: var(--danger); }
+    .status.reviewing, .status.analyzing { background: var(--warning-soft); color: var(--warning); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
       .actions select { height: 30px; max-width: 116px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 800; }
@@ -1194,38 +1238,51 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-config .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
+    .page-tickets .content-frame,
     .page-sessions .content-frame {
       grid-template-columns: minmax(0, 1fr);
     }
     .page-overview #region-config,
     .page-overview #region-chats,
     .page-overview #region-feedback,
+    .page-overview #region-tickets,
     .page-overview #region-sessions,
     .page-config #region-health,
     .page-config #region-system,
     .page-config #region-chats,
     .page-config #region-feedback,
+    .page-config #region-tickets,
     .page-config #region-sessions,
     .page-chats #region-health,
     .page-chats #region-system,
     .page-chats #region-config,
     .page-chats #region-feedback,
+    .page-chats #region-tickets,
     .page-chats #region-sessions,
     .page-feedback #region-health,
     .page-feedback #region-system,
     .page-feedback #region-config,
     .page-feedback #region-chats,
+    .page-feedback #region-tickets,
     .page-feedback #region-sessions,
+    .page-tickets #region-health,
+    .page-tickets #region-system,
+    .page-tickets #region-config,
+    .page-tickets #region-chats,
+    .page-tickets #region-feedback,
+    .page-tickets #region-sessions,
     .page-sessions #region-health,
     .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
-    .page-sessions #region-feedback {
+    .page-sessions #region-feedback,
+    .page-sessions #region-tickets {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
+    .page-tickets .observer-column,
     .page-sessions .observer-column {
       display: none;
     }
@@ -1866,6 +1923,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
+        <a class="${navClass('tickets')}" href="/tickets"><svg class="icon sm"><use href="#i-database"></use></svg><span>工单</span></a>
         <a class="${navClass('sessions')}" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
@@ -2162,6 +2220,56 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         </table>
       </div>
     </section>
+    <section id="region-tickets" class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-database"></use></svg></span>
+            <h2>工单档案</h2>
+          </div>
+          <div class="sub">工单独立于 runtime 会话保留。展开事件可以看到每轮分析开始、过程快照、完成、失败或停止记录。</div>
+        </div>
+        <div class="session-controls">
+          <select id="ticket-filter" aria-label="筛选工单状态">
+            <option value="">全部工单</option>
+            <option value="open">未开始</option>
+            <option value="analyzing">分析中</option>
+            <option value="waiting_user">等待用户</option>
+            <option value="failed">失败</option>
+            <option value="closed">已关闭</option>
+            <option value="archived">已归档</option>
+          </select>
+          <button id="refresh-tickets" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        </div>
+      </div>
+      <div class="sessions">
+        <table class="session-table">
+          <colgroup>
+            <col style="width: 320px">
+            <col style="width: 120px">
+            <col style="width: 170px">
+            <col style="width: 190px">
+            <col style="width: 210px">
+            <col style="width: 130px">
+            <col style="width: 120px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>工单</th>
+              <th>状态</th>
+              <th>群聊 / 发起人</th>
+              <th>当前会话</th>
+              <th>关联</th>
+              <th>时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="tickets-body">
+            <tr><td colspan="7" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
     <section id="region-sessions" class="card">
       <div class="toolbar">
         <div>
@@ -2278,6 +2386,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const refreshFeedbacks = document.querySelector('#refresh-feedbacks');
     const feedbackFilter = document.querySelector('#feedback-filter');
     const feedbackStats = document.querySelector('#feedback-stats');
+    const ticketsBody = document.querySelector('#tickets-body');
+    const refreshTickets = document.querySelector('#refresh-tickets');
+    const ticketFilter = document.querySelector('#ticket-filter');
     const refreshAll = document.querySelector('#refresh-all');
     const sideDaemonStatus = document.querySelector('#side-daemon-status');
     const observerModel = document.querySelector('#observer-model');
@@ -2334,6 +2445,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestChats = [];
       let latestSessions = [];
       let latestFeedbacks = [];
+      let latestTickets = [];
       let promptProfiles = [];
       let activePromptId = '';
       const isOverviewPage = document.querySelector('.page-overview') !== null;
@@ -2739,6 +2851,26 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       return value === 'active' ? '运行中' : value === 'closed' ? '已关闭' : value;
     }
 
+    function ticketStatusText(value) {
+      return value === 'open' ? '未开始'
+        : value === 'analyzing' ? '分析中'
+        : value === 'waiting_user' ? '等待用户'
+        : value === 'resolved' ? '已解决'
+        : value === 'closed' ? '已关闭'
+        : value === 'failed' ? '失败'
+        : value === 'archived' ? '已归档'
+        : value || '';
+    }
+
+    function ticketEventText(value) {
+      return value === 'turn_started' ? '开始分析'
+        : value === 'trace_snapshot' ? '过程快照'
+        : value === 'turn_completed' ? '分析完成'
+        : value === 'turn_failed' ? '分析失败'
+        : value === 'turn_stopped' ? '分析停止'
+        : value || '';
+    }
+
     function sourceText(value) {
       return value === 'bot_added' ? '入群事件' : '群消息';
     }
@@ -2785,7 +2917,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     }
 
     function renderSessions() {
-      const statusFilter = sessionFilter?.value || '';
+      const statusFilter = sessionFilter.value;
       const visibleSessions = statusFilter
         ? latestSessions.filter((session) => session.status === statusFilter)
         : latestSessions;
@@ -2816,6 +2948,40 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }).join('');
     }
 
+    function renderTickets() {
+      const statusFilter = ticketFilter.value;
+      const visibleTickets = statusFilter
+        ? latestTickets.filter((ticket) => ticket.status === statusFilter)
+        : latestTickets;
+      if (!latestTickets.length) {
+        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无工单</span></td></tr>';
+        return;
+      }
+      if (!visibleTickets.length) {
+        ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无' + esc(ticketStatusText(statusFilter)) + '工单</span></td></tr>';
+        return;
+      }
+      ticketsBody.innerHTML = visibleTickets.map((ticket) => (
+        '<tr data-ticket-row="' + esc(ticket.id) + '">' +
+          '<td><span class="line"><strong>' + esc(ticket.title || ticket.id) + '</strong></span><span class="line muted"><code>' + esc(ticket.id) + '</code></span></td>' +
+          '<td><span class="status ' + esc(ticket.status) + '">' + esc(ticketStatusText(ticket.status)) + '</span></td>' +
+          '<td><span class="line">' + esc(ticket.chatName || ticket.chatId || '-') + '</span><span class="line muted">' + esc(ticket.createdByName || ticket.createdByOpenId || '-') + '</span></td>' +
+          '<td><span class="line"><code>' + esc(ticket.currentSessionId || '-') + '</code></span><span class="line muted">' + esc(ticket.currentSessionId ? '会话仍关联' : '无活跃会话') + '</span></td>' +
+          '<td><span class="line muted">会话 ' + esc(String(ticket.sessionIds?.length || 0)) + '</span><span class="line muted">反馈 ' + esc(String(ticket.feedbackCount || 0)) + ' / 差评 ' + esc(String(ticket.negativeFeedbackCount || 0)) + '</span></td>' +
+          '<td><span class="line muted">创建 ' + esc(formatTime(ticket.createdAt)) + '</span><span class="line muted">更新 ' + esc(formatTime(ticket.updatedAt)) + '</span></td>' +
+          '<td><div class="actions"><button type="button" class="ghost" data-ticket-events="' + esc(ticket.id) + '"><svg class="icon sm"><use href="#i-message"></use></svg>事件</button></div></td>' +
+        '</tr>'
+      )).join('');
+    }
+
+    function renderTicketEvents(events) {
+      if (!events.length) return '<div class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无分析事件</div>';
+      return '<div class="context-lines">' + events.map((event) => (
+        '<div class="context-line"><strong>' + esc(formatTime(event.createdAt)) + ' · ' + esc(ticketEventText(event.kind)) + '</strong> ' +
+        esc(oneLine(event.message || event.question || event.answer || event.trace || '-', 180)) + '</div>'
+      )).join('') + '</div>';
+    }
+
     async function loadSessions() {
       const res = await fetch('/api/sessions');
       if (!res.ok) throw new Error(await res.text());
@@ -2823,6 +2989,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       latestSessions = Array.isArray(sessions) ? sessions : [];
       updateSummary();
       renderSessions();
+    }
+
+    async function loadTickets() {
+      const res = await fetch('/api/tickets');
+      if (!res.ok) throw new Error(await res.text());
+      const { tickets } = await res.json();
+      latestTickets = Array.isArray(tickets) ? tickets : [];
+      renderTickets();
     }
 
     async function loadChats() {
@@ -2916,6 +3090,32 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }
     });
 
+    ticketsBody.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-ticket-events]');
+      if (!button) return;
+      const id = button.dataset.ticketEvents;
+      const existing = ticketsBody.querySelector('tr[data-ticket-events-row="' + CSS.escape(id) + '"]');
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      try {
+        await withButtonFeedback(button, { loading: '加载中', success: '已展开', failure: '失败' }, async () => {
+          const res = await fetch('/api/tickets/' + encodeURIComponent(id) + '/events');
+          if (!res.ok) throw new Error(await res.text());
+          const { events } = await res.json();
+          const row = document.createElement('tr');
+          row.dataset.ticketEventsRow = id;
+          row.innerHTML = '<td colspan="7">' + renderTicketEvents(Array.isArray(events) ? events : []) + '</td>';
+          const parent = button.closest('tr');
+          parent?.insertAdjacentElement('afterend', row);
+        });
+        setStatus('工单事件已展开');
+      } catch (error) {
+        setStatus('加载工单事件失败：' + error.message, true);
+      }
+    });
+
     officeWorkers?.addEventListener('click', (event) => {
       const button = event.target.closest('button[data-office-nudge]');
       if (!button) return;
@@ -2942,6 +3142,16 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
 
     sessionFilter?.addEventListener('change', () => {
       renderSessions();
+    });
+
+    refreshTickets.addEventListener('click', () => {
+      withButtonFeedback(refreshTickets, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadTickets)
+        .then(() => setStatus('工单已刷新'))
+        .catch((error) => setStatus('刷新工单失败：' + error.message, true));
+    });
+
+    ticketFilter?.addEventListener('change', () => {
+      renderTickets();
     });
 
     chatsBody.addEventListener('click', async (event) => {
@@ -3046,6 +3256,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         loadChats(),
         loadSessions(),
         loadFeedbacks(),
+        loadTickets(),
         loadSystemStatus(),
       ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
@@ -3104,6 +3315,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
     loadFeedbacks().catch((error) => {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
+    });
+    loadTickets().catch((error) => {
+      ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     loadSystemStatus().catch((error) => {
       if (isOverviewPage) setStatus('系统状态加载失败：' + error.message, true);
@@ -3522,6 +3736,7 @@ function renderOfficeHtml(): string {
         <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="nav-item" href="/feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>
+        <a class="nav-item" href="/tickets"><svg class="icon sm"><use href="#i-database"></use></svg><span>工单</span></a>
         <a class="nav-item" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
