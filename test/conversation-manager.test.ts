@@ -3,7 +3,7 @@ import type { IPty } from 'node-pty';
 import type { CliAdapter, SpawnOptions } from '../src/adapters/cli/types.js';
 import { ConversationManager } from '../src/core/conversation-manager.js';
 import type { SessionStore } from '../src/core/store.js';
-import type { Session } from '../src/core/types.js';
+import type { Session, Ticket } from '../src/core/types.js';
 
 function route(over: Partial<Session> = {}): Session {
   return {
@@ -185,6 +185,56 @@ describe('ConversationManager', () => {
     await manager.add(session);
     expect(manager.find('oc-1', 'om-other-root', undefined, 'om-trace-card')?.sessionId).toBe('lm-1');
     expect(manager.find('oc-1', 'om-other-root', undefined, 'om-answer-card')?.sessionId).toBe('lm-1');
+  });
+
+  it('创建会话时持久化工单，删除会话时保留工单', async () => {
+    const session = route({ ticketId: undefined });
+    let savedSessions: Session[] = [];
+    let tickets: Ticket[] = [];
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async (sessions) => { savedSessions = structuredClone(sessions); },
+      loadTickets: async () => tickets,
+      saveTickets: async (next) => { tickets = structuredClone(next); },
+    };
+    const manager = new ConversationManager({
+      cli: {
+        id: 'traex',
+        spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+        writeInput: vi.fn(async () => ({ submitted: true })),
+        findSessionId: () => undefined,
+        readyPattern: /❯/,
+      },
+      store,
+      post: async () => 'card-1',
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      createTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    expect(session.ticketId).toBeTruthy();
+    expect(savedSessions[0].ticketId).toBe(session.ticketId);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]).toMatchObject({
+      id: session.ticketId,
+      title: 'test',
+      source: 'feishu_group',
+      currentSessionId: 'lm-1',
+      sessionIds: ['lm-1'],
+    });
+
+    await manager.deleteSession('lm-1');
+    expect(savedSessions).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0].currentSessionId).toBeUndefined();
+    expect(tickets[0].sessionIds).toEqual(['lm-1']);
   });
 
   it('定期清理会关闭闲置会话并删除过期关闭记录', async () => {

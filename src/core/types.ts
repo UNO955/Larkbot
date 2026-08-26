@@ -36,6 +36,32 @@ export type SessionStatus = 'active' | 'closed';
 
 export type SessionWorkLogStatus = 'completed' | 'failed' | 'stopped';
 
+export type TicketSource = 'feishu_dm' | 'feishu_group' | 'console' | 'manual';
+export type TicketStatus = 'open' | 'analyzing' | 'waiting_user' | 'resolved' | 'closed' | 'failed' | 'archived';
+export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface Ticket {
+  /** 长期问题档案。Session 只是某次执行上下文，Ticket 删除/保留策略独立于会话。 */
+  id: string;
+  source: TicketSource;
+  title: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  ownerOpenId?: string;
+  createdByOpenId?: string;
+  createdByName?: string;
+  chatId?: string;
+  chatName?: string;
+  messageId?: string;
+  rootMessageId?: string;
+  threadId?: string;
+  currentSessionId?: string;
+  sessionIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+}
+
 export interface SessionWorkLog {
   /** 一轮用户消息对应一条日志，用于办公室精确工时统计。 */
   id: string;
@@ -48,6 +74,7 @@ export interface SessionWorkLog {
 export interface Session {
   /** 飞书话题到 traex 原生会话的持久化路由。 */
   sessionId: string;        // larkbot 自己的会话 id
+  ticketId?: string;
   chatId: string;
   rootMessageId: string;    // 飞书话题根消息
   threadId?: string;
@@ -83,6 +110,7 @@ export interface Session {
 
 export interface ExpiredSession {
   sessionId: string;
+  ticketId?: string;
   chatId: string;
   chatName?: string;
   rootMessageId: string;
@@ -128,6 +156,7 @@ export interface KnowledgeObservation {
 
 export interface FeedbackRecord {
   id: string;
+  ticketId?: string;
   rating: FeedbackRating;
   status: FeedbackStatus;
   sessionId: string;

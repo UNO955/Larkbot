@@ -540,6 +540,7 @@ async function handleThinkingFeedback(opts: {
   const traceExcerpt = opts.terminalStore.snapshot(opts.sessionId, 2600);
   const record: FeedbackRecord = {
     id: randomUUID(),
+    ticketId: session?.ticketId,
     rating: opts.rating,
     status: 'open',
     sessionId: opts.sessionId,
@@ -623,6 +624,7 @@ async function handleNegativeFeedbackSupplement(opts: {
   const record = await updateNegativeFeedbackSupplement(opts.store, {
     feedbackId: opts.feedbackId,
     sessionId: opts.sessionId,
+    ticketId: session?.ticketId,
     sessionTitle: session?.title || opts.sessionId,
     chatName: session?.chatName || (session ? chatName(opts.bot, session.chatId) : undefined),
     chatId: session?.chatId || opts.action.chatId,
@@ -731,6 +733,7 @@ async function appendFeedback(store: SessionStore, record: FeedbackRecord): Prom
 async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
   feedbackId?: string;
   sessionId: string;
+  ticketId?: string;
   sessionTitle: string;
   chatName?: string;
   chatId?: string;
@@ -759,6 +762,7 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
       id: randomUUID(),
       rating: 'negative',
       status: 'open',
+      ticketId: input.ticketId,
       sessionId: input.sessionId,
       sessionTitle: input.sessionTitle,
       chatId: input.chatId,
@@ -776,6 +780,7 @@ async function updateNegativeFeedbackSupplement(store: SessionStore, input: {
     feedbacks.unshift(record);
   }
   record.reason = input.reason || record.reason;
+  record.ticketId = input.ticketId || record.ticketId;
   record.note = input.note || record.note;
   record.question = input.question || record.question;
   record.answer = input.answer || record.answer;

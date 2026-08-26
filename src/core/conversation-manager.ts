@@ -13,11 +13,12 @@ import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { TerminalRenderer } from '../utils/terminal-renderer.js';
 import { DONE_REACTION, RECEIVED_REACTION } from './reactions.js';
 import type { SessionStore } from './store.js';
-import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus } from './types.js';
+import type { EvidenceReference, KnowledgeObservation, KnowledgeReference, ExpiredSession, Session, SessionWorkLogStatus, Ticket, TicketStatus } from './types.js';
 
 const FLUSH_INTERVAL_MS = 800;
 const FIRST_PROMPT_FALLBACK_MS = 15_000;
@@ -113,6 +114,7 @@ export class ConversationManager {
   async restore(): Promise<Session[]> {
     const sessions = await this.deps.store.loadSessions();
     for (const session of sessions) this.sessions.set(session.sessionId, session);
+    await this.backfillTickets(sessions);
     logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`);
     return sessions;
   }
@@ -149,6 +151,7 @@ export class ConversationManager {
 
   async add(session: Session): Promise<void> {
     this.sessions.set(session.sessionId, session);
+    await this.ensureTicketForSession(session);
     await this.persist();
   }
 
@@ -231,6 +234,7 @@ export class ConversationManager {
     }
     this.sessions.delete(sessionId);
     await this.persist();
+    await this.detachTicketSession(session);
     return true;
   }
 
@@ -258,6 +262,7 @@ export class ConversationManager {
         }
         this.sessions.delete(session.sessionId);
         deletedSessions.push(toExpiredSession(session, deletedAt));
+        await this.detachTicketSession(session);
         continue;
       }
       if (session.status === 'active' && opts.idleCloseMs > 0 && idleMs >= opts.idleCloseMs) {
@@ -302,6 +307,7 @@ export class ConversationManager {
   }
 
   async submit(session: Session, opening: string, followUp: string, replyAnchorMessageId?: string, replyToName?: string, replySignature?: string, replyToId?: string, receivedReactionId?: string, question?: string): Promise<void> {
+    await this.ensureTicketForSession(session);
     let runtime = this.runtimes.get(session.sessionId);
     if (!runtime) {
       const resume = await this.resolveResume(session);
@@ -446,6 +452,7 @@ export class ConversationManager {
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
       : undefined;
+    await this.updateTicketStatus(runtime.route, 'analyzing');
     // 记录本轮开始点，办公室工时统计和 trace footer 都依赖它。
     runtime.pendingFlushStatus = undefined;
     runtime.renderer.markNewTurn();
@@ -465,6 +472,7 @@ export class ConversationManager {
       logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`);
     } catch (error: any) {
       this.endWorkLog(runtime, 'failed');
+      await this.updateTicketStatus(runtime.route, 'failed');
       runtime.status = 'idle';
       await this.removeReceivedReaction(runtime);
       if (runtime.route.threadId) {
@@ -493,6 +501,7 @@ export class ConversationManager {
       await this.addReaction(runtime.currentReplyAnchorMessageId, DONE_REACTION);
     }
     this.endWorkLog(runtime, 'completed');
+    await this.updateTicketStatus(runtime.route, 'waiting_user');
     await this.persist();
     void this.drain(runtime);
   }
@@ -505,6 +514,7 @@ export class ConversationManager {
       await this.flushNow(runtime, 'failed');
       await this.removeReceivedReaction(runtime);
       this.endWorkLog(runtime, 'failed');
+      await this.updateTicketStatus(runtime.route, 'failed');
       await this.persist();
     }
     this.teardown(runtime);
@@ -791,6 +801,71 @@ export class ConversationManager {
     return this.deps.store.saveSessions([...this.sessions.values()]);
   }
 
+  private async backfillTickets(sessions: Session[]): Promise<void> {
+    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
+    let changed = false;
+    for (const session of sessions) {
+      const before = session.ticketId;
+      await this.ensureTicketForSession(session);
+      if (session.ticketId !== before) changed = true;
+    }
+    if (changed) await this.persist();
+  }
+
+  private async ensureTicketForSession(session: Session): Promise<Ticket | undefined> {
+    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return undefined;
+    const tickets = await this.deps.store.loadTickets();
+    const now = new Date().toISOString();
+    let ticket = session.ticketId ? tickets.find((item) => item.id === session.ticketId) : undefined;
+    ticket ??= tickets.find((item) =>
+      item.sessionIds.includes(session.sessionId)
+      || (!!session.rootMessageId && item.rootMessageId === session.rootMessageId)
+      || (!!session.threadId && item.threadId === session.threadId));
+    if (!ticket) {
+      ticket = createTicketFromSession(session, now);
+      tickets.unshift(ticket);
+    } else {
+      ticket.updatedAt = now;
+      ticket.title = ticket.title || session.title;
+      ticket.ownerOpenId ??= session.ownerOpenId;
+      ticket.createdByOpenId ??= session.createdByOpenId;
+      ticket.createdByName ??= session.createdByName;
+      ticket.chatId ??= session.chatId;
+      ticket.chatName ??= session.chatName;
+      ticket.rootMessageId ??= session.rootMessageId;
+      ticket.threadId ??= session.threadId;
+      ticket.currentSessionId = session.status === 'active' ? session.sessionId : ticket.currentSessionId;
+      if (!ticket.sessionIds.includes(session.sessionId)) ticket.sessionIds.push(session.sessionId);
+    }
+    session.ticketId = ticket.id;
+    await this.deps.store.saveTickets(sortTickets(tickets));
+    return ticket;
+  }
+
+  private async updateTicketStatus(session: Session, status: TicketStatus): Promise<void> {
+    if (!this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
+    const ticket = await this.ensureTicketForSession(session);
+    if (!ticket) return;
+    const tickets = await this.deps.store.loadTickets();
+    const stored = tickets.find((item) => item.id === ticket.id);
+    if (!stored) return;
+    stored.status = status;
+    stored.updatedAt = new Date().toISOString();
+    if (status === 'closed') stored.closedAt = stored.updatedAt;
+    await this.deps.store.saveTickets(sortTickets(tickets));
+  }
+
+  private async detachTicketSession(session: Session): Promise<void> {
+    if (!session.ticketId || !this.deps.store.loadTickets || !this.deps.store.saveTickets) return;
+    const tickets = await this.deps.store.loadTickets();
+    const ticket = tickets.find((item) => item.id === session.ticketId);
+    if (!ticket) return;
+    if (ticket.currentSessionId === session.sessionId) ticket.currentSessionId = undefined;
+    if (!ticket.sessionIds.includes(session.sessionId)) ticket.sessionIds.push(session.sessionId);
+    ticket.updatedAt = new Date().toISOString();
+    await this.deps.store.saveTickets(sortTickets(tickets));
+  }
+
   private async persistExpiredSessions(deleted: ExpiredSession[], nowMs: number): Promise<void> {
     if (!this.deps.store.loadExpiredSessions || !this.deps.store.saveExpiredSessions) return;
     const cutoffMs = nowMs - 30 * 24 * 60 * 60 * 1000;
@@ -804,9 +879,37 @@ export class ConversationManager {
   }
 }
 
+function createTicketFromSession(session: Session, now: string): Ticket {
+  return {
+    id: randomUUID(),
+    source: session.chatId.startsWith('ou_') ? 'feishu_dm' : 'feishu_group',
+    title: session.title || session.latestQuestion || '飞书工单',
+    status: session.status === 'active' ? 'open' : 'closed',
+    priority: 'normal',
+    ownerOpenId: session.ownerOpenId,
+    createdByOpenId: session.createdByOpenId,
+    createdByName: session.createdByName,
+    chatId: session.chatId,
+    chatName: session.chatName,
+    messageId: session.anchorMessageId,
+    rootMessageId: session.rootMessageId,
+    threadId: session.threadId,
+    currentSessionId: session.status === 'active' ? session.sessionId : undefined,
+    sessionIds: [session.sessionId],
+    createdAt: session.createdAt || now,
+    updatedAt: now,
+    closedAt: session.closedAt,
+  };
+}
+
+function sortTickets(tickets: Ticket[]): Ticket[] {
+  return [...tickets].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
 function toExpiredSession(session: Session, deletedAt: string): ExpiredSession {
   return {
     sessionId: session.sessionId,
+    ticketId: session.ticketId,
     chatId: session.chatId,
     chatName: session.chatName,
     rootMessageId: session.rootMessageId,

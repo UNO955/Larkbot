@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { JsonSessionStore } from '../src/core/store.js';
-import type { Bot, Session } from '../src/core/types.js';
+import type { Bot, Session, Ticket } from '../src/core/types.js';
 
 const dirs: string[] = [];
 
@@ -90,5 +90,35 @@ describe('JsonSessionStore', () => {
 
     expect(await store.loadBots()).toEqual([bot()]);
     expect(JSON.parse(await readFile(join(dir, 'bots.json'), 'utf8'))).toHaveLength(1);
+  });
+
+  it('保存并恢复工单档案', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
+    dirs.push(dir);
+    const store = new JsonSessionStore(
+      join(dir, 'sessions.json'),
+      join(dir, 'bots.json'),
+      join(dir, 'expired-sessions.json'),
+      join(dir, 'feedback.json'),
+      join(dir, 'tickets.json'),
+    );
+    const ticket: Ticket = {
+      id: 'tk-1',
+      source: 'feishu_group',
+      title: '排查线上错误',
+      status: 'waiting_user',
+      priority: 'normal',
+      chatId: 'oc-1',
+      rootMessageId: 'om-1',
+      currentSessionId: 'lm-1',
+      sessionIds: ['lm-1'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    };
+
+    await store.saveTickets([ticket]);
+
+    expect(await store.loadTickets()).toEqual([ticket]);
+    expect(JSON.parse(await readFile(join(dir, 'tickets.json'), 'utf8'))).toHaveLength(1);
   });
 });

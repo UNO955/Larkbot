@@ -9,7 +9,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile } from './types.js';
+import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile, Ticket } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
@@ -20,6 +20,8 @@ export interface SessionStore {
   saveExpiredSessions?(sessions: ExpiredSession[]): Promise<void>;
   loadFeedbacks?(): Promise<FeedbackRecord[]>;
   saveFeedbacks?(feedbacks: FeedbackRecord[]): Promise<void>;
+  loadTickets?(): Promise<Ticket[]>;
+  saveTickets?(tickets: Ticket[]): Promise<void>;
 }
 
 export class JsonSessionStore implements SessionStore {
@@ -27,22 +29,26 @@ export class JsonSessionStore implements SessionStore {
   readonly botsPath: string;
   readonly expiredSessionsPath: string;
   readonly feedbackPath: string;
+  readonly ticketsPath: string;
   // 同类 JSON 写入串行化，避免并发事件同时 save 时后写入覆盖先写入的完整快照。
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
   private pendingExpiredSessionWrite: Promise<void> = Promise.resolve();
   private pendingFeedbackWrite: Promise<void> = Promise.resolve();
+  private pendingTicketWrite: Promise<void> = Promise.resolve();
 
   constructor(
     sessionsPath = defaultSessionsPath(),
     botsPath = defaultBotsPath(),
     expiredSessionsPath = defaultExpiredSessionsPath(),
     feedbackPath = defaultFeedbackPath(),
+    ticketsPath = defaultTicketsPath(),
   ) {
     this.sessionsPath = sessionsPath;
     this.botsPath = botsPath;
     this.expiredSessionsPath = expiredSessionsPath;
     this.feedbackPath = feedbackPath;
+    this.ticketsPath = ticketsPath;
   }
 
   async loadBots(): Promise<Bot[]> {
@@ -112,6 +118,24 @@ export class JsonSessionStore implements SessionStore {
       .then(() => writeJsonAtomic(this.feedbackPath, feedbacks));
     await this.pendingFeedbackWrite;
   }
+
+  async loadTickets(): Promise<Ticket[]> {
+    try {
+      const parsed = JSON.parse(await readFile(this.ticketsPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isTicket);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  async saveTickets(tickets: Ticket[]): Promise<void> {
+    this.pendingTicketWrite = this.pendingTicketWrite
+      .catch(() => undefined)
+      .then(() => writeJsonAtomic(this.ticketsPath, tickets));
+    await this.pendingTicketWrite;
+  }
 }
 
 function defaultSessionsPath(): string {
@@ -132,6 +156,11 @@ function defaultExpiredSessionsPath(): string {
 function defaultFeedbackPath(): string {
   const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'feedback.json');
+}
+
+function defaultTicketsPath(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'tickets.json');
 }
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
@@ -186,6 +215,7 @@ function isSession(value: unknown): value is Session {
   if (!value || typeof value !== 'object') return false;
   const session = value as Partial<Session>;
   return typeof session.sessionId === 'string'
+    && (session.ticketId === undefined || typeof session.ticketId === 'string')
     && typeof session.chatId === 'string'
     && typeof session.rootMessageId === 'string'
     && typeof session.workingDir === 'string'
@@ -200,6 +230,7 @@ function isExpiredSession(value: unknown): value is ExpiredSession {
   if (!value || typeof value !== 'object') return false;
   const session = value as Partial<ExpiredSession>;
   return typeof session.sessionId === 'string'
+    && (session.ticketId === undefined || typeof session.ticketId === 'string')
     && typeof session.chatId === 'string'
     && typeof session.rootMessageId === 'string'
     && typeof session.title === 'string'
@@ -224,6 +255,7 @@ function isFeedbackRecord(value: unknown): value is FeedbackRecord {
   if (!value || typeof value !== 'object') return false;
   const feedback = value as Partial<FeedbackRecord>;
   return typeof feedback.id === 'string'
+    && (feedback.ticketId === undefined || typeof feedback.ticketId === 'string')
     && (feedback.rating === 'positive' || feedback.rating === 'negative')
     && (feedback.status === 'open' || feedback.status === 'reviewing' || feedback.status === 'resolved' || feedback.status === 'ignored')
     && typeof feedback.sessionId === 'string'
@@ -242,6 +274,30 @@ function isFeedbackRecord(value: unknown): value is FeedbackRecord {
     && (feedback.reviewNote === undefined || typeof feedback.reviewNote === 'string')
     && typeof feedback.createdAt === 'string'
     && typeof feedback.updatedAt === 'string';
+}
+
+function isTicket(value: unknown): value is Ticket {
+  if (!value || typeof value !== 'object') return false;
+  const ticket = value as Partial<Ticket>;
+  return typeof ticket.id === 'string'
+    && (ticket.source === 'feishu_dm' || ticket.source === 'feishu_group' || ticket.source === 'console' || ticket.source === 'manual')
+    && typeof ticket.title === 'string'
+    && (ticket.status === 'open' || ticket.status === 'analyzing' || ticket.status === 'waiting_user' || ticket.status === 'resolved' || ticket.status === 'closed' || ticket.status === 'failed' || ticket.status === 'archived')
+    && (ticket.priority === 'low' || ticket.priority === 'normal' || ticket.priority === 'high' || ticket.priority === 'urgent')
+    && (ticket.ownerOpenId === undefined || typeof ticket.ownerOpenId === 'string')
+    && (ticket.createdByOpenId === undefined || typeof ticket.createdByOpenId === 'string')
+    && (ticket.createdByName === undefined || typeof ticket.createdByName === 'string')
+    && (ticket.chatId === undefined || typeof ticket.chatId === 'string')
+    && (ticket.chatName === undefined || typeof ticket.chatName === 'string')
+    && (ticket.messageId === undefined || typeof ticket.messageId === 'string')
+    && (ticket.rootMessageId === undefined || typeof ticket.rootMessageId === 'string')
+    && (ticket.threadId === undefined || typeof ticket.threadId === 'string')
+    && (ticket.currentSessionId === undefined || typeof ticket.currentSessionId === 'string')
+    && Array.isArray(ticket.sessionIds)
+    && ticket.sessionIds.every((item) => typeof item === 'string')
+    && typeof ticket.createdAt === 'string'
+    && typeof ticket.updatedAt === 'string'
+    && (ticket.closedAt === undefined || typeof ticket.closedAt === 'string');
 }
 
 function isKnowledgeObservation(value: unknown): boolean {
