@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile, Ticket, TicketTraceEvent } from './types.js';
+import type { AppLogRecord, Bot, ExpiredSession, FeedbackRecord, KnownChat, Session, SystemPromptProfile, Ticket, TicketTraceEvent } from './types.js';
 
 export interface SessionStore {
   loadBots(): Promise<Bot[]>;
@@ -26,6 +26,9 @@ export interface SessionStore {
   saveTickets?(tickets: Ticket[]): Promise<void>;
   loadTicketTraceEvents?(): Promise<TicketTraceEvent[]>;
   saveTicketTraceEvents?(events: TicketTraceEvent[]): Promise<void>;
+  loadAppLogs?(): Promise<AppLogRecord[]>;
+  saveAppLogs?(logs: AppLogRecord[]): Promise<void>;
+  appendAppLog?(log: AppLogRecord): Promise<void>;
 }
 
 export async function createDefaultSessionStore(): Promise<SessionStore> {
@@ -48,6 +51,7 @@ export class JsonSessionStore implements SessionStore {
   readonly feedbackPath: string;
   readonly ticketsPath: string;
   readonly ticketTraceEventsPath: string;
+  readonly appLogsPath: string;
   // 同类 JSON 写入串行化，避免并发事件同时 save 时后写入覆盖先写入的完整快照。
   private pendingSessionWrite: Promise<void> = Promise.resolve();
   private pendingBotWrite: Promise<void> = Promise.resolve();
@@ -55,6 +59,7 @@ export class JsonSessionStore implements SessionStore {
   private pendingFeedbackWrite: Promise<void> = Promise.resolve();
   private pendingTicketWrite: Promise<void> = Promise.resolve();
   private pendingTicketTraceEventWrite: Promise<void> = Promise.resolve();
+  private pendingAppLogWrite: Promise<void> = Promise.resolve();
 
   constructor(
     sessionsPath = defaultSessionsPath(),
@@ -63,6 +68,7 @@ export class JsonSessionStore implements SessionStore {
     feedbackPath = defaultFeedbackPath(),
     ticketsPath = defaultTicketsPath(),
     ticketTraceEventsPath = defaultTicketTraceEventsPath(),
+    appLogsPath = defaultAppLogsPath(),
   ) {
     this.sessionsPath = sessionsPath;
     this.botsPath = botsPath;
@@ -70,6 +76,7 @@ export class JsonSessionStore implements SessionStore {
     this.feedbackPath = feedbackPath;
     this.ticketsPath = ticketsPath;
     this.ticketTraceEventsPath = ticketTraceEventsPath;
+    this.appLogsPath = appLogsPath;
   }
 
   async loadBots(): Promise<Bot[]> {
@@ -175,6 +182,33 @@ export class JsonSessionStore implements SessionStore {
       .then(() => writeJsonAtomic(this.ticketTraceEventsPath, events));
     await this.pendingTicketTraceEventWrite;
   }
+
+  async loadAppLogs(): Promise<AppLogRecord[]> {
+    try {
+      const parsed = JSON.parse(await readFile(this.appLogsPath, 'utf8'));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(isAppLogRecord);
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  async saveAppLogs(logs: AppLogRecord[]): Promise<void> {
+    this.pendingAppLogWrite = this.pendingAppLogWrite
+      .catch(() => undefined)
+      .then(() => writeJsonAtomic(this.appLogsPath, logs));
+    await this.pendingAppLogWrite;
+  }
+
+  async appendAppLog(log: AppLogRecord): Promise<void> {
+    this.pendingAppLogWrite = this.pendingAppLogWrite.catch(() => undefined).then(async () => {
+      const logs = await this.loadAppLogs();
+      logs.push(log);
+      await writeJsonAtomic(this.appLogsPath, logs.slice(-10_000));
+    });
+    await this.pendingAppLogWrite;
+  }
 }
 
 type SqliteDatabase = {
@@ -217,6 +251,7 @@ export class SQLiteSessionStore implements SessionStore {
       this.seedCollection('feedbacks', await jsonStore.loadFeedbacks(), (item) => item.id),
       this.seedCollection('tickets', await jsonStore.loadTickets(), (item) => item.id),
       this.seedCollection('ticket_trace_events', await jsonStore.loadTicketTraceEvents(), (item) => item.id),
+      this.seedCollection('app_logs', await jsonStore.loadAppLogs(), (item) => item.id),
     ]);
   }
 
@@ -268,6 +303,28 @@ export class SQLiteSessionStore implements SessionStore {
     this.saveCollection('ticket_trace_events', events, (item) => item.id, (item) => item.createdAt);
   }
 
+  async loadAppLogs(): Promise<AppLogRecord[]> {
+    return this.loadCollection('app_logs', isAppLogRecord);
+  }
+
+  async saveAppLogs(logs: AppLogRecord[]): Promise<void> {
+    this.saveCollection('app_logs', logs, (item) => item.id, (item) => item.createdAt);
+  }
+
+  async appendAppLog(log: AppLogRecord): Promise<void> {
+    this.insertRecord('app_logs', log.id, log, log.createdAt);
+    this.db.exec(`
+      DELETE FROM records
+      WHERE collection = 'app_logs'
+        AND id NOT IN (
+          SELECT id FROM records
+          WHERE collection = 'app_logs'
+          ORDER BY updated_at DESC, id ASC
+          LIMIT 10000
+        );
+    `);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -315,6 +372,16 @@ export class SQLiteSessionStore implements SessionStore {
       throw error;
     }
   }
+
+  private insertRecord(collection: string, id: string, item: unknown, updatedAt: string): void {
+    this.db.prepare(`
+      INSERT INTO records(collection, id, json, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(collection, id) DO UPDATE SET
+        json = excluded.json,
+        updated_at = excluded.updated_at
+    `).run(collection, id, JSON.stringify(item), updatedAt);
+  }
 }
 
 function defaultSessionsPath(): string {
@@ -345,6 +412,11 @@ function defaultTicketsPath(): string {
 function defaultTicketTraceEventsPath(): string {
   const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
   return join(stateDir, 'ticket-trace-events.json');
+}
+
+function defaultAppLogsPath(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'app-logs.json');
 }
 
 function defaultDatabasePath(): string {
@@ -513,6 +585,28 @@ function isTicketTraceEvent(value: unknown): value is TicketTraceEvent {
     && (event.answer === undefined || typeof event.answer === 'string')
     && (event.trace === undefined || typeof event.trace === 'string')
     && typeof event.createdAt === 'string';
+}
+
+function isAppLogRecord(value: unknown): value is AppLogRecord {
+  if (!value || typeof value !== 'object') return false;
+  const log = value as Partial<AppLogRecord>;
+  return typeof log.id === 'string'
+    && (log.level === 'info' || log.level === 'warn' || log.level === 'error')
+    && (log.category === 'daemon'
+      || log.category === 'lark'
+      || log.category === 'traex'
+      || log.category === 'ticket'
+      || log.category === 'console'
+      || log.category === 'cleanup'
+      || log.category === 'system')
+    && typeof log.message === 'string'
+    && (log.sessionId === undefined || typeof log.sessionId === 'string')
+    && (log.ticketId === undefined || typeof log.ticketId === 'string')
+    && (log.turnId === undefined || typeof log.turnId === 'string')
+    && (log.traceEventId === undefined || typeof log.traceEventId === 'string')
+    && (log.requestId === undefined || typeof log.requestId === 'string')
+    && (log.data === undefined || (typeof log.data === 'object' && log.data !== null && !Array.isArray(log.data)))
+    && typeof log.createdAt === 'string';
 }
 
 function isKnowledgeObservation(value: unknown): boolean {

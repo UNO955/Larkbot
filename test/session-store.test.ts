@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultSessionStore, JsonSessionStore, SQLiteSessionStore } from '../src/core/store.js';
-import type { Bot, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
+import type { AppLogRecord, Bot, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
 
 const dirs: string[] = [];
 
@@ -149,6 +149,26 @@ describe('JsonSessionStore', () => {
     expect(await store.loadTicketTraceEvents()).toEqual([event]);
     expect(JSON.parse(await readFile(join(dir, 'ticket-trace-events.json'), 'utf8'))).toHaveLength(1);
   });
+
+  it('追加内部应用日志', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-store-'));
+    dirs.push(dir);
+    const store = new JsonSessionStore(
+      join(dir, 'sessions.json'),
+      join(dir, 'bots.json'),
+      join(dir, 'expired-sessions.json'),
+      join(dir, 'feedback.json'),
+      join(dir, 'tickets.json'),
+      join(dir, 'ticket-trace-events.json'),
+      join(dir, 'app-logs.json'),
+    );
+    const log = appLog();
+
+    await store.appendAppLog(log);
+
+    expect(await store.loadAppLogs()).toEqual([log]);
+    expect(JSON.parse(await readFile(join(dir, 'app-logs.json'), 'utf8'))).toEqual([log]);
+  });
 });
 
 describe('SQLiteSessionStore', () => {
@@ -183,11 +203,13 @@ describe('SQLiteSessionStore', () => {
     await store.saveSessions([session()]);
     await store.saveTickets([ticket]);
     await store.saveTicketTraceEvents([event]);
+    await store.appendAppLog(appLog());
 
     expect(await store.loadBots()).toEqual([bot()]);
     expect(await store.loadSessions()).toEqual([session()]);
     expect(await store.loadTickets()).toEqual([ticket]);
     expect(await store.loadTicketTraceEvents()).toEqual([event]);
+    expect(await store.loadAppLogs()).toEqual([appLog()]);
     store.close();
   });
 
@@ -201,15 +223,18 @@ describe('SQLiteSessionStore', () => {
       join(dir, 'feedback.json'),
       join(dir, 'tickets.json'),
       join(dir, 'ticket-trace-events.json'),
+      join(dir, 'app-logs.json'),
     );
     await jsonStore.saveBots([bot()]);
     await jsonStore.saveSessions([session()]);
+    await jsonStore.appendAppLog(appLog());
 
     const sqliteStore = new SQLiteSessionStore(join(dir, 'larkbot.sqlite'));
     await sqliteStore.migrateFromJson(jsonStore);
 
     expect(await sqliteStore.loadBots()).toEqual([bot()]);
     expect(await sqliteStore.loadSessions()).toEqual([session()]);
+    expect(await sqliteStore.loadAppLogs()).toEqual([appLog()]);
     sqliteStore.close();
   });
 
@@ -234,3 +259,16 @@ describe('SQLiteSessionStore', () => {
     }
   });
 });
+
+function appLog(): AppLogRecord {
+  return {
+    id: 'log_20260101000000_abcd1234',
+    level: 'warn',
+    category: 'traex',
+    message: 'traex 退出 session=lm-1 code=0',
+    sessionId: 'lm-1',
+    ticketId: 'tk-1',
+    data: { exitCode: 0 },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}

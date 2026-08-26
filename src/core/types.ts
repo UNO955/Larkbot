@@ -78,6 +78,24 @@ export interface TicketTraceEvent {
   createdAt: string;
 }
 
+export type AppLogLevel = 'info' | 'warn' | 'error';
+export type AppLogCategory = 'daemon' | 'lark' | 'traex' | 'ticket' | 'console' | 'cleanup' | 'system';
+
+export interface AppLogRecord {
+  /** larkbot 内部日志 id，用于从控制台或聊天上下文反查一条运行日志。 */
+  id: string;
+  level: AppLogLevel;
+  category: AppLogCategory;
+  message: string;
+  sessionId?: string;
+  ticketId?: string;
+  turnId?: string;
+  traceEventId?: string;
+  requestId?: string;
+  data?: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface SessionWorkLog {
   /** 一轮用户消息对应一条日志，用于办公室精确工时统计。 */
   id: string;

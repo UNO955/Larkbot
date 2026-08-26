@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { SessionStore } from '../core/store.js';
-import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile, Ticket, TicketStatus, TicketTraceEvent } from '../core/types.js';
+import type { AppLogCategory, AppLogLevel, AppLogRecord, Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile, Ticket, TicketStatus, TicketTraceEvent } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConsoleServerOpts {
@@ -26,7 +26,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'tickets' | 'sessions';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'tickets' | 'logs' | 'sessions';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -53,6 +53,11 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '工单',
     eyebrow: 'Ticket ledger',
     copy: '长期保留每个问题的状态、会话关联和分析事件。删除会话不会删除工单。',
+  },
+  logs: {
+    title: '日志',
+    eyebrow: 'App log lookup',
+    copy: '按内部 log id、级别、分类、会话和工单查询 larkbot 自己的结构化运行日志。',
   },
   sessions: {
     title: '会话',
@@ -259,7 +264,10 @@ export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Serve
     });
   });
   const address = server.address() as AddressInfo;
-  logger.info(`控制台已启动 http://${address.address}:${address.port}`);
+  logger.info(`控制台已启动 http://${address.address}:${address.port}`, {
+    category: 'console',
+    data: { host: address.address, port: address.port },
+  });
   return server;
 }
 
@@ -358,6 +366,25 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
         offset: Number(url.searchParams.get('offset') || '0'),
         limit: Number(url.searchParams.get('limit') || '25'),
       }));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/logs/search') {
+      sendJson(res, await searchAppLogRecords(opts, {
+        query: url.searchParams.get('q') || '',
+        level: url.searchParams.get('level') || '',
+        category: url.searchParams.get('category') || '',
+        sessionId: url.searchParams.get('sessionId') || '',
+        ticketId: url.searchParams.get('ticketId') || '',
+        offset: Number(url.searchParams.get('offset') || '0'),
+        limit: Number(url.searchParams.get('limit') || '50'),
+      }));
+      return;
+    }
+    const appLogMatch = url.pathname.match(/^\/api\/logs\/([^/]+)$/);
+    if (appLogMatch && req.method === 'GET') {
+      const log = await getAppLogRecord(opts, decodeURIComponent(appLogMatch[1]));
+      if (!log) throw httpError(404, 'log_not_found');
+      sendJson(res, { log });
       return;
     }
     const ticketMatch = url.pathname.match(/^\/api\/tickets\/([^/]+)$/);
@@ -661,11 +688,65 @@ async function listTicketEvents(opts: ConsoleServerOpts, ticketId: string): Prom
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
+interface AppLogSearchParams {
+  query: string;
+  level: string;
+  category: string;
+  sessionId: string;
+  ticketId: string;
+  offset: number;
+  limit: number;
+}
+
+async function getAppLogRecord(opts: ConsoleServerOpts, id: string): Promise<AppLogRecord | undefined> {
+  if (!opts.store.loadAppLogs) return undefined;
+  const logs = await opts.store.loadAppLogs();
+  return logs.find((log) => log.id === id);
+}
+
+async function searchAppLogRecords(opts: ConsoleServerOpts, params: AppLogSearchParams): Promise<{ results: AppLogRecord[]; total: number; offset: number; limit: number }> {
+  const offset = Number.isFinite(params.offset) && params.offset > 0 ? Math.floor(params.offset) : 0;
+  const limit = Number.isFinite(params.limit) && params.limit > 0 ? Math.min(Math.floor(params.limit), 200) : 50;
+  if (!opts.store.loadAppLogs) return { results: [], total: 0, offset, limit };
+  const query = params.query.trim().toLowerCase();
+  const level = isAppLogLevel(params.level) ? params.level : '';
+  const category = isAppLogCategory(params.category) ? params.category : '';
+  const sessionId = params.sessionId.trim();
+  const ticketId = params.ticketId.trim();
+  const logs = await opts.store.loadAppLogs();
+  const filtered = logs.filter((log) => {
+    if (level && log.level !== level) return false;
+    if (category && log.category !== category) return false;
+    if (sessionId && log.sessionId !== sessionId) return false;
+    if (ticketId && log.ticketId !== ticketId) return false;
+    if (!query) return true;
+    return [
+      log.id,
+      log.level,
+      log.category,
+      log.message,
+      log.sessionId,
+      log.ticketId,
+      log.turnId,
+      log.traceEventId,
+      log.requestId,
+      log.data ? JSON.stringify(log.data) : '',
+    ].filter(Boolean).join('\n').toLowerCase().includes(query);
+  }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return {
+    results: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    offset,
+    limit,
+  };
+}
+
 interface TicketSearchResult {
   kind: 'ticket' | 'feedback' | 'trace_event' | 'log';
   ticketId?: string;
   ticketStatus?: TicketStatus;
   sessionId?: string;
+  logId?: string;
   title: string;
   excerpt: string;
   createdAt?: string;
@@ -772,7 +853,17 @@ async function searchTicketRecords(opts: ConsoleServerOpts, params: TicketSearch
     }
   }
   if ((!kind || kind === 'log') && !status) {
-    results.push(...await searchDaemonLogRecords(query));
+    const appLogs = await searchAppLogRecords(opts, { query, level: '', category: '', sessionId: '', ticketId: '', offset: 0, limit: 500 });
+    results.push(...appLogs.results.map((log) => ({
+      kind: 'log' as const,
+      ticketId: log.ticketId,
+      ticketStatus: log.ticketId ? ticketById.get(log.ticketId)?.status : undefined,
+      sessionId: log.sessionId,
+      logId: log.id,
+      title: `${log.level.toUpperCase()} ${log.category}`,
+      excerpt: log.message,
+      createdAt: log.createdAt,
+    })));
   }
   const sorted = results.sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''));
   return {
@@ -781,34 +872,6 @@ async function searchTicketRecords(opts: ConsoleServerOpts, params: TicketSearch
     offset,
     limit,
   };
-}
-
-async function searchDaemonLogRecords(query: string): Promise<TicketSearchResult[]> {
-  try {
-    const content = await readFile(`${process.cwd()}/daemon.log`, 'utf8');
-    const lines = content.split(/\r?\n/);
-    const results: TicketSearchResult[] = [];
-    lines.forEach((line, index) => {
-      if (!line.toLowerCase().includes(query)) return;
-      const redacted = redactLogLine(line).slice(0, 400);
-      const match = redacted.match(/^\[([^\]]+)\]\s+([A-Z]+)\s+(.*)$/);
-      results.push({
-        kind: 'log',
-        title: match ? `${match[2]} line ${index + 1}` : `log line ${index + 1}`,
-        excerpt: match ? match[3] : redacted,
-        createdAt: match ? parseLogTime(match[1]) : undefined,
-      });
-    });
-    return results.slice(-500);
-  } catch {
-    return [];
-  }
-}
-
-function parseLogTime(value: string): string | undefined {
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const time = Date.parse(normalized);
-  return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
 }
 
 async function updateTicket(opts: ConsoleServerOpts, ticketId: string, patch: unknown): Promise<Ticket> {
@@ -850,6 +913,20 @@ function isTicketStatus(value: unknown): value is TicketStatus {
 
 function isTicketPriority(value: unknown): value is Ticket['priority'] {
   return value === 'low' || value === 'normal' || value === 'high' || value === 'urgent';
+}
+
+function isAppLogLevel(value: unknown): value is AppLogLevel {
+  return value === 'info' || value === 'warn' || value === 'error';
+}
+
+function isAppLogCategory(value: unknown): value is AppLogCategory {
+  return value === 'daemon'
+    || value === 'lark'
+    || value === 'traex'
+    || value === 'ticket'
+    || value === 'console'
+    || value === 'cleanup'
+    || value === 'system';
 }
 
 async function updateFeedback(opts: ConsoleServerOpts, feedbackId: string, patch: unknown): Promise<FeedbackRecord> {
@@ -1126,6 +1203,7 @@ function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
   if (pathname === '/tickets') return 'tickets';
+  if (pathname === '/logs') return 'logs';
   if (pathname === '/sessions') return 'sessions';
   return undefined;
 }
@@ -1432,6 +1510,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
+    .page-logs #top-save,
     .page-sessions #top-save {
       display: none;
     }
@@ -1448,6 +1527,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-chats .content-frame,
     .page-feedback .content-frame,
     .page-tickets .content-frame,
+    .page-logs .content-frame,
     .page-sessions .content-frame {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -1455,43 +1535,57 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #region-chats,
     .page-overview #region-feedback,
     .page-overview #region-tickets,
+    .page-overview #region-logs,
     .page-overview #region-sessions,
     .page-config #region-health,
     .page-config #region-system,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-tickets,
+    .page-config #region-logs,
     .page-config #region-sessions,
     .page-chats #region-health,
     .page-chats #region-system,
     .page-chats #region-config,
     .page-chats #region-feedback,
     .page-chats #region-tickets,
+    .page-chats #region-logs,
     .page-chats #region-sessions,
     .page-feedback #region-health,
     .page-feedback #region-system,
     .page-feedback #region-config,
     .page-feedback #region-chats,
     .page-feedback #region-tickets,
+    .page-feedback #region-logs,
     .page-feedback #region-sessions,
     .page-tickets #region-health,
     .page-tickets #region-system,
     .page-tickets #region-config,
     .page-tickets #region-chats,
     .page-tickets #region-feedback,
+    .page-tickets #region-logs,
     .page-tickets #region-sessions,
+    .page-logs #region-health,
+    .page-logs #region-system,
+    .page-logs #region-config,
+    .page-logs #region-chats,
+    .page-logs #region-feedback,
+    .page-logs #region-tickets,
+    .page-logs #region-sessions,
     .page-sessions #region-health,
     .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
     .page-sessions #region-feedback,
-    .page-sessions #region-tickets {
+    .page-sessions #region-tickets,
+    .page-sessions #region-logs {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
     .page-tickets .observer-column,
+    .page-logs .observer-column,
     .page-sessions .observer-column {
       display: none;
     }
@@ -2134,6 +2228,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
         <a class="${navClass('tickets')}" href="/tickets"><svg class="icon sm"><use href="#i-database"></use></svg><span>工单</span></a>
+        <a class="${navClass('logs')}" href="/logs"><svg class="icon sm"><use href="#i-search"></use></svg><span>日志</span></a>
         <a class="${navClass('sessions')}" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
       </nav>
       <div class="side-note">
@@ -2492,6 +2587,64 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         </table>
       </div>
     </section>
+    <section id="region-logs" class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-search"></use></svg></span>
+            <h2>内部运行日志</h2>
+          </div>
+          <div class="sub">每条结构化日志都有内部 log id，可按 id、级别、分类、会话或工单反查。</div>
+        </div>
+        <div class="session-controls">
+          <input id="app-log-search" type="text" placeholder="搜 log id / 消息 / session / ticket" aria-label="搜索内部日志">
+          <select id="app-log-level" aria-label="筛选日志级别">
+            <option value="">全部级别</option>
+            <option value="info">INFO</option>
+            <option value="warn">WARN</option>
+            <option value="error">ERROR</option>
+          </select>
+          <select id="app-log-category" aria-label="筛选日志分类">
+            <option value="">全部分类</option>
+            <option value="daemon">daemon</option>
+            <option value="lark">lark</option>
+            <option value="traex">traex</option>
+            <option value="ticket">ticket</option>
+            <option value="console">console</option>
+            <option value="cleanup">cleanup</option>
+            <option value="system">system</option>
+          </select>
+          <button id="search-app-logs" type="button" class="ghost"><svg class="icon sm"><use href="#i-search"></use></svg>查询</button>
+        </div>
+      </div>
+      <div class="sessions">
+        <table class="session-table">
+          <colgroup>
+            <col style="width: 260px">
+            <col style="width: 90px">
+            <col style="width: 110px">
+            <col style="width: 360px">
+            <col style="width: 180px">
+            <col style="width: 180px">
+            <col style="width: 160px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Log ID</th>
+              <th>级别</th>
+              <th>分类</th>
+              <th>消息</th>
+              <th>会话</th>
+              <th>工单</th>
+              <th>时间</th>
+            </tr>
+          </thead>
+          <tbody id="app-logs-body">
+            <tr><td colspan="7" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
     <section id="region-sessions" class="card">
       <div class="toolbar">
         <div>
@@ -2617,6 +2770,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const ticketSearchPrev = document.querySelector('#ticket-search-prev');
     const ticketSearchNext = document.querySelector('#ticket-search-next');
     const ticketSearchSummary = document.querySelector('#ticket-search-summary');
+    const appLogsBody = document.querySelector('#app-logs-body');
+    const appLogSearch = document.querySelector('#app-log-search');
+    const appLogLevel = document.querySelector('#app-log-level');
+    const appLogCategory = document.querySelector('#app-log-category');
+    const searchAppLogs = document.querySelector('#search-app-logs');
     const refreshAll = document.querySelector('#refresh-all');
     const sideDaemonStatus = document.querySelector('#side-daemon-status');
     const observerModel = document.querySelector('#observer-model');
@@ -2674,6 +2832,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestSessions = [];
       let latestFeedbacks = [];
       let latestTickets = [];
+      let latestAppLogs = [];
       let ticketSearchState = { query: '', offset: 0, limit: 25, total: 0 };
       let promptProfiles = [];
       let activePromptId = '';
@@ -3244,7 +3403,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }
       ticketsBody.innerHTML = results.map((result) => (
         '<tr>' +
-          '<td><span class="line"><strong>' + highlight(result.title || result.ticketId || result.sessionId || '-') + '</strong></span><span class="line muted">' + esc(searchKindText(result.kind)) + '</span></td>' +
+          '<td><span class="line"><strong>' + highlight(result.logId || result.title || result.ticketId || result.sessionId || '-') + '</strong></span><span class="line muted">' + esc(searchKindText(result.kind)) + (result.logId ? ' · ' + esc(result.title || '') : '') + '</span></td>' +
           '<td><span class="status ' + esc(result.ticketStatus || 'reviewing') + '">' + esc(result.ticketStatus ? ticketStatusText(result.ticketStatus) : '结果') + '</span></td>' +
           '<td><span class="line muted">' + highlight(result.ticketId || '-') + '</span></td>' +
           '<td><span class="line"><code>' + highlight(result.sessionId || '-') + '</code></span></td>' +
@@ -3277,6 +3436,40 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         : kind === 'trace_event' ? '分析事件'
         : kind === 'log' ? '运行日志'
         : kind || '';
+    }
+
+    function renderAppLogs(logs) {
+      if (!appLogsBody) return;
+      if (!logs.length) {
+        appLogsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无匹配日志</span></td></tr>';
+        return;
+      }
+      appLogsBody.innerHTML = logs.map((log) => (
+        '<tr>' +
+          '<td><span class="line"><code>' + esc(log.id || '-') + '</code></span><span class="line muted">' + esc(log.traceEventId || log.requestId || '-') + '</span></td>' +
+          '<td><span class="status ' + esc(log.level === 'error' ? 'failed' : log.level === 'warn' ? 'waiting_user' : 'resolved') + '">' + esc(String(log.level || '').toUpperCase()) + '</span></td>' +
+          '<td><span class="source-pill">' + esc(log.category || '-') + '</span></td>' +
+          '<td><span class="line">' + esc(oneLine(log.message || '-', 150)) + '</span><span class="line muted">' + esc(log.data ? oneLine(JSON.stringify(log.data), 150) : '') + '</span></td>' +
+          '<td><span class="line"><code>' + esc(log.sessionId || '-') + '</code></span></td>' +
+          '<td><span class="line"><code>' + esc(log.ticketId || '-') + '</code></span></td>' +
+          '<td><span class="line muted">' + esc(formatTime(log.createdAt)) + '</span></td>' +
+        '</tr>'
+      )).join('');
+    }
+
+    async function loadAppLogs() {
+      if (!appLogsBody) return;
+      const params = new URLSearchParams({
+        q: appLogSearch?.value?.trim() || '',
+        level: appLogLevel?.value || '',
+        category: appLogCategory?.value || '',
+        limit: '100',
+      });
+      const res = await fetch('/api/logs/search?' + params.toString());
+      if (!res.ok) throw new Error(await res.text());
+      const payload = await res.json();
+      latestAppLogs = Array.isArray(payload.results) ? payload.results : [];
+      renderAppLogs(latestAppLogs);
     }
 
     async function loadSessions() {
@@ -3537,6 +3730,21 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       searchTickets.click();
     });
 
+    searchAppLogs?.addEventListener('click', () => {
+      withButtonFeedback(searchAppLogs, { loading: '查询中', success: '已查询', failure: '失败' }, loadAppLogs)
+        .then(() => setStatus('日志查询完成'))
+        .catch((error) => setStatus('日志查询失败：' + error.message, true));
+    });
+
+    appLogSearch?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      searchAppLogs.click();
+    });
+
+    appLogLevel?.addEventListener('change', () => searchAppLogs?.click());
+    appLogCategory?.addEventListener('change', () => searchAppLogs?.click());
+
     chatsBody.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-chat]');
       if (!button) return;
@@ -3641,6 +3849,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         loadFeedbacks(),
         loadTickets(),
         loadSystemStatus(),
+        loadAppLogs(),
       ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
@@ -3701,6 +3910,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
     loadTickets().catch((error) => {
       ticketsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
+    });
+    loadAppLogs().catch((error) => {
+      if (appLogsBody) appLogsBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     loadSystemStatus().catch((error) => {
       if (isOverviewPage) setStatus('系统状态加载失败：' + error.message, true);

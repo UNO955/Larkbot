@@ -12,7 +12,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
-import { logger } from './utils/logger.js';
+import { configureAppLogger, flushAppLogger, logger } from './utils/logger.js';
 import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
@@ -29,8 +29,12 @@ const DAILY_CLEANUP_HOUR = 3;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`);
   const store = await createDefaultSessionStore();
+  configureAppLogger(store);
+  logger.info(`larkbot 启动，traex cwd=${cfg.traexCwd} home=${process.env.TRAE_HOME?.trim() || '~/.trae'}`, {
+    category: 'daemon',
+    data: { cwd: cfg.traexCwd, traeHome: process.env.TRAE_HOME?.trim() || '~/.trae' },
+  });
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
 
@@ -95,11 +99,11 @@ async function main(): Promise<void> {
     sessionManager: sessions,
     onBotUpdated(bot) {
       activeBot = bot;
-      logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`);
+      logger.info(`bot 配置已更新 name=${bot.name} cwd=${bot.cwd}`, { category: 'daemon', data: { botId: bot.id, cwd: bot.cwd } });
     },
   });
   await backfillSessionUserNames(store, im).catch((error: any) => {
-    logger.warn(`回填会话发起人名称失败: ${error?.message ?? error}`);
+    logger.warn(`回填会话发起人名称失败: ${error?.message ?? error}`, { category: 'daemon' });
   });
   const restored = await sessions.restore();
   for (const session of restored) {
@@ -114,11 +118,14 @@ async function main(): Promise<void> {
         closedRetentionMs: cfg.sessionClosedRetentionMs,
       });
       if (result.closed || result.deleted) {
-        logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`);
+        logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`, {
+          category: 'cleanup',
+          data: { closed: result.closed, deleted: result.deleted },
+        });
         await notifyCleanupResult(im, activeBot, result);
       }
     } catch (error: any) {
-      logger.warn(`会话清理失败: ${error?.message ?? error}`);
+      logger.warn(`会话清理失败: ${error?.message ?? error}`, { category: 'cleanup' });
     }
   };
   const cleanupTimer = scheduleDailyCleanup(cleanupSessions, DAILY_CLEANUP_HOUR);
@@ -128,7 +135,7 @@ async function main(): Promise<void> {
       await rememberChat(store, activeBot, chat).then((bot) => {
         if (bot) activeBot = bot;
       }).catch((error: any) => {
-        logger.warn(`记录群聊失败 chat=${chat.chatId}: ${error?.message ?? error}`);
+        logger.warn(`记录群聊失败 chat=${chat.chatId}: ${error?.message ?? error}`, { category: 'lark', data: { chatId: chat.chatId } });
       });
     },
 
@@ -277,20 +284,21 @@ async function main(): Promise<void> {
 
   // 优雅退出
   const shutdown = () => {
-    logger.info('收到退出信号，关闭所有会话…');
+    logger.info('收到退出信号，关闭所有会话…', { category: 'daemon' });
     cleanupTimer.cancel();
     sessions.shutdownAll();
     consoleServer.close();
-    im.stop().finally(() => process.exit(0));
+    im.stop().finally(() => flushAppLogger().finally(() => process.exit(0)));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  logger.info('larkbot 就绪，等待飞书消息…');
+  logger.info('larkbot 就绪，等待飞书消息…', { category: 'daemon' });
 }
 
-main().catch((err) => {
-  logger.error(`启动失败: ${err?.message ?? err}`);
+main().catch(async (err) => {
+  logger.error(`启动失败: ${err?.message ?? err}`, { category: 'daemon' });
+  await flushAppLogger();
   process.exit(1);
 });
 

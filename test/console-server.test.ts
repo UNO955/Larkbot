@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { startConsoleServer, TerminalStreamStore } from '../src/console/server.js';
 import type { SessionStore } from '../src/core/store.js';
-import type { Bot, FeedbackRecord, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
+import type { AppLogRecord, Bot, FeedbackRecord, Session, Ticket, TicketTraceEvent } from '../src/core/types.js';
 
 const bot: Bot = {
   id: 'bot-1',
@@ -282,6 +282,16 @@ describe('console terminal page', () => {
       createdAt: '2026-01-01T00:03:00.000Z',
       updatedAt: '2026-01-01T00:03:00.000Z',
     }];
+    const appLogs: AppLogRecord[] = [{
+      id: 'log_20260101000400_abcd1234',
+      level: 'warn',
+      category: 'traex',
+      message: 'traex 退出 session=lm-1 code=0',
+      sessionId: 'lm-1',
+      ticketId: 'tk-1',
+      data: { exitCode: 0 },
+      createdAt: '2026-01-01T00:04:00.000Z',
+    }];
     const store: SessionStore = {
       loadBots: async () => [bot],
       saveBots: async () => undefined,
@@ -293,6 +303,9 @@ describe('console terminal page', () => {
       saveTickets: async (next) => { tickets = structuredClone(next); },
       loadTicketTraceEvents: async () => events,
       saveTicketTraceEvents: async () => undefined,
+      loadAppLogs: async () => appLogs,
+      saveAppLogs: async () => undefined,
+      appendAppLog: async () => undefined,
     };
     server = await startConsoleServer({
       host: '127.0.0.1',
@@ -309,6 +322,13 @@ describe('console terminal page', () => {
     expect(html).toContain('工单档案');
     expect(html).toContain('/api/tickets');
     expect(html).toContain('/api/tickets/search');
+    expect(html).toContain('/logs');
+
+    const logsPage = await fetch(`${base}/logs`);
+    expect(logsPage.status).toBe(200);
+    const logsHtml = await logsPage.text();
+    expect(logsHtml).toContain('内部运行日志');
+    expect(logsHtml).toContain('app-log-search');
 
     const ticketRes = await fetch(`${base}/api/tickets`);
     expect(ticketRes.status).toBe(200);
@@ -338,6 +358,22 @@ describe('console terminal page', () => {
     expect(searchJson).toMatchObject({ total: 1, offset: 0, limit: 1 });
     expect(searchJson.results).toEqual([
       expect.objectContaining({ kind: 'ticket', ticketId: 'tk-2', ticketStatus: 'archived' }),
+    ]);
+
+    const logRes = await fetch(`${base}/api/logs/log_20260101000400_abcd1234`);
+    expect(logRes.status).toBe(200);
+    expect((await logRes.json()).log).toEqual(appLogs[0]);
+
+    const logSearchRes = await fetch(`${base}/api/logs/search?level=warn&category=traex&sessionId=lm-1&q=退出`);
+    expect(logSearchRes.status).toBe(200);
+    const logSearchJson = await logSearchRes.json();
+    expect(logSearchJson).toMatchObject({ total: 1, offset: 0, limit: 50 });
+    expect(logSearchJson.results).toEqual([appLogs[0]]);
+
+    const ticketLogSearchRes = await fetch(`${base}/api/tickets/search?q=log_20260101000400_abcd1234&kind=log`);
+    expect(ticketLogSearchRes.status).toBe(200);
+    expect((await ticketLogSearchRes.json()).results).toEqual([
+      expect.objectContaining({ kind: 'log', logId: 'log_20260101000400_abcd1234', ticketId: 'tk-1' }),
     ]);
   });
 

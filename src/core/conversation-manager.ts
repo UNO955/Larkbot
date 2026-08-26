@@ -115,7 +115,7 @@ export class ConversationManager {
     const sessions = await this.deps.store.loadSessions();
     for (const session of sessions) this.sessions.set(session.sessionId, session);
     await this.backfillTickets(sessions);
-    logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`);
+    logger.info(`已恢复 ${sessions.filter((session) => session.status === 'active').length} 个会话路由`, { category: 'daemon' });
     return sessions;
   }
 
@@ -223,7 +223,7 @@ export class ConversationManager {
     await this.patchTraceStopped(runtime);
     this.disposeRuntime(runtime);
     await this.persist();
-    logger.info(`已停止本轮分析 session=${sessionId.slice(0, 8)}`);
+    logger.info(`已停止本轮分析 session=${sessionId.slice(0, 8)}`, { category: 'traex', sessionId });
     return session;
   }
 
@@ -396,12 +396,21 @@ export class ConversationManager {
     runtime.detector.onIdle((source) => {
       if (runtime.status !== 'busy') return;
       runtime.status = 'idle';
-      logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`);
+    logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`, {
+      category: 'traex',
+      sessionId: session.sessionId,
+      ticketId: session.ticketId,
+    });
       void this.finishTurn(runtime);
     });
     child.onData((chunk) => this.onData(runtime, chunk));
     child.onExit(({ exitCode }) => void this.onExit(runtime, exitCode));
-    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} cli=${resumeSessionId ?? 'new'} pid=${child.pid}`);
+    logger.info(`${resumeSessionId ? '恢复' : '创建'} traex session=${session.sessionId.slice(0, 8)} cli=${resumeSessionId ?? 'new'} pid=${child.pid}`, {
+      category: 'traex',
+      sessionId: session.sessionId,
+      ticketId: session.ticketId,
+      data: { cliSessionId: resumeSessionId ?? 'new', pid: child.pid },
+    });
     return runtime;
   }
 
@@ -416,7 +425,11 @@ export class ConversationManager {
         runtime.ready = true;
         this.clearFirstPromptFallback(runtime);
         runtime.detector.reset();
-        logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`);
+        logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`, {
+          category: 'traex',
+          sessionId: runtime.route.sessionId,
+          ticketId: runtime.route.ticketId,
+        });
         void this.drain(runtime);
       }
       return;
@@ -480,7 +493,11 @@ export class ConversationManager {
       runtime.route.hasHistory = true;
       if (result.cliSessionId) runtime.route.cliSessionId = result.cliSessionId;
       await this.persist();
-      logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`);
+      logger.info(`→ traex session=${runtime.route.sessionId.slice(0, 8)}`, {
+        category: 'traex',
+        sessionId: runtime.route.sessionId,
+        ticketId: runtime.route.ticketId,
+      });
     } catch (error: any) {
       this.endWorkLog(runtime, 'failed');
       await this.updateTicketStatus(runtime.route, 'failed');
@@ -540,7 +557,12 @@ export class ConversationManager {
     }
     this.teardown(runtime);
     this.deps.closeTerminal?.(runtime.route.sessionId);
-    logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`);
+    logger.warn(`traex 退出 session=${runtime.route.sessionId.slice(0, 8)} code=${exitCode}`, {
+      category: 'traex',
+      sessionId: runtime.route.sessionId,
+      ticketId: runtime.route.ticketId,
+      data: { exitCode },
+    });
     if (!recover) {
       if (!runtime.intentionalClose && !runtime.ready && runtime.route.threadId) {
         await this.deps.notify(runtime.route.threadId, `traex 启动失败（退出码 ${exitCode}），消息未被处理。`);
@@ -586,7 +608,11 @@ export class ConversationManager {
       if (runtime.ready || runtime.status !== 'idle' || runtime.queue.length === 0) return;
       runtime.ready = true;
       runtime.detector.reset();
-      logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`);
+      logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`, {
+        category: 'traex',
+        sessionId: runtime.route.sessionId,
+        ticketId: runtime.route.ticketId,
+      });
       void this.drain(runtime);
     }, FIRST_PROMPT_FALLBACK_MS);
     runtime.firstPromptTimer.unref?.();
@@ -921,6 +947,20 @@ export class ConversationManager {
     };
     events.push(event);
     await this.deps.store.saveTicketTraceEvents(events.slice(-5000));
+    logger.info(input.message || ticketTraceEventText(input.kind), {
+      category: 'ticket',
+      sessionId: session.sessionId,
+      ticketId: ticket.id,
+      turnId: event.turnId,
+      traceEventId: event.id,
+      data: {
+        kind: event.kind,
+        status: event.status,
+        hasQuestion: Boolean(event.question),
+        hasAnswer: Boolean(event.answer),
+        hasTrace: Boolean(event.trace),
+      },
+    });
   }
 
   private async persistExpiredSessions(deleted: ExpiredSession[], nowMs: number): Promise<void> {
@@ -961,6 +1001,15 @@ function createTicketFromSession(session: Session, now: string): Ticket {
 
 function sortTickets(tickets: Ticket[]): Ticket[] {
   return [...tickets].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+}
+
+function ticketTraceEventText(kind: TicketTraceEvent['kind']): string {
+  return kind === 'turn_started' ? '工单分析开始'
+    : kind === 'trace_snapshot' ? '工单分析快照已记录'
+    : kind === 'turn_completed' ? '工单分析完成'
+    : kind === 'turn_failed' ? '工单分析失败'
+    : kind === 'turn_stopped' ? '工单分析停止'
+    : kind;
 }
 
 function toExpiredSession(session: Session, deletedAt: string): ExpiredSession {
