@@ -26,18 +26,13 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'system' | 'config' | 'chats' | 'feedback' | 'sessions';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
     title: '控制台',
     eyebrow: 'Local operations cockpit',
     copy: '飞书作为团队入口，本地 daemon 负责路由、执行、观察、打断与反馈复盘。',
-  },
-  system: {
-    title: '系统监控',
-    eyebrow: 'Machine telemetry',
-    copy: '只读查看开发机 CPU、内存、磁盘、daemon 进程、会话负载和最近日志告警。',
   },
   config: {
     title: '配置',
@@ -875,7 +870,7 @@ function sendHtml(res: ServerResponse, html: string): void {
 
 function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/') return 'overview';
-  if (pathname === '/system') return 'system';
+  if (pathname === '/system') return 'overview';
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
@@ -1196,7 +1191,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       grid-template-columns: minmax(0, 1fr) 336px;
       gap: 20px;
     }
-    .page-system .content-frame,
     .page-config .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
@@ -1206,7 +1200,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #region-config,
     .page-overview #region-chats,
     .page-overview #region-feedback,
-    .page-overview #region-system,
     .page-overview #region-sessions,
     .page-config #region-health,
     .page-config #region-system,
@@ -1227,19 +1220,13 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
-    .page-sessions #region-feedback,
-    .page-system #region-health,
-    .page-system #region-config,
-    .page-system #region-chats,
-    .page-system #region-feedback,
-    .page-system #region-sessions {
+    .page-sessions #region-feedback {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
-    .page-sessions .observer-column,
-    .page-system .observer-column {
+    .page-sessions .observer-column {
       display: none;
     }
     .primary-column,
@@ -1876,7 +1863,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       <nav class="side-nav">
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
-        <a class="${navClass('system')}" href="/system"><svg class="icon sm"><use href="#i-cpu"></use></svg><span>系统</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -1944,7 +1930,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <div class="monitor-hero">
           <div class="monitor-status">
             <span id="system-health-pill" class="health-pill"><svg class="icon sm"><use href="#i-radio"></use></svg>采集中</span>
-            <h2 id="system-headline">等待开发机状态</h2>
+            <h2 id="system-headline">系统监控</h2>
             <p id="system-copy">面板每 5 秒刷新一次，只读取运行态指标，不展示环境变量、token 或完整请求头。</p>
           </div>
           <div class="monitor-clock">
@@ -2350,7 +2336,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestFeedbacks = [];
       let promptProfiles = [];
       let activePromptId = '';
-      const isSystemPage = document.querySelector('.page-system') !== null;
+      const isOverviewPage = document.querySelector('.page-overview') !== null;
       const systemHistory = { cpu: [], memory: [] };
 
     function setStatus(text, failed = false) {
@@ -3120,9 +3106,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       feedbacksBody.innerHTML = '<tr><td colspan="7"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
     loadSystemStatus().catch((error) => {
-      if (isSystemPage) setStatus('系统状态加载失败：' + error.message, true);
+      if (isOverviewPage) setStatus('系统状态加载失败：' + error.message, true);
     });
-    if (isSystemPage) {
+    if (isOverviewPage) {
       window.setInterval(() => {
         loadSystemStatus().catch((error) => setStatus('系统状态刷新失败：' + error.message, true));
       }, 5000);
@@ -3533,7 +3519,6 @@ function renderOfficeHtml(): string {
       <nav class="side-nav">
         <a class="nav-item" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item active" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
-        <a class="nav-item" href="/system"><svg class="icon sm"><use href="#i-cpu"></use></svg><span>系统</span></a>
         <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="nav-item" href="/feedback"><svg class="icon sm"><use href="#i-shield"></use></svg><span>反馈</span></a>

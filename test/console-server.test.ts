@@ -198,7 +198,7 @@ describe('console terminal page', () => {
     expect((await after.json()).chats[0].enabled).toBe(true);
   });
 
-  it('提供只读系统监控页面和状态接口', async () => {
+  it('在控制台总览集成只读系统监控和状态接口', async () => {
     const store: SessionStore = {
       loadBots: async () => [bot],
       saveBots: async () => undefined,
@@ -216,11 +216,13 @@ describe('console terminal page', () => {
     const { port } = server.address() as AddressInfo;
     const base = `http://127.0.0.1:${port}`;
 
-    const page = await fetch(`${base}/system`);
+    const page = await fetch(`${base}/`);
     expect(page.status).toBe(200);
     const html = await page.text();
+    expect(html).toContain('运行健康概览');
     expect(html).toContain('系统监控');
     expect(html).toContain('/api/system/status');
+    expect(html).not.toContain('href="/system"');
 
     const res = await fetch(`${base}/api/system/status`);
     expect(res.status).toBe(200);
