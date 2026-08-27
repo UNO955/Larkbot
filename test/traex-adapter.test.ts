@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -184,5 +184,50 @@ describe('traex adapter spawnSpec', () => {
     expect(raw?.content).toContain('agent_reasoning_raw_content');
     expect(raw?.content).toContain('raw reasoning');
     expect(raw?.updatedAt).toBeTruthy();
+  });
+
+  it('列出 traex rollout 原生日志索引', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), '{}\n');
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-16-35-trae-2.jsonl'), '{}\n');
+    writeFileSync(join(sessionDir, 'other.jsonl'), '{}\n');
+
+    const logs = createTraexAdapter().listSessionRawLogs?.() || [];
+    expect(logs.map((item) => item.cliSessionId).sort()).toEqual(['trae-1', 'trae-2']);
+    expect(logs[0].path).toContain('.jsonl');
+    expect(logs[0].sizeBytes).toBeGreaterThan(0);
+    expect(logs[0].updatedAt).toBeTruthy();
+  });
+
+  it('清理超过保留期的 traex rollout 原生日志', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    const oldRollout = join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-old.jsonl');
+    const freshRollout = join(sessionDir, 'rollout-2026-08-13T21-16-35-trae-fresh.jsonl');
+    const otherJsonl = join(sessionDir, 'other.jsonl');
+    writeFileSync(oldRollout, 'old\n');
+    writeFileSync(freshRollout, 'fresh\n');
+    writeFileSync(otherJsonl, 'other\n');
+    const now = Date.UTC(2026, 8, 1);
+    const oldDate = new Date(now - 31 * 24 * 60 * 60 * 1000);
+    const freshDate = new Date(now - 5 * 24 * 60 * 60 * 1000);
+    utimesSync(oldRollout, oldDate, oldDate);
+    utimesSync(freshRollout, freshDate, freshDate);
+    utimesSync(otherJsonl, oldDate, oldDate);
+
+    const result = createTraexAdapter().cleanupSessionRawLogs?.({
+      olderThanMs: 30 * 24 * 60 * 60 * 1000,
+      now,
+    });
+
+    expect(result).toEqual({ deleted: 1, bytes: 4 });
+    expect(existsSync(oldRollout)).toBe(false);
+    expect(existsSync(freshRollout)).toBe(true);
+    expect(existsSync(otherJsonl)).toBe(true);
   });
 });

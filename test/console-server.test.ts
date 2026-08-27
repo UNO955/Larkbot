@@ -57,10 +57,28 @@ describe('console terminal page', () => {
       botId: 'bot-1',
       terminalStore,
       cli: {
+        listSessionRawLogs: () => [
+          {
+            cliSessionId: 'trae-1',
+            path: '/tmp/rollout-trae-1.jsonl',
+            updatedAt: '2026-01-01T00:01:00.000Z',
+            sizeBytes: 320,
+          },
+          {
+            cliSessionId: 'trae-deleted',
+            path: '/tmp/rollout-trae-deleted.jsonl',
+            updatedAt: '2026-01-01T00:02:00.000Z',
+            sizeBytes: 640,
+          },
+        ],
         getSessionRawLog: () => ({
           path: '/tmp/rollout-trae-1.jsonl',
           updatedAt: '2026-01-01T00:01:00.000Z',
-          content: '{"type":"event_msg","payload":{"type":"agent_reasoning_raw_content","text":"raw process"}}\n',
+          content: [
+            '{"timestamp":"2026-01-01T00:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}',
+            '{"timestamp":"2026-01-01T00:00:01.000Z","type":"event_msg","payload":{"type":"agent_reasoning_raw_content","turn_id":"turn-1","text":"raw process"}}',
+            '{"timestamp":"2026-01-01T00:00:02.000Z","type":"event_msg","payload":{"type":"exec_command_end","turn_id":"turn-1","command":"grep error app.log","stdout":"ERROR timeout","exit_code":0}}',
+          ].join('\n') + '\n',
         }),
       },
     });
@@ -78,15 +96,37 @@ describe('console terminal page', () => {
     expect(sessionsPage.status).toBe(200);
     const sessionsHtml = await sessionsPage.text();
     expect(sessionsHtml).toContain('底层日志');
-    expect(sessionsHtml).toContain('/raw-log');
+    expect(sessionsHtml).toContain('/logs/');
+
+    const logsPage = await fetch(`${base}/logs`);
+    expect(logsPage.status).toBe(200);
+    const logsHtml = await logsPage.text();
+    expect(logsHtml).toContain('日志');
+    expect(logsHtml).toContain('/api/logs');
+
+    const logs = await fetch(`${base}/api/logs`);
+    expect(logs.status).toBe(200);
+    const logsPayload = await logs.json();
+    expect(logsPayload.logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cliSessionId: 'trae-1', source: 'session', sessionId: 'lm-1' }),
+      expect.objectContaining({ cliSessionId: 'trae-deleted', source: 'orphan' }),
+    ]));
 
     const rawPage = await fetch(`${base}/sessions/lm-1/raw-log`);
     expect(rawPage.status).toBe(200);
     const rawHtml = await rawPage.text();
     expect(rawHtml).toContain('底层日志');
     expect(rawHtml).toContain('/tmp/rollout-trae-1.jsonl');
+    expect(rawHtml).toContain('turn-1');
+    expect(rawHtml).toContain('思考');
+    expect(rawHtml).toContain('命令');
+    expect(rawHtml).toContain('$ grep error app.log');
     expect(rawHtml).toContain('agent_reasoning_raw_content');
     expect(rawHtml).toContain('raw process');
+
+    const cliRawPage = await fetch(`${base}/logs/trae-1`);
+    expect(cliRawPage.status).toBe(200);
+    expect(await cliRawPage.text()).toContain('事件 JSON');
 
     terminalStore.redactInput('lm-1', [
       '<larkbot_reminder>',

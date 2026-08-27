@@ -39,9 +39,23 @@ export interface SessionFinalMessage {
 }
 
 export interface SessionRawLog {
+  cliSessionId?: string;
   path: string;
   content: string;
   updatedAt?: string;
+  sizeBytes?: number;
+}
+
+export interface SessionRawLogSummary {
+  cliSessionId: string;
+  path: string;
+  updatedAt?: string;
+  sizeBytes: number;
+}
+
+export interface SessionRawLogCleanupResult {
+  deleted: number;
+  bytes: number;
 }
 
 export interface CliAdapter {
@@ -64,6 +78,12 @@ export interface CliAdapter {
 
   /** 读取 CLI 原生会话底层日志。仅供控制台诊断使用，不进入用户卡片。 */
   getSessionRawLog?(cliSessionId: string): SessionRawLog | undefined;
+
+  /** 列出 CLI 原生底层日志索引。仅供控制台诊断使用，不进入用户卡片。 */
+  listSessionRawLogs?(): SessionRawLogSummary[];
+
+  /** 清理过期 CLI 原生底层日志。仅供后台维护使用，不进入会话主流程。 */
+  cleanupSessionRawLogs?(opts: { olderThanMs: number; now?: number }): SessionRawLogCleanupResult;
 
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：

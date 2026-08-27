@@ -26,6 +26,7 @@ import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session } from './
 import type { SessionStore } from './core/store.js';
 
 const DAILY_CLEANUP_HOUR = 3;
+const TRAEX_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -121,6 +122,14 @@ async function main(): Promise<void> {
       }
     } catch (error: any) {
       logger.warn(`会话清理失败: ${error?.message ?? error}`);
+    }
+    try {
+      const result = cli.cleanupSessionRawLogs?.({ olderThanMs: TRAEX_LOG_RETENTION_MS });
+      if (result && result.deleted > 0) {
+        logger.info(`traex 日志清理完成 deleted=${result.deleted} bytes=${result.bytes}`);
+      }
+    } catch (error: any) {
+      logger.warn(`traex 日志清理失败: ${error?.message ?? error}`);
     }
   };
   const cleanupTimer = scheduleDailyCleanup(cleanupSessions, DAILY_CLEANUP_HOUR);
@@ -487,7 +496,7 @@ async function notifyStartup(
     version: `v${process.env.npm_package_version || '0.1.0'}`,
     unfinishedSessions: activeCount,
     dashboardUrl: cfg.consolePublicUrl,
-    cleanupPolicy: `每天 03:00，${formatRetention(cfg.sessionIdleCloseMs)}未活跃关闭，${formatRetention(cfg.sessionClosedRetentionMs)}未活跃删除路由`,
+    cleanupPolicy: `每天 03:00，${formatRetention(cfg.sessionIdleCloseMs)}未活跃关闭，${formatRetention(cfg.sessionClosedRetentionMs)}未活跃删除路由，traex 原生日志保留 30 天`,
     details: lines,
   });
   await im.sendDirectCard(bot.ownerOpenId, card);

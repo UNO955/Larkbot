@@ -7,16 +7,18 @@
 import {
   closeSync,
   existsSync,
-  readdirSync,
   openSync,
   readFileSync,
   readSync,
   realpathSync,
+  readdirSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import type { CliAdapter, SessionFinalMessage, SessionRawLog, SessionTokenUsage, SpawnSpec } from './types.js';
+import { basename, dirname, join } from 'node:path';
+import type { CliAdapter, SessionFinalMessage, SessionRawLog, SessionRawLogCleanupResult, SessionRawLogSummary, SessionTokenUsage, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
   return {
@@ -130,7 +132,15 @@ export function createTraexAdapter(): CliAdapter {
 
     getSessionRawLog(cliSessionId: string): SessionRawLog | undefined {
       const rolloutPath = findTraexRolloutPath(cliSessionId);
-      return rolloutPath ? readTraexRawLog(rolloutPath) : undefined;
+      return rolloutPath ? readTraexRawLog(rolloutPath, cliSessionId) : undefined;
+    },
+
+    listSessionRawLogs(): SessionRawLogSummary[] {
+      return listTraexRawLogs();
+    },
+
+    cleanupSessionRawLogs(opts: { olderThanMs: number; now?: number }): SessionRawLogCleanupResult {
+      return cleanupTraexRawLogs(opts);
     },
 
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
@@ -191,6 +201,85 @@ function findHistoryMatch(path: string, fromByte: number, expectedText: string):
     }
   }
   return undefined;
+}
+
+function cleanupTraexRawLogs(opts: { olderThanMs: number; now?: number }): SessionRawLogCleanupResult {
+  const root = traeSessionsDir();
+  const olderThanMs = Math.max(0, opts.olderThanMs);
+  const cutoff = (opts.now ?? Date.now()) - olderThanMs;
+  if (!existsSync(root) || cutoff <= 0) return { deleted: 0, bytes: 0 };
+  let deleted = 0;
+  let bytes = 0;
+  const touchedDirs = new Set<string>();
+  try {
+    walkSessionFiles(root, (path) => {
+      if (!path.endsWith('.jsonl')) return;
+      if (!extractCliSessionIdFromRolloutPath(path)) return;
+      try {
+        const stat = statSync(path);
+        if (stat.mtimeMs >= cutoff) return;
+        unlinkSync(path);
+        deleted++;
+        bytes += stat.size;
+        touchedDirs.add(dirname(path));
+      } catch {
+        // Ignore files that disappear or cannot be deleted; cleanup is best effort.
+      }
+    });
+  } catch {
+    return { deleted, bytes };
+  }
+  pruneEmptySessionDirs(root, touchedDirs);
+  return { deleted, bytes };
+}
+
+function listTraexRawLogs(): SessionRawLogSummary[] {
+  const root = traeSessionsDir();
+  if (!existsSync(root)) return [];
+  const summaries: SessionRawLogSummary[] = [];
+  try {
+    walkSessionFiles(root, (path) => {
+      if (!path.endsWith('.jsonl')) return;
+      const cliSessionId = extractCliSessionIdFromRolloutPath(path);
+      if (!cliSessionId) return;
+      try {
+        const stat = statSync(path);
+        summaries.push({
+          cliSessionId,
+          path,
+          updatedAt: new Date(stat.mtimeMs).toISOString(),
+          sizeBytes: stat.size,
+        });
+      } catch {
+        // Ignore files that disappear while scanning.
+      }
+    });
+  } catch {
+    return [];
+  }
+  summaries.sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''));
+  return summaries;
+}
+
+function extractCliSessionIdFromRolloutPath(path: string): string {
+  const name = basename(path);
+  const match = name.match(/^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$/);
+  return match?.[1] || '';
+}
+
+function pruneEmptySessionDirs(root: string, dirs: Set<string>): void {
+  const ordered = [...dirs].sort((a, b) => b.length - a.length);
+  for (const dir of ordered) {
+    let current = dir;
+    while (current.startsWith(root) && current !== root) {
+      try {
+        rmdirSync(current);
+      } catch {
+        break;
+      }
+      current = dirname(current);
+    }
+  }
 }
 
 function findTraexRolloutPath(cliSessionId: string): string | undefined {
@@ -272,15 +361,18 @@ function readTraexSessionFinal(path: string): SessionFinalMessage | undefined {
   }
 }
 
-function readTraexRawLog(path: string): SessionRawLog | undefined {
+function readTraexRawLog(path: string, cliSessionId?: string): SessionRawLog | undefined {
   if (!existsSync(path)) return undefined;
   try {
     const content = readFileSync(path, 'utf8');
-    const updatedAt = new Date(statSync(path).mtimeMs).toISOString();
+    const stat = statSync(path);
+    const updatedAt = new Date(stat.mtimeMs).toISOString();
     return {
+      cliSessionId,
       path,
       content: content.length > 500_000 ? content.slice(-500_000) : content,
       updatedAt,
+      sizeBytes: stat.size,
     };
   } catch {
     return undefined;

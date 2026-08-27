@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
-import type { CliAdapter, SessionRawLog } from '../adapters/cli/types.js';
+import type { CliAdapter, SessionRawLog, SessionRawLogSummary } from '../adapters/cli/types.js';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -14,7 +14,7 @@ export interface ConsoleServerOpts {
   port: number;
   store: SessionStore;
   botId: string;
-  cli?: Pick<CliAdapter, 'getSessionRawLog'>;
+  cli?: Pick<CliAdapter, 'getSessionRawLog' | 'listSessionRawLogs'>;
   traceStore?: TurnTraceStore;
   terminalStore?: TerminalStreamStore;
   sessionManager?: {
@@ -28,7 +28,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions';
+type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -55,6 +55,11 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '会话',
     eyebrow: 'Session routes',
     copy: '查看飞书话题到 traex runtime 的映射，必要时关闭或删除路由记录。',
+  },
+  logs: {
+    title: '日志',
+    eyebrow: 'Long-lived diagnostics',
+    copy: '从长期日志和 traex 原生记录查看历史执行过程，独立于短期会话路由。',
   },
 };
 
@@ -302,6 +307,16 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendHtml(res, renderTerminalHtml(session));
       return;
     }
+    const cliRawLogMatch = url.pathname.match(/^\/logs\/([^/]+)$/);
+    if (req.method === 'GET' && cliRawLogMatch) {
+      const cliSessionId = decodeURIComponent(cliRawLogMatch[1]);
+      if (!opts.cli?.getSessionRawLog) throw httpError(404, 'raw_log_not_available');
+      const rawLog = opts.cli.getSessionRawLog(cliSessionId);
+      if (!rawLog) throw httpError(404, 'raw_log_not_found');
+      const session = (await listSessions(opts)).find((item) => item.cliSessionId === cliSessionId);
+      sendHtml(res, renderRawLogHtml(session || rawLogSession(cliSessionId), rawLog));
+      return;
+    }
     const sessionRawLogMatch = url.pathname.match(/^\/sessions\/([^/]+)\/raw-log$/);
     if (req.method === 'GET' && sessionRawLogMatch) {
       const sessionId = decodeURIComponent(sessionRawLogMatch[1]);
@@ -344,6 +359,10 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
     }
     if (req.method === 'GET' && url.pathname === '/api/sessions') {
       sendJson(res, { sessions: await listSessions(opts) });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/logs') {
+      sendJson(res, { logs: await listLogs(opts) });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/chats') {
@@ -574,6 +593,14 @@ async function requireBot(opts: ConsoleServerOpts): Promise<Bot> {
 }
 
 type PublicSession = Session & { runtimeStatus?: 'idle' | 'busy'; turnStartedAt?: string; createdByDisplayName?: string; lastCallerDisplayName?: string };
+type PublicLogEntry = SessionRawLogSummary & {
+  sessionId?: string;
+  title?: string;
+  chatName?: string;
+  chatId?: string;
+  status?: Session['status'];
+  source: 'session' | 'orphan';
+};
 
 async function listSessions(opts: ConsoleServerOpts): Promise<PublicSession[]> {
   const bot = await requireBot(opts).catch(() => undefined);
@@ -584,6 +611,42 @@ async function listSessions(opts: ConsoleServerOpts): Promise<PublicSession[]> {
     .map((session) => enrichSessionChatName(session, bot))
     .map((session) => enrichSessionUserNames(session, bot))
     .sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt));
+}
+
+async function listLogs(opts: ConsoleServerOpts): Promise<PublicLogEntry[]> {
+  const sessions = await listSessions(opts).catch(() => []);
+  const sessionsByCli = new Map(sessions.filter((session) => session.cliSessionId).map((session) => [session.cliSessionId!, session]));
+  const rawLogs = opts.cli?.listSessionRawLogs?.() || [];
+  return rawLogs.slice(0, 500).map((log) => {
+    const session = sessionsByCli.get(log.cliSessionId);
+    return {
+      ...log,
+      sessionId: session?.sessionId,
+      title: session?.title,
+      chatName: session?.chatName,
+      chatId: session?.chatId,
+      status: session?.status,
+      source: session ? 'session' : 'orphan',
+    };
+  });
+}
+
+function rawLogSession(cliSessionId: string): Session {
+  const now = new Date().toISOString();
+  return {
+    sessionId: cliSessionId,
+    chatId: '',
+    rootMessageId: '',
+    scope: 'thread',
+    title: `traex ${cliSessionId}`,
+    status: 'closed',
+    workingDir: '',
+    cliId: 'traex',
+    cliSessionId,
+    hasHistory: true,
+    lastMessageAt: now,
+    createdAt: now,
+  };
 }
 
 function enrichSessionChatName(session: Session, bot: Bot | undefined): Session {
@@ -888,6 +951,7 @@ function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
   if (pathname === '/sessions') return 'sessions';
+  if (pathname === '/logs') return 'logs';
   return undefined;
 }
 
@@ -1192,7 +1256,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-overview #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
-    .page-sessions #top-save {
+    .page-sessions #top-save,
+    .page-logs #top-save {
       display: none;
     }
     .content-frame {
@@ -1207,39 +1272,52 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-config .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
-    .page-sessions .content-frame {
+    .page-sessions .content-frame,
+    .page-logs .content-frame {
       grid-template-columns: minmax(0, 1fr);
     }
     .page-overview #region-config,
     .page-overview #region-chats,
     .page-overview #region-feedback,
     .page-overview #region-sessions,
+    .page-overview #region-logs,
     .page-config #region-health,
     .page-config #region-system,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-sessions,
+    .page-config #region-logs,
     .page-chats #region-health,
     .page-chats #region-system,
     .page-chats #region-config,
     .page-chats #region-feedback,
     .page-chats #region-sessions,
+    .page-chats #region-logs,
     .page-feedback #region-health,
     .page-feedback #region-system,
     .page-feedback #region-config,
     .page-feedback #region-chats,
     .page-feedback #region-sessions,
+    .page-feedback #region-logs,
     .page-sessions #region-health,
     .page-sessions #region-system,
     .page-sessions #region-config,
     .page-sessions #region-chats,
-    .page-sessions #region-feedback {
+    .page-sessions #region-feedback,
+    .page-sessions #region-logs,
+    .page-logs #region-health,
+    .page-logs #region-system,
+    .page-logs #region-config,
+    .page-logs #region-chats,
+    .page-logs #region-feedback,
+    .page-logs #region-sessions {
       display: none;
     }
     .page-config .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
-    .page-sessions .observer-column {
+    .page-sessions .observer-column,
+    .page-logs .observer-column {
       display: none;
     }
     .primary-column,
@@ -1880,6 +1958,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
         <a class="${navClass('sessions')}" href="/sessions"><svg class="icon sm"><use href="#i-database"></use></svg><span>会话</span></a>
+        <a class="${navClass('logs')}" href="/logs"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>日志</span></a>
       </nav>
       <div class="side-note">
         <svg class="icon sm"><use href="#i-shield"></use></svg>
@@ -2223,6 +2302,45 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         </table>
       </div>
     </section>
+    <section id="region-logs" class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-terminal"></use></svg></span>
+            <h2>日志</h2>
+          </div>
+          <div class="sub">按 traex 原生日志查看历史执行记录。这里独立于会话路由，路由删除后仍可查到底层日志。</div>
+        </div>
+        <div class="session-controls">
+          <button id="refresh-logs" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+        </div>
+      </div>
+      <div class="sessions">
+        <table class="session-table">
+          <colgroup>
+            <col style="width: 300px">
+            <col style="width: 130px">
+            <col style="width: 180px">
+            <col style="width: 180px">
+            <col style="width: 100px">
+            <col style="width: 130px">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>日志</th>
+              <th>来源</th>
+              <th>会话</th>
+              <th>群聊</th>
+              <th>大小</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="logs-body">
+            <tr><td colspan="6" class="muted">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
         </div>
         <aside class="observer-column" aria-label="右侧观察栏">
           <section class="card side-panel">
@@ -2285,6 +2403,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const sessionsBody = document.querySelector('#sessions-body');
     const refreshSessions = document.querySelector('#refresh-sessions');
     const sessionFilter = document.querySelector('#session-filter');
+    const logsBody = document.querySelector('#logs-body');
+    const refreshLogs = document.querySelector('#refresh-logs');
     const chatsBody = document.querySelector('#chats-body');
     const refreshChats = document.querySelector('#refresh-chats');
     const feedbacksBody = document.querySelector('#feedbacks-body');
@@ -2346,10 +2466,12 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestBot = null;
       let latestChats = [];
       let latestSessions = [];
+      let latestLogs = [];
       let latestFeedbacks = [];
       let promptProfiles = [];
       let activePromptId = '';
       const isOverviewPage = document.querySelector('.page-overview') !== null;
+      const isLogsPage = document.querySelector('.page-logs') !== null;
       const systemHistory = { cpu: [], memory: [] };
 
     function setStatus(text, failed = false) {
@@ -2814,7 +2936,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       sessionsBody.innerHTML = visibleSessions.map((s) => {
         const closed = s.status === 'closed';
         const rawLogButton = s.cliSessionId
-          ? '<a href="/sessions/' + encodeURIComponent(s.sessionId) + '/raw-log" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-database"></use></svg>底层日志</button></a>'
+          ? '<a href="/logs/' + encodeURIComponent(s.cliSessionId) + '" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-database"></use></svg>底层日志</button></a>'
           : '<button class="ghost" type="button" disabled><svg class="icon sm"><use href="#i-database"></use></svg>底层日志</button>';
         return '<tr>' +
           '<td><span class="line"><strong>' + esc(s.title || s.sessionId) + '</strong></span><span class="line muted"><code>' + esc(s.sessionId) + '</code></span></td>' +
@@ -2840,6 +2962,35 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       latestSessions = Array.isArray(sessions) ? sessions : [];
       updateSummary();
       renderSessions();
+    }
+
+    function renderLogs() {
+      if (!latestLogs.length) {
+        logsBody.innerHTML = '<tr><td colspan="6"><span class="empty-state"><svg class="icon sm"><use href="#i-inbox"></use></svg>暂无底层日志</span></td></tr>';
+        return;
+      }
+      logsBody.innerHTML = latestLogs.map((item) => {
+        const hasRoute = item.source === 'session';
+        const title = item.title || item.cliSessionId;
+        return '<tr>' +
+          '<td><span class="line"><strong>' + esc(title) + '</strong></span><span class="line muted"><code>' + esc(item.cliSessionId) + '</code></span><span class="line muted">' + esc(formatTime(item.updatedAt)) + '</span></td>' +
+          '<td><span class="status ' + (hasRoute ? 'active' : 'closed') + '">' + (hasRoute ? '当前路由' : '仅原生日志') + '</span></td>' +
+          '<td><span class="line">' + esc(item.sessionId || '-') + '</span><span class="line muted">' + esc(item.status ? statusText(item.status) : '路由已删除或未记录') + '</span></td>' +
+          '<td><span class="line">' + esc(item.chatName || item.chatId || '-') + '</span><span class="line muted">' + esc(item.chatId || '-') + '</span></td>' +
+          '<td><span class="line muted">' + esc(formatBytes(item.sizeBytes || 0)) + '</span></td>' +
+          '<td><div class="actions">' +
+            '<a href="/logs/' + encodeURIComponent(item.cliSessionId) + '" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-terminal"></use></svg>查看</button></a>' +
+          '</div></td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    async function loadLogs() {
+      const res = await fetch('/api/logs');
+      if (!res.ok) throw new Error(await res.text());
+      const { logs } = await res.json();
+      latestLogs = Array.isArray(logs) ? logs : [];
+      renderLogs();
     }
 
     async function loadChats() {
@@ -2954,7 +3105,12 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     refreshSessions.addEventListener('click', () => {
       withButtonFeedback(refreshSessions, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadSessions)
         .then(() => setStatus('会话已刷新'))
-        .catch((error) => setStatus('刷新失败：' + error.message, true));
+        .catch((error) => setStatus('刷新会话失败：' + error.message, true));
+    });
+    refreshLogs.addEventListener('click', () => {
+      withButtonFeedback(refreshLogs, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadLogs)
+        .then(() => setStatus('日志已刷新'))
+        .catch((error) => setStatus('刷新日志失败：' + error.message, true));
     });
 
     sessionFilter?.addEventListener('change', () => {
@@ -3057,14 +3213,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     });
 
     refreshAll.addEventListener('click', () => {
-      withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => Promise.all([
-        loadBot(),
-        loadModels(),
-        loadChats(),
-        loadSessions(),
-        loadFeedbacks(),
-        loadSystemStatus(),
-      ])).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
+      withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => {
+        const tasks = [loadBot(), loadModels(), loadChats(), loadSessions(), loadFeedbacks(), loadSystemStatus()];
+        if (isLogsPage) tasks.push(loadLogs());
+        return Promise.all(tasks);
+      }).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
 
     feedbackFilter.addEventListener('change', () => {
@@ -3116,6 +3269,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     loadSessions().catch((error) => {
       sessionsBody.innerHTML = '<tr><td colspan="8"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
+    if (isLogsPage) {
+      loadLogs().catch((error) => {
+        logsBody.innerHTML = '<tr><td colspan="6"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
+      });
+    }
     loadChats().catch((error) => {
       chatsBody.innerHTML = '<tr><td colspan="5"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
     });
@@ -4586,8 +4744,22 @@ function renderTerminalHtml(session: Session): string {
 </html>`;
 }
 
+type RawLogEventView = {
+  label: string;
+  tone: 'info' | 'ok' | 'warn' | 'err';
+  timestamp: string;
+  summary: string;
+  detail: string;
+};
+
+type RawLogTurnView = {
+  id: string;
+  events: RawLogEventView[];
+};
+
 function renderRawLogHtml(session: Session, rawLog: SessionRawLog): string {
   const title = `${session.title || session.sessionId} · 底层日志`;
+  const parsed = parseRawLog(rawLog.content);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -4604,7 +4776,24 @@ function renderRawLogHtml(session: Session, rawLog: SessionRawLog): string {
     main { padding: 14px 16px 24px; }
     .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: #cbd5e1; font-size: 12px; }
     .pill { border: 1px solid #334155; border-radius: 999px; padding: 4px 8px; background: #111827; }
-    pre { margin: 0; padding: 14px; border: 1px solid #263247; border-radius: 8px; background: #020617; color: #d8dee9; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .layout { display: grid; gap: 12px; }
+    .turn { border: 1px solid #263247; border-radius: 8px; background: #111827; overflow: hidden; }
+    .turn-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #263247; color: #e5e7eb; font-size: 13px; }
+    .turn-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .event { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; padding: 10px 12px; border-bottom: 1px solid #1f2937; }
+    .event:last-child { border-bottom: 0; }
+    .event-label { display: flex; align-items: flex-start; gap: 6px; color: #cbd5e1; font-size: 12px; }
+    .dot { width: 8px; height: 8px; margin-top: 4px; border-radius: 999px; background: #64748b; flex: none; }
+    .ok .dot { background: #22c55e; }
+    .warn .dot { background: #f59e0b; }
+    .err .dot { background: #ef4444; }
+    .event-time { color: #94a3b8; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .event-summary { margin: 0 0 6px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    details { border: 1px solid #263247; border-radius: 8px; background: #020617; overflow: hidden; }
+    summary { cursor: pointer; padding: 10px 12px; color: #cbd5e1; font-size: 12px; user-select: none; }
+    pre { margin: 0; padding: 14px; border-top: 1px solid #263247; background: #020617; color: #d8dee9; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .empty { padding: 14px; border: 1px solid #263247; border-radius: 8px; background: #111827; color: #94a3b8; font-size: 13px; }
+    @media (max-width: 700px) { .event { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -4617,11 +4806,143 @@ function renderRawLogHtml(session: Session, rawLog: SessionRawLog): string {
       <span class="pill">cli: ${escapeHtml(session.cliSessionId || '-')}</span>
       <span class="pill">updated: ${escapeHtml(rawLog.updatedAt || '-')}</span>
       <span class="pill">path: ${escapeHtml(rawLog.path)}</span>
+      <span class="pill">turns: ${parsed.turns.length}</span>
+      <span class="pill">events: ${parsed.eventCount}</span>
+      <span class="pill">bad lines: ${parsed.badLineCount}</span>
     </div>
-    <pre>${escapeHtml(rawLog.content)}</pre>
+    <div class="layout">
+      ${renderRawLogTurns(parsed.turns)}
+      <details>
+        <summary>原始 JSONL</summary>
+        <pre>${escapeHtml(rawLog.content)}</pre>
+      </details>
+    </div>
   </main>
 </body>
 </html>`;
+}
+
+function parseRawLog(content: string): { turns: RawLogTurnView[]; eventCount: number; badLineCount: number } {
+  const turnMap = new Map<string, RawLogTurnView>();
+  let eventCount = 0;
+  let badLineCount = 0;
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      badLineCount++;
+      continue;
+    }
+    const event = toRawLogEvent(entry);
+    if (!event) continue;
+    const turnId = rawTurnId(entry);
+    let turn = turnMap.get(turnId);
+    if (!turn) {
+      turn = { id: turnId, events: [] };
+      turnMap.set(turnId, turn);
+    }
+    turn.events.push(event);
+    eventCount++;
+  }
+  return { turns: [...turnMap.values()], eventCount, badLineCount };
+}
+
+function toRawLogEvent(entry: any): RawLogEventView | undefined {
+  const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const type = typeof payload.type === 'string' ? payload.type : typeof entry?.type === 'string' ? entry.type : 'unknown';
+  const timestamp = firstRawString(entry?.timestamp, payload.timestamp, payload.started_at, payload.completed_at);
+  const detail = stringifyRawEntry(entry);
+  const event = rawEventSummary(type, payload, entry);
+  if (!event.summary && !detail) return undefined;
+  return {
+    label: event.label,
+    tone: event.tone,
+    timestamp,
+    summary: event.summary || type,
+    detail,
+  };
+}
+
+function rawEventSummary(type: string, payload: any, entry: any): { label: string; tone: RawLogEventView['tone']; summary: string } {
+  if (type === 'task_started') return { label: '开始', tone: 'info', summary: firstRawString(payload.started_at, entry?.timestamp, 'task started') };
+  if (type === 'task_complete') return { label: '完成', tone: 'ok', summary: trimRawText(firstRawString(payload.last_agent_message, payload.completed_at, 'task complete')) };
+  if (type === 'task_failed') return { label: '失败', tone: 'err', summary: trimRawText(firstRawString(payload.error, payload.message, 'task failed')) };
+  if (type === 'turn_aborted') return { label: '停止', tone: 'warn', summary: trimRawText(firstRawString(payload.reason, 'turn aborted')) };
+  if (type === 'user_message') return { label: '用户', tone: 'info', summary: trimRawText(extractRawUserMessage(firstRawString(payload.message, payload.text))) };
+  if (type === 'agent_reasoning_raw_content') return { label: '思考', tone: 'info', summary: trimRawText(firstRawString(payload.text, payload.content)) };
+  if (type === 'agent_message') return { label: '消息', tone: 'info', summary: trimRawText(firstRawString(payload.message, payload.text, payload.content)) };
+  if (type === 'terminal_interaction') {
+    const command = firstRawString(payload.command);
+    const stdin = firstRawString(payload.stdin);
+    return { label: '终端', tone: 'info', summary: trimRawText([command ? `$ ${command}` : '', stdin ? `stdin:\n${stdin}` : ''].filter(Boolean).join('\n')) };
+  }
+  if (type === 'exec_command_end') {
+    const command = firstRawString(payload.command);
+    const output = firstRawString(payload.formatted_output, payload.aggregated_output, payload.stdout, payload.stderr);
+    const exit = typeof payload.exit_code === 'number' ? `exit ${payload.exit_code}` : '';
+    return { label: '命令', tone: payload.exit_code ? 'warn' : 'ok', summary: trimRawText([command ? `$ ${command}` : '', exit, output].filter(Boolean).join('\n')) };
+  }
+  if (type === 'token_count') {
+    const usage = payload?.info?.total_token_usage;
+    const input = pickRawNumber(usage, 'input_tokens');
+    const output = pickRawNumber(usage, 'output_tokens');
+    return { label: 'Token', tone: 'info', summary: `input ${input} / output ${output}` };
+  }
+  return { label: type.slice(0, 18), tone: 'info', summary: trimRawText(firstRawString(payload.message, payload.text, payload.content, JSON.stringify(payload))) };
+}
+
+function renderRawLogTurns(turns: RawLogTurnView[]): string {
+  if (!turns.length) return '<div class="empty">没有可解析的事件。原始 JSONL 仍可在下方查看。</div>';
+  return turns.map((turn) => (
+    '<section class="turn">' +
+      '<div class="turn-head"><strong>' + escapeHtml(turn.id === 'session' ? 'session events' : 'turn') + '</strong><span class="turn-id">' + escapeHtml(turn.id) + '</span></div>' +
+      turn.events.map((event) => (
+        '<div class="event ' + escapeHtml(event.tone) + '">' +
+          '<div><div class="event-label"><span class="dot"></span><strong>' + escapeHtml(event.label) + '</strong></div><div class="event-time">' + escapeHtml(event.timestamp || '-') + '</div></div>' +
+          '<div><p class="event-summary">' + escapeHtml(event.summary) + '</p><details><summary>事件 JSON</summary><pre>' + escapeHtml(event.detail) + '</pre></details></div>' +
+        '</div>'
+      )).join('') +
+    '</section>'
+  )).join('');
+}
+
+function rawTurnId(entry: any): string {
+  const payload = entry?.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  return firstRawString(payload.turn_id, payload.turnId, entry?.turn_id, entry?.turnId, 'session');
+}
+
+function firstRawString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function extractRawUserMessage(value: string): string {
+  const match = value.match(/<user_message>\s*([\s\S]*?)\s*<\/user_message>/i);
+  return match?.[1] || value;
+}
+
+function trimRawText(value: string): string {
+  const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (normalized.length <= 4000) return normalized;
+  return `${normalized.slice(0, 1800)}\n\n... truncated ...\n\n${normalized.slice(-1800)}`;
+}
+
+function stringifyRawEntry(entry: any): string {
+  try {
+    return JSON.stringify(entry, null, 2);
+  } catch {
+    return String(entry);
+  }
+}
+
+function pickRawNumber(value: any, key: string): number {
+  const picked = value?.[key];
+  return typeof picked === 'number' && Number.isFinite(picked) ? picked : 0;
 }
 
 function renderSessionInterruptedHtml(session: Session): string {
