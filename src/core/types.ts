@@ -43,6 +43,8 @@ export interface SessionWorkLog {
   endedAt?: string;
   durationMs?: number;
   status?: SessionWorkLogStatus;
+  changedFileCount?: number;
+  changedFiles?: string[];
 }
 
 export interface Session {

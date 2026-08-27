@@ -11,6 +11,7 @@
  */
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
+import { execFileSync } from 'node:child_process';
 import type { CliAdapter, SessionTokenUsage } from '../adapters/cli/types.js';
 import { IdleDetector } from '../utils/idle-detector.js';
 import { logger } from '../utils/logger.js';
@@ -67,6 +68,7 @@ interface Runtime {
   turnStopped: boolean;
   turnStartedAtMs?: number;
   turnWorkLogId?: string;
+  turnChangedFilesBaseline?: string[];
   lastCardStatus?: CardStatus;
   turnFinalBaselineKey?: string;
   pendingFlushStatus?: CardStatus;
@@ -442,6 +444,7 @@ export class ConversationManager {
     runtime.turnStopped = false;
     runtime.turnStartedAtMs = Date.now();
     runtime.turnWorkLogId = this.beginWorkLog(runtime.route, runtime.turnStartedAtMs);
+    runtime.turnChangedFilesBaseline = gitChangedFiles(runtime.route.workingDir);
     runtime.lastCardStatus = undefined;
     runtime.turnFinalBaselineKey = runtime.route.cliSessionId
       ? this.deps.cli.getSessionFinal?.(runtime.route.cliSessionId)?.key
@@ -784,6 +787,14 @@ export class ConversationManager {
     log.endedAt = new Date(endedAtMs).toISOString();
     log.durationMs = Number.isFinite(startedAtMs) ? Math.max(0, endedAtMs - startedAtMs) : 0;
     log.status = status;
+    const changedFiles = gitChangedFiles(runtime.route.workingDir);
+    if (changedFiles) {
+      const baseline = new Set(runtime.turnChangedFilesBaseline ?? []);
+      const touched = changedFiles.filter((file) => !baseline.has(file));
+      log.changedFiles = touched.slice(0, 20);
+      log.changedFileCount = touched.length;
+    }
+    runtime.turnChangedFilesBaseline = undefined;
     runtime.turnWorkLogId = undefined;
   }
 
@@ -801,6 +812,25 @@ export class ConversationManager {
     }
     for (const session of deleted) byId.set(session.sessionId, session);
     await this.deps.store.saveExpiredSessions([...byId.values()].sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt)));
+  }
+}
+
+function gitChangedFiles(cwd: string): string[] | undefined {
+  try {
+    const output = execFileSync('git', ['status', '--porcelain'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 2_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return output.split('\n')
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean)
+      .sort();
+  } catch {
+    return undefined;
   }
 }
 

@@ -16,16 +16,19 @@ import { logger } from './utils/logger.js';
 import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
+import { buildDailyReportSummary, type DailyReportTurn } from './core/daily-report.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
-import { buildFeedbackOwnerCard, buildMaintenanceCard, buildTerminalCard, buildThinkingCard, type FeedbackRating } from './im/lark/card-builder.js';
+import { buildDailyReportCard, buildFeedbackOwnerCard, buildMaintenanceCard, buildTerminalCard, buildThinkingCard, type FeedbackRating } from './im/lark/card-builder.js';
 import { startConsoleServer, TerminalStreamStore } from './console/server.js';
 import type { ImAdapter, ImChat, ImMessage, ImReaction } from './im/types.js';
 import type { Bot, ExpiredSession, FeedbackRecord, KnownChat, Session } from './core/types.js';
 import type { SessionStore } from './core/store.js';
 
 const DAILY_CLEANUP_HOUR = 3;
+const DAILY_REPORT_HOUR = 23;
+const DAILY_REPORT_MINUTE = 55;
 const TRAEX_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function main(): Promise<void> {
@@ -132,7 +135,15 @@ async function main(): Promise<void> {
       logger.warn(`traex 日志清理失败: ${error?.message ?? error}`);
     }
   };
-  const cleanupTimer = scheduleDailyCleanup(cleanupSessions, DAILY_CLEANUP_HOUR);
+  const sendDailyReport = async () => {
+    try {
+      await notifyDailyReport(im, activeBot, store, cfg.consolePublicUrl);
+    } catch (error: any) {
+      logger.warn(`发送今日战报失败 owner=${activeBot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
+    }
+  };
+  const cleanupTimer = scheduleDailyTask(cleanupSessions, DAILY_CLEANUP_HOUR, 0, '会话清理任务');
+  const dailyReportTimer = scheduleDailyTask(sendDailyReport, DAILY_REPORT_HOUR, DAILY_REPORT_MINUTE, '今日战报任务');
 
   await im.start({
     async onChatObserved(chat: ImChat): Promise<void> {
@@ -290,6 +301,7 @@ async function main(): Promise<void> {
   const shutdown = () => {
     logger.info('收到退出信号，关闭所有会话…');
     cleanupTimer.cancel();
+    dailyReportTimer.cancel();
     sessions.shutdownAll();
     consoleServer.close();
     im.stop().finally(() => process.exit(0));
@@ -427,14 +439,14 @@ function chatName(bot: Bot, chatId: string): string | undefined {
   return bot.knownChats?.find((chat) => chat.chatId === chatId)?.name;
 }
 
-function scheduleDailyCleanup(task: () => Promise<void>, hour: number): { cancel(): void } {
+function scheduleDailyTask(task: () => Promise<void>, hour: number, minute: number, label: string): { cancel(): void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancelled = false;
   const scheduleNext = (): void => {
     if (cancelled) return;
     const now = new Date();
     const next = new Date(now);
-    next.setHours(hour, 0, 0, 0);
+    next.setHours(hour, minute, 0, 0);
     if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
     const delayMs = next.getTime() - now.getTime();
     timer = setTimeout(() => {
@@ -443,7 +455,7 @@ function scheduleDailyCleanup(task: () => Promise<void>, hour: number): { cancel
       });
     }, delayMs);
     timer.unref?.();
-    logger.info(`会话清理任务已调度到 ${formatDateTime(next.toISOString())}`);
+    logger.info(`${label}已调度到 ${formatDateTime(next.toISOString())}`);
   };
   scheduleNext();
   return {
@@ -452,6 +464,59 @@ function scheduleDailyCleanup(task: () => Promise<void>, hour: number): { cancel
       if (timer) clearTimeout(timer);
     },
   };
+}
+
+async function notifyDailyReport(
+  im: ImAdapter,
+  bot: Bot,
+  store: SessionStore,
+  dashboardUrl: string,
+): Promise<void> {
+  const [current, expired] = await Promise.all([
+    store.loadSessions(),
+    store.loadExpiredSessions?.() ?? Promise.resolve([]),
+  ]);
+  const report = buildDailyReportSummary(current, expired);
+  const card = buildDailyReportCard({
+    dateLabel: report.dateLabel,
+    totalTurns: report.totalTurns,
+    completed: report.completed,
+    failed: report.failed,
+    stopped: report.stopped,
+    totalDuration: formatDuration(report.totalDurationMs),
+    busiestChat: report.busiestChat,
+    longestTurn: report.longestTurn ? reportTurnView(report.longestTurn) : undefined,
+    mostChangedTurn: report.mostChangedTurn ? changedTurnView(report.mostChangedTurn) : undefined,
+    remark: report.remark,
+    dashboardUrl,
+  });
+  await im.sendDirectCard(bot.ownerOpenId, card);
+  logger.info(`今日战报已发送 turns=${report.totalTurns} failed=${report.failed} stopped=${report.stopped}`);
+}
+
+function reportTurnView(turn: DailyReportTurn): { title: string; chat: string; duration: string; status: string } {
+  return {
+    title: turn.sessionTitle,
+    chat: turn.chatName || turn.chatId || '未知群聊',
+    duration: formatDuration(turn.durationMs),
+    status: reportStatusText(turn.status),
+  };
+}
+
+function changedTurnView(turn: DailyReportTurn): { title: string; chat: string; changedFileCount: number; files: string[] } {
+  return {
+    title: turn.sessionTitle,
+    chat: turn.chatName || turn.chatId || '未知群聊',
+    changedFileCount: turn.changedFileCount,
+    files: turn.changedFiles,
+  };
+}
+
+function reportStatusText(status: DailyReportTurn['status']): string {
+  if (status === 'completed') return '完成';
+  if (status === 'failed') return '失败';
+  if (status === 'stopped') return '停止';
+  return '未知';
 }
 
 async function notifyCleanupResult(
@@ -508,6 +573,16 @@ function formatRetention(ms: number): string {
   if (ms > 0 && ms % dayMs === 0) return `${ms / dayMs} 天以上`;
   if (ms > 0 && ms % hourMs === 0) return `${ms / hourMs} 小时以上`;
   return `${Math.round(ms / 1000)} 秒以上`;
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 分钟';
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return '不到 1 分钟';
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours} 小时${rest ? ` ${rest} 分钟` : ''}`;
 }
 
 function sessionSummary(session: Session): string {

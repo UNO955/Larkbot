@@ -212,12 +212,14 @@ function isExpiredSession(value: unknown): value is ExpiredSession {
 
 function isSessionWorkLog(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  const log = value as { id?: unknown; startedAt?: unknown; endedAt?: unknown; durationMs?: unknown; status?: unknown };
+  const log = value as { id?: unknown; startedAt?: unknown; endedAt?: unknown; durationMs?: unknown; status?: unknown; changedFileCount?: unknown; changedFiles?: unknown };
   return typeof log.id === 'string'
     && typeof log.startedAt === 'string'
     && (log.endedAt === undefined || typeof log.endedAt === 'string')
     && (log.durationMs === undefined || (typeof log.durationMs === 'number' && Number.isFinite(log.durationMs)))
-    && (log.status === undefined || log.status === 'completed' || log.status === 'failed' || log.status === 'stopped');
+    && (log.status === undefined || log.status === 'completed' || log.status === 'failed' || log.status === 'stopped')
+    && (log.changedFileCount === undefined || (typeof log.changedFileCount === 'number' && Number.isFinite(log.changedFileCount)))
+    && (log.changedFiles === undefined || (Array.isArray(log.changedFiles) && log.changedFiles.every((item) => typeof item === 'string')));
 }
 
 function isFeedbackRecord(value: unknown): value is FeedbackRecord {

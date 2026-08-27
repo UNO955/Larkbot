@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFeedbackOwnerCard, buildTerminalCard, buildThinkingCard } from '../src/im/lark/card-builder.js';
+import { buildDailyReportCard, buildFeedbackOwnerCard, buildTerminalCard, buildThinkingCard } from '../src/im/lark/card-builder.js';
 
 describe('buildTerminalCard', () => {
   it('运行态使用蓝色状态头和原生 Markdown 正文', () => {
@@ -264,5 +264,41 @@ describe('buildTerminalCard', () => {
     expect(stopped.header.title.content).toBe('⏹️ 已停止分析');
     expect(stopped.elements[1].actions[1].text.content).toBe('分析已停止');
     expect(stopped.elements[1].actions[1].disabled).toBe(true);
+  });
+});
+
+describe('buildDailyReportCard', () => {
+  it('展示每日统计和改动最多的一轮', () => {
+    const card: any = buildDailyReportCard({
+      dateLabel: '2026/8/27',
+      totalTurns: 5,
+      completed: 3,
+      failed: 1,
+      stopped: 1,
+      totalDuration: '2 小时 10 分钟',
+      busiestChat: { label: '工程群', count: 4 },
+      longestTurn: {
+        title: '修复构建',
+        chat: '工程群',
+        duration: '45 分钟',
+        status: '完成',
+      },
+      mostChangedTurn: {
+        title: '重构控制台',
+        chat: '工程群',
+        changedFileCount: 6,
+        files: ['src/a.ts', 'src/b.ts'],
+      },
+      remark: '今天有刹车也有报错，值得明早扫一眼复盘。',
+      dashboardUrl: 'http://console',
+    }).payload;
+
+    expect(card.header.title.content).toBe('larkbot 今日战报');
+    expect(card.header.template).toBe('orange');
+    expect(card.elements[0].content).toContain('处理轮次：5 轮');
+    expect(card.elements[0].content).toContain('工程群（4 轮）');
+    expect(card.elements[0].content).toContain('重构控制台');
+    expect(card.elements[1].content).toContain('src/a.ts');
+    expect(card.elements[2].actions[0].multi_url.url).toBe('http://console');
   });
 });

@@ -44,6 +44,30 @@ export interface MaintenanceCardOpts {
   details?: string[];
 }
 
+export interface DailyReportCardOpts {
+  dateLabel: string;
+  totalTurns: number;
+  completed: number;
+  failed: number;
+  stopped: number;
+  totalDuration: string;
+  busiestChat?: { label: string; count: number };
+  longestTurn?: {
+    title: string;
+    chat: string;
+    duration: string;
+    status: string;
+  };
+  mostChangedTurn?: {
+    title: string;
+    chat: string;
+    changedFileCount: number;
+    files: string[];
+  };
+  remark: string;
+  dashboardUrl: string;
+}
+
 export type FeedbackRating = 'positive' | 'negative';
 export type FeedbackState = FeedbackRating | 'negative_pending';
 
@@ -464,6 +488,60 @@ export function buildMaintenanceCard(opts: MaintenanceCardOpts): ImCard {
         title: {
           tag: 'plain_text',
           content: opts.title?.trim() || 'larkbot 维护通知',
+        },
+      },
+      elements,
+    },
+  };
+}
+
+export function buildDailyReportCard(opts: DailyReportCardOpts): ImCard {
+  const dashboardUrl = opts.dashboardUrl.trim();
+  const lines = [
+    `**${escapeMarkdownText(opts.dateLabel)} 今日战报**`,
+    escapeMarkdownText(opts.remark),
+    '',
+    `处理轮次：${opts.totalTurns} 轮`,
+    `完成 / 失败 / 停止：${opts.completed} / ${opts.failed} / ${opts.stopped}`,
+    `累计处理时长：${escapeMarkdownText(opts.totalDuration)}`,
+    `最忙群聊：${escapeMarkdownText(opts.busiestChat ? `${opts.busiestChat.label}（${opts.busiestChat.count} 轮）` : '暂无')}`,
+    `最长一轮：${escapeMarkdownText(opts.longestTurn ? `${opts.longestTurn.title}｜${opts.longestTurn.chat}｜${opts.longestTurn.duration}｜${opts.longestTurn.status}` : '暂无')}`,
+    `改动最多：${escapeMarkdownText(opts.mostChangedTurn ? `${opts.mostChangedTurn.title}｜${opts.mostChangedTurn.chat}｜${opts.mostChangedTurn.changedFileCount} 个文件` : '暂无可识别文件改动')}`,
+  ];
+  const elements: unknown[] = [{ tag: 'markdown', content: lines.join('\n') }];
+  if (opts.mostChangedTurn?.files.length) {
+    elements.push({
+      tag: 'markdown',
+      text_size: 'notation_small_v2',
+      content: `<font color='grey'>文件：${opts.mostChangedTurn.files.slice(0, 8).map(escapeMarkdownText).join('、')}</font>`,
+    });
+  }
+  if (dashboardUrl) {
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: '打开 Dashboard' },
+          type: 'primary',
+          multi_url: {
+            url: dashboardUrl,
+            pc_url: dashboardUrl,
+            android_url: dashboardUrl,
+            ios_url: dashboardUrl,
+          },
+        },
+      ],
+    });
+  }
+  return {
+    payload: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: opts.failed > 0 ? 'orange' : 'green',
+        title: {
+          tag: 'plain_text',
+          content: 'larkbot 今日战报',
         },
       },
       elements,
