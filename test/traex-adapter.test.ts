@@ -165,4 +165,24 @@ describe('traex adapter spawnSpec', () => {
 
     expect(createTraexAdapter().getSessionFinal?.('trae-1')).toBeUndefined();
   });
+
+  it('读取 traex rollout 原生日志供控制台诊断', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), [
+      JSON.stringify({
+        timestamp: '2026-08-13T13:00:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'agent_reasoning_raw_content', text: 'raw reasoning' },
+      }),
+    ].join('\n') + '\n');
+
+    const raw = createTraexAdapter().getSessionRawLog?.('trae-1');
+    expect(raw?.path).toContain('rollout-2026-08-13T21-15-35-trae-1.jsonl');
+    expect(raw?.content).toContain('agent_reasoning_raw_content');
+    expect(raw?.content).toContain('raw reasoning');
+    expect(raw?.updatedAt).toBeTruthy();
+  });
 });

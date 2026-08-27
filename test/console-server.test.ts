@@ -56,6 +56,13 @@ describe('console terminal page', () => {
       store,
       botId: 'bot-1',
       terminalStore,
+      cli: {
+        getSessionRawLog: () => ({
+          path: '/tmp/rollout-trae-1.jsonl',
+          updatedAt: '2026-01-01T00:01:00.000Z',
+          content: '{"type":"event_msg","payload":{"type":"agent_reasoning_raw_content","text":"raw process"}}\n',
+        }),
+      },
     });
     const { port } = server.address() as AddressInfo;
     const base = `http://127.0.0.1:${port}`;
@@ -65,6 +72,21 @@ describe('console terminal page', () => {
     const html = await page.text();
     expect(html).toContain('@xterm/xterm');
     expect(html).toContain('/api/terminal/lm-1/events');
+    expect(html).not.toContain('raw process');
+
+    const sessionsPage = await fetch(`${base}/sessions`);
+    expect(sessionsPage.status).toBe(200);
+    const sessionsHtml = await sessionsPage.text();
+    expect(sessionsHtml).toContain('底层日志');
+    expect(sessionsHtml).toContain('/raw-log');
+
+    const rawPage = await fetch(`${base}/sessions/lm-1/raw-log`);
+    expect(rawPage.status).toBe(200);
+    const rawHtml = await rawPage.text();
+    expect(rawHtml).toContain('底层日志');
+    expect(rawHtml).toContain('/tmp/rollout-trae-1.jsonl');
+    expect(rawHtml).toContain('agent_reasoning_raw_content');
+    expect(rawHtml).toContain('raw process');
 
     terminalStore.redactInput('lm-1', [
       '<larkbot_reminder>',

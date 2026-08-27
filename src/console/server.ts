@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
+import type { CliAdapter, SessionRawLog } from '../adapters/cli/types.js';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -13,6 +14,7 @@ export interface ConsoleServerOpts {
   port: number;
   store: SessionStore;
   botId: string;
+  cli?: Pick<CliAdapter, 'getSessionRawLog'>;
   traceStore?: TurnTraceStore;
   terminalStore?: TerminalStreamStore;
   sessionManager?: {
@@ -298,6 +300,17 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       const session = (await listSessions(opts)).find((item) => item.sessionId === sessionId);
       if (!session) throw httpError(404, 'session_not_found');
       sendHtml(res, renderTerminalHtml(session));
+      return;
+    }
+    const sessionRawLogMatch = url.pathname.match(/^\/sessions\/([^/]+)\/raw-log$/);
+    if (req.method === 'GET' && sessionRawLogMatch) {
+      const sessionId = decodeURIComponent(sessionRawLogMatch[1]);
+      const session = (await listSessions(opts)).find((item) => item.sessionId === sessionId);
+      if (!session) throw httpError(404, 'session_not_found');
+      if (!session.cliSessionId || !opts.cli?.getSessionRawLog) throw httpError(404, 'raw_log_not_available');
+      const rawLog = opts.cli.getSessionRawLog(session.cliSessionId);
+      if (!rawLog) throw httpError(404, 'raw_log_not_found');
+      sendHtml(res, renderRawLogHtml(session, rawLog));
       return;
     }
     const terminalEventsMatch = url.pathname.match(/^\/api\/terminal\/([^/]+)\/events$/);
@@ -2800,6 +2813,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       }
       sessionsBody.innerHTML = visibleSessions.map((s) => {
         const closed = s.status === 'closed';
+        const rawLogButton = s.cliSessionId
+          ? '<a href="/sessions/' + encodeURIComponent(s.sessionId) + '/raw-log" target="_blank"><button class="ghost" type="button"><svg class="icon sm"><use href="#i-database"></use></svg>底层日志</button></a>'
+          : '<button class="ghost" type="button" disabled><svg class="icon sm"><use href="#i-database"></use></svg>底层日志</button>';
         return '<tr>' +
           '<td><span class="line"><strong>' + esc(s.title || s.sessionId) + '</strong></span><span class="line muted"><code>' + esc(s.sessionId) + '</code></span></td>' +
           '<td><span class="status ' + esc(s.status) + '">' + esc(statusText(s.status)) + '</span></td>' +
@@ -2809,6 +2825,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
           '<td><span class="line muted">' + esc(s.workingDir || '-') + '</span><span class="line muted">' + esc(s.threadId || s.rootMessageId || '-') + '</span></td>' +
           '<td><span class="line muted">创建 ' + esc(formatTime(s.createdAt)) + '</span><span class="line muted">最后 ' + esc(formatTime(s.lastMessageAt)) + '</span></td>' +
           '<td><div class="actions">' +
+            rawLogButton +
             '<button type="button" class="ghost" data-action="close" data-session="' + esc(s.sessionId) + '"' + (closed ? ' disabled' : '') + '><svg class="icon sm"><use href="#i-x"></use></svg>关闭</button>' +
             '<button type="button" class="danger" data-action="delete" data-session="' + esc(s.sessionId) + '"><svg class="icon sm"><use href="#i-trash"></use></svg>删除</button>' +
           '</div></td>' +
@@ -4565,6 +4582,44 @@ function renderTerminalHtml(session: Session): string {
     });
     events.onerror = () => setStatus('disconnected', 'err');
   </script>
+</body>
+</html>`;
+}
+
+function renderRawLogHtml(session: Session, rawLog: SessionRawLog): string {
+  const title = `${session.title || session.sessionId} · 底层日志`;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #0f172a; color: #d8dee9; }
+    body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid #263247; background: rgba(15, 23, 42, .96); }
+    h1 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .meta { color: #94a3b8; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+    main { padding: 14px 16px 24px; }
+    .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; color: #cbd5e1; font-size: 12px; }
+    .pill { border: 1px solid #334155; border-radius: 999px; padding: 4px 8px; background: #111827; }
+    pre { margin: 0; padding: 14px; border: 1px solid #263247; border-radius: 8px; background: #020617; color: #d8dee9; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="meta">${escapeHtml(session.sessionId.slice(0, 8))}</div>
+  </header>
+  <main>
+    <div class="summary">
+      <span class="pill">cli: ${escapeHtml(session.cliSessionId || '-')}</span>
+      <span class="pill">updated: ${escapeHtml(rawLog.updatedAt || '-')}</span>
+      <span class="pill">path: ${escapeHtml(rawLog.path)}</span>
+    </div>
+    <pre>${escapeHtml(rawLog.content)}</pre>
+  </main>
 </body>
 </html>`;
 }

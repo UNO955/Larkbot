@@ -38,6 +38,12 @@ export interface SessionFinalMessage {
   text: string;
 }
 
+export interface SessionRawLog {
+  path: string;
+  content: string;
+  updatedAt?: string;
+}
+
 export interface CliAdapter {
   id: CliId;
 
@@ -55,6 +61,9 @@ export interface CliAdapter {
 
   /** 读取 CLI 原生会话最新完成 turn 的最终回复。 */
   getSessionFinal?(cliSessionId: string): SessionFinalMessage | undefined;
+
+  /** 读取 CLI 原生会话底层日志。仅供控制台诊断使用，不进入用户卡片。 */
+  getSessionRawLog?(cliSessionId: string): SessionRawLog | undefined;
 
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：

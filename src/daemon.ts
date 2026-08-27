@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   const store = new JsonSessionStore();
   const terminalStore = new TerminalStreamStore();
   let activeBot = await loadActiveBot(store, cfg);
+  const cli = createTraexAdapter();
 
   const im = createLarkAdapter({
     appId: activeBot.appId,
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   // ConversationManager 只依赖“发卡/改卡/回文本”的抽象动作；
   // 飞书 API 细节留在 adapter 层，核心会话逻辑不绑定具体 IM 平台。
   const sessions = new ConversationManager({
-    cli: createTraexAdapter(),
+    cli,
     store,
     post: async (threadId, text, status, replyAnchorMessageId, _replyToName, replySignature, replyToId, argosSource, knowledge) => {
       return im.sendCard(threadId, buildTerminalCard({ body: text, status, replySignature, replyToId, argosUrlTemplate: cfg.argosUrlTemplate, argosSource, knowledge }), replyAnchorMessageId);
@@ -91,6 +92,7 @@ async function main(): Promise<void> {
     port: cfg.consolePort,
     store,
     botId: activeBot.id,
+    cli,
     terminalStore,
     sessionManager: sessions,
     onBotUpdated(bot) {

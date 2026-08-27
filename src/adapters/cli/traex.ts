@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { CliAdapter, SessionFinalMessage, SessionTokenUsage, SpawnSpec } from './types.js';
+import type { CliAdapter, SessionFinalMessage, SessionRawLog, SessionTokenUsage, SpawnSpec } from './types.js';
 
 export function createTraexAdapter(): CliAdapter {
   return {
@@ -126,6 +126,11 @@ export function createTraexAdapter(): CliAdapter {
     getSessionFinal(cliSessionId: string): SessionFinalMessage | undefined {
       const rolloutPath = findTraexRolloutPath(cliSessionId);
       return rolloutPath ? readTraexSessionFinal(rolloutPath) : undefined;
+    },
+
+    getSessionRawLog(cliSessionId: string): SessionRawLog | undefined {
+      const rolloutPath = findTraexRolloutPath(cliSessionId);
+      return rolloutPath ? readTraexRawLog(rolloutPath) : undefined;
     },
 
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
@@ -262,6 +267,21 @@ function readTraexSessionFinal(path: string): SessionFinalMessage | undefined {
       if (final) latest = final;
     }
     return latest;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTraexRawLog(path: string): SessionRawLog | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const content = readFileSync(path, 'utf8');
+    const updatedAt = new Date(statSync(path).mtimeMs).toISOString();
+    return {
+      path,
+      content: content.length > 500_000 ? content.slice(-500_000) : content,
+      updatedAt,
+    };
   } catch {
     return undefined;
   }
