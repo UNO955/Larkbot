@@ -55,6 +55,28 @@ describe('parseMessageEvent', () => {
     expect(r!.replyToMessageId).toBe('om_parent');
   });
 
+  it('解析图文混合 post 消息中的正文、@ 和图片', () => {
+    const r = parseMessageEvent(evt({
+      messageType: 'post',
+      content: JSON.stringify({
+        content: [
+          [
+            { tag: 'at', user_id: 'ou_bot', user_name: '调试小助手' },
+            { tag: 'text', text: ' 看一下这个问题' },
+          ],
+          [
+            { tag: 'img', image_key: 'img_1' },
+          ],
+        ],
+      }),
+    }));
+
+    expect(r).not.toBeNull();
+    expect(r!.text).toBe('看一下这个问题');
+    expect(r!.mentionedOpenIds).toContain('ou_bot');
+    expect(r!.resources).toEqual([{ type: 'image', key: 'img_1' }]);
+  });
+
   it('剥离 @ 占位符得到干净正文', () => {
     const r = parseMessageEvent(evt({
       content: JSON.stringify({ text: '@_user_1 部署一下' }),
