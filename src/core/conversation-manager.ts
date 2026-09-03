@@ -909,9 +909,14 @@ function pad2(value: number): string {
 
 function cleanAnswer(answer: string): string {
   const text = stripLarkbotEvidence(answer).trim();
-  // BOTMUX_* is kept only for older rollout history.
-  if (text === 'LARKBOT_NOTHING_TO_SEND' || text === 'BOTMUX_NOTHING_TO_SEND') return '';
+  if (isEmptyAnswerSentinel(text)) return '';
   return text;
+}
+
+function isEmptyAnswerSentinel(text: string): boolean {
+  // Legacy BOTMUX_* is kept only to suppress older terminal snapshots.
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim())?.trim();
+  return firstLine === 'LARKBOT_NOTHING_TO_SEND' || firstLine === 'BOTMUX_NOTHING_TO_SEND';
 }
 
 function extractKnowledgeObservation(trace: string, answer: string): KnowledgeObservation {

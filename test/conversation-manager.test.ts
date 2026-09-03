@@ -906,4 +906,52 @@ describe('ConversationManager', () => {
     expect(post).not.toHaveBeenCalled();
     manager.shutdownAll();
   });
+
+  it('终端兜底输出以 legacy botmux 空回复哨兵开头时不发送最终回复卡', async () => {
+    const session = route({ hasHistory: false, cliSessionId: undefined });
+    const store: SessionStore = {
+      loadBots: async () => [],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    const cli: CliAdapter = {
+      id: 'traex',
+      spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+      writeInput: vi.fn(async () => ({ submitted: true, cliSessionId: 'trae-new' })),
+      findSessionId: () => undefined,
+      getSessionFinal: vi.fn(() => undefined),
+      readyPattern: /❯/,
+      completionPattern: /TURN_DONE/,
+    };
+    const child = fakePty();
+    const post = vi.fn(async () => 'card-1');
+    const addReaction = vi.fn(async () => 'reaction-1');
+    const manager = new ConversationManager({
+      cli,
+      store,
+      spawnPty: () => child,
+      post,
+      patch: async () => undefined,
+      postTrace: async () => 'trace-card-1',
+      patchTrace: async () => undefined,
+      notify: async () => undefined,
+      addReaction,
+      removeReaction: async () => undefined,
+      createTrace: () => undefined,
+      updateTrace: () => undefined,
+      traceUrl: (id) => `http://console/trace/${id}`,
+      isStreamingCardDisabled: () => false,
+    });
+
+    await manager.add(session);
+    await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+    child.emitData('❯ ');
+    await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+    child.emitData('\r\nBOTMUX_NOTHING_TO_SEND\r\n\r\nInitialize Larkbot environment\r\nTURN_DONE');
+    await vi.waitFor(() => expect(addReaction).toHaveBeenCalledWith('om-current-user', 'DONE'), { timeout: 3000 });
+    expect(post).not.toHaveBeenCalled();
+    manager.shutdownAll();
+  });
 });

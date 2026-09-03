@@ -396,8 +396,9 @@ function extractTaskCompleteFinal(entry: any): SessionFinalMessage | undefined {
 }
 
 function isEmptyFinalSentinel(text: string): boolean {
-  // BOTMUX_* is kept only for older rollout history.
-  return text === 'LARKBOT_NOTHING_TO_SEND' || text === 'BOTMUX_NOTHING_TO_SEND';
+  // Legacy BOTMUX_* is kept only to suppress older rollout history.
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim());
+  return firstLine === 'LARKBOT_NOTHING_TO_SEND' || firstLine === 'BOTMUX_NOTHING_TO_SEND';
 }
 
 function extractModel(entry: any): string {

@@ -166,6 +166,26 @@ describe('traex adapter spawnSpec', () => {
     expect(createTraexAdapter().getSessionFinal?.('trae-1')).toBeUndefined();
   });
 
+  it('忽略以 legacy botmux 空回复哨兵开头但混入启动文本的 final', () => {
+    const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
+    process.env.TRAE_HOME = home;
+    const sessionDir = join(home, 'cli', 'sessions', '2026', '08', '13');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(sessionDir, 'rollout-2026-08-13T21-15-35-trae-1.jsonl'), [
+      JSON.stringify({
+        timestamp: '2026-08-13T13:00:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-empty',
+          last_agent_message: 'BOTMUX_NOTHING_TO_SEND\n\nInitialize Larkbot environment',
+        },
+      }),
+    ].join('\n') + '\n');
+
+    expect(createTraexAdapter().getSessionFinal?.('trae-1')).toBeUndefined();
+  });
+
   it('读取 traex rollout 原生日志供控制台诊断', () => {
     const home = mkdtempSync(join(tmpdir(), 'lm-trae-home-'));
     process.env.TRAE_HOME = home;
