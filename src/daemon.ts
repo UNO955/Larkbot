@@ -17,6 +17,7 @@ import { createLarkAdapter } from './im/lark/client.js';
 import { createTraexAdapter } from './adapters/cli/traex.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { buildDailyReportSummary, type DailyReportTurn } from './core/daily-report.js';
+import { cleanupMetricFiles, METRIC_RETENTION_MS, METRIC_SAMPLE_INTERVAL_MS, sampleAndStoreMetrics } from './core/metrics.js';
 import { JsonSessionStore } from './core/store.js';
 import { buildFollowUpPrompt, buildOpeningPrompt, buildThreadPrompt } from './core/prompt.js';
 import { RECEIVED_REACTION } from './core/reactions.js';
@@ -134,6 +135,14 @@ async function main(): Promise<void> {
     } catch (error: any) {
       logger.warn(`traex 日志清理失败: ${error?.message ?? error}`);
     }
+    try {
+      const result = await cleanupMetricFiles(undefined, METRIC_RETENTION_MS);
+      if (result.deleted > 0) {
+        logger.info(`指标日志清理完成 deleted=${result.deleted}`);
+      }
+    } catch (error: any) {
+      logger.warn(`指标日志清理失败: ${error?.message ?? error}`);
+    }
   };
   const sendDailyReport = async () => {
     try {
@@ -144,6 +153,9 @@ async function main(): Promise<void> {
   };
   const cleanupTimer = scheduleDailyTask(cleanupSessions, DAILY_CLEANUP_HOUR, 0, '会话清理任务');
   const dailyReportTimer = scheduleDailyTask(sendDailyReport, DAILY_REPORT_HOUR, DAILY_REPORT_MINUTE, '今日战报任务');
+  const metricsTimer = scheduleIntervalTask(async () => {
+    await sampleAndStoreMetrics({ store, projectDir: activeBot.cwd });
+  }, METRIC_SAMPLE_INTERVAL_MS, '指标采样任务');
 
   await im.start({
     async onChatObserved(chat: ImChat): Promise<void> {
@@ -302,6 +314,7 @@ async function main(): Promise<void> {
     logger.info('收到退出信号，关闭所有会话…');
     cleanupTimer.cancel();
     dailyReportTimer.cancel();
+    metricsTimer.cancel();
     sessions.shutdownAll();
     consoleServer.close();
     im.stop().finally(() => process.exit(0));
@@ -458,6 +471,43 @@ function scheduleDailyTask(task: () => Promise<void>, hour: number, minute: numb
     logger.info(`${label}已调度到 ${formatDateTime(next.toISOString())}`);
   };
   scheduleNext();
+  return {
+    cancel() {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+function scheduleIntervalTask(task: () => Promise<void>, intervalMs: number, label: string): { cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelled = false;
+  let running = false;
+  const run = async (): Promise<void> => {
+    if (cancelled) return;
+    if (running) {
+      scheduleNext();
+      return;
+    }
+    running = true;
+    try {
+      await task();
+    } catch (error: any) {
+      logger.warn(`${label}失败: ${error?.message ?? error}`);
+    } finally {
+      running = false;
+      scheduleNext();
+    }
+  };
+  const scheduleNext = (): void => {
+    if (cancelled) return;
+    timer = setTimeout(() => {
+      void run();
+    }, intervalMs);
+    timer.unref?.();
+  };
+  scheduleNext();
+  logger.info(`${label}已启动，interval=${intervalMs}ms`);
   return {
     cancel() {
       cancelled = true;
