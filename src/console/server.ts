@@ -1049,7 +1049,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   const grafanaAction = grafanaUrl
     ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`
     : `<a class="primary-button" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg>先看本地运行趋势</a>`;
-  const runtimeGrafanaButton = `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`;
+  const headerGrafanaButton = page === 'runtime'
+    ? `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`
+    : '';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2163,6 +2165,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         <div class="header-actions">
           <span id="page-status" class="page-status"></span>
           <button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+          ${headerGrafanaButton}
           <button id="top-save" type="submit" form="bot-form"><svg class="icon sm"><use href="#i-save"></use></svg>保存</button>
         </div>
       </header>
@@ -2297,7 +2300,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
             <div class="sub">从指标 JSONL 读取历史采样点。点击任意图表位置可选择观测时间点。</div>
           </div>
           <div class="metrics-controls">
-            ${runtimeGrafanaButton}
             <label>时间范围
               <select id="metrics-range">
                 <option value="1h">近 1 小时</option>
