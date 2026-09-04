@@ -245,7 +245,7 @@ describe('console terminal page', () => {
     expect(html).toContain('运行趋势');
     expect(html).toContain('/api/metrics?');
     expect(html).toContain('metrics-from');
-    expect(html).toContain('打开重型监控');
+    expect(html).toContain('查看更多');
     expect(html).toContain('href="/grafana"');
 
     const api = await fetch(`${base}/api/metrics?range=1h`);
@@ -279,7 +279,7 @@ describe('console terminal page', () => {
 
     const runtimePage = await fetch(`http://127.0.0.1:${port}/runtime`);
     const runtimeHtml = await runtimePage.text();
-    expect(runtimeHtml).toContain('打开重型监控');
+    expect(runtimeHtml).toContain('查看更多');
     expect(runtimeHtml).toContain('href="http://grafana.example/d/larkbot-runtime/larkbot-runtime"');
   });
 

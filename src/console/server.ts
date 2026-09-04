@@ -1047,9 +1047,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   const grafanaStatusText = grafanaUrl ? '已配置' : '未配置';
   const grafanaTargetText = grafanaUrl || '未配置 GRAFANA_PUBLIC_URL';
   const grafanaAction = grafanaUrl
-    ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>打开重型监控</a>`
+    ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`
     : `<a class="primary-button" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg>先看本地运行趋势</a>`;
-  const runtimeGrafanaButton = `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>打开重型监控</a>`;
+  const runtimeGrafanaButton = `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
