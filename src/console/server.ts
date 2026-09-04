@@ -31,7 +31,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'runtime' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
+type ConsolePage = 'overview' | 'runtime' | 'grafana' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -48,6 +48,11 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '运行趋势',
     eyebrow: 'Runtime metrics',
     copy: '查看采样落盘后的历史趋势，用于回看故障时间点附近的系统负载和会话状态。',
+  },
+  grafana: {
+    title: 'Grafana',
+    eyebrow: 'Prometheus dashboard',
+    copy: '查看 Prometheus / Grafana 接入状态，配置后可跳转到标准监控面板。',
   },
   chats: {
     title: '群聊',
@@ -1003,6 +1008,7 @@ function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/') return 'overview';
   if (pathname === '/system') return 'overview';
   if (pathname === '/runtime') return 'runtime';
+  if (pathname === '/grafana') return 'grafana';
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
@@ -1036,9 +1042,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   const pageMeta = consolePages[page];
   const navClass = (item: ConsolePage) => item === page ? 'nav-item active' : 'nav-item';
   const grafanaUrl = normalizeOptionalUrl(opts.grafanaPublicUrl);
-  const grafanaNav = grafanaUrl
-    ? `<a class="nav-item" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>`
-    : '';
+  const grafanaHref = grafanaUrl || '/grafana';
+  const grafanaTarget = grafanaUrl ? ' target="_blank" rel="noreferrer"' : '';
+  const grafanaClass = grafanaUrl ? 'nav-item' : navClass('grafana');
+  const grafanaStatusText = grafanaUrl ? '已配置' : '未配置';
+  const grafanaTargetText = grafanaUrl || '未配置 GRAFANA_PUBLIC_URL';
+  const grafanaAction = grafanaUrl
+    ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>打开 Grafana</a>`
+    : `<a class="primary-button" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg>先看本地运行趋势</a>`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1338,6 +1349,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     }
     .page-config .content-frame,
     .page-runtime .content-frame,
+    .page-grafana .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
     .page-sessions .content-frame,
@@ -1346,6 +1358,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     }
     .page-overview #region-config,
     .page-overview #region-runtime,
+    .page-overview #region-grafana,
     .page-overview #region-chats,
     .page-overview #region-feedback,
     .page-overview #region-sessions,
@@ -1353,6 +1366,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .page-config #region-health,
     .page-config #region-system,
     .page-config #region-runtime,
+    .page-config #region-grafana,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-sessions,
@@ -1361,6 +1375,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .page-chats #region-system,
     .page-chats #region-runtime,
     .page-chats #region-config,
+    .page-chats #region-grafana,
     .page-chats #region-feedback,
     .page-chats #region-sessions,
     .page-chats #region-logs,
@@ -1369,6 +1384,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .page-feedback #region-runtime,
     .page-feedback #region-config,
     .page-feedback #region-chats,
+    .page-feedback #region-grafana,
     .page-feedback #region-sessions,
     .page-feedback #region-logs,
     .page-sessions #region-health,
@@ -1377,6 +1393,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .page-sessions #region-config,
     .page-sessions #region-chats,
     .page-sessions #region-feedback,
+    .page-sessions #region-grafana,
     .page-sessions #region-logs,
     .page-logs #region-health,
     .page-logs #region-system,
@@ -1385,17 +1402,28 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .page-logs #region-feedback,
     .page-logs #region-sessions,
     .page-logs #region-runtime,
+    .page-logs #region-grafana,
+    .page-grafana #region-health,
+    .page-grafana #region-system,
+    .page-grafana #region-runtime,
+    .page-grafana #region-config,
+    .page-grafana #region-chats,
+    .page-grafana #region-feedback,
+    .page-grafana #region-sessions,
+    .page-grafana #region-logs,
     .page-runtime #region-health,
     .page-runtime #region-system,
     .page-runtime #region-config,
     .page-runtime #region-chats,
     .page-runtime #region-feedback,
     .page-runtime #region-sessions,
-    .page-runtime #region-logs {
+    .page-runtime #region-logs,
+    .page-runtime #region-grafana {
       display: none;
     }
     .page-config .observer-column,
     .page-runtime .observer-column,
+    .page-grafana .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
     .page-sessions .observer-column,
@@ -2114,7 +2142,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="${navClass('runtime')}" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
-        ${grafanaNav}
+        <a class="${grafanaClass}" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -2318,6 +2346,29 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
           <div class="info-item"><span>会话</span><strong id="metrics-selected-session">-</strong></div>
           <div class="info-item"><span>结果</span><strong id="metrics-selected-result">-</strong></div>
         </div>
+      </div>
+    </section>
+    <section id="region-grafana" class="card">
+      <div class="toolbar">
+        <div>
+          <div class="section-title">
+            <span class="title-icon"><svg class="icon"><use href="#i-activity"></use></svg></span>
+            <h2>Grafana 监控</h2>
+          </div>
+          <div class="sub">Prometheus 从 larkbot 的 /metrics 拉取指标，Grafana 负责重型趋势面板。</div>
+        </div>
+        ${grafanaAction}
+      </div>
+      <div class="info-grid">
+        <div class="info-item"><span>Grafana 状态</span><strong>${escapeHtml(grafanaStatusText)}</strong></div>
+        <div class="info-item"><span>Dashboard 地址</span><strong>${escapeHtml(grafanaTargetText)}</strong></div>
+        <div class="info-item"><span>Prometheus 抓取地址</span><strong>/metrics</strong></div>
+        <div class="info-item"><span>本地兜底页面</span><strong>/runtime</strong></div>
+      </div>
+      <div class="empty-state">
+        <svg class="icon"><use href="#i-shield"></use></svg>
+        <strong>${grafanaUrl ? 'Grafana 已配置，可以从左侧入口打开。' : 'Grafana 服务还没有配置到控制台。'}</strong>
+        <span>${grafanaUrl ? '如果页面打不开，优先检查 Prometheus/Grafana 进程和端口映射。' : '开发机启动 Grafana 后，在 .env 中配置 GRAFANA_PUBLIC_URL，再重启 larkbot，左侧入口会直接跳转到 dashboard。'}</span>
       </div>
     </section>
     <section id="region-config" class="card">

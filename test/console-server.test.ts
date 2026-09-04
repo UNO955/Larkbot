@@ -245,7 +245,8 @@ describe('console terminal page', () => {
     expect(html).toContain('运行趋势');
     expect(html).toContain('/api/metrics?');
     expect(html).toContain('metrics-from');
-    expect(html).not.toContain('>Grafana<');
+    expect(html).toContain('>Grafana<');
+    expect(html).toContain('href="/grafana"');
 
     const api = await fetch(`${base}/api/metrics?range=1h`);
     expect(api.status).toBe(200);
@@ -254,7 +255,7 @@ describe('console terminal page', () => {
     expect(payload.samples[0].larkbot.activeSessions).toBe(1);
   });
 
-  it('配置 Grafana 地址后才展示 Grafana 入口', async () => {
+  it('默认展示 Grafana 状态页，配置地址后入口直连 dashboard', async () => {
     const store: SessionStore = {
       loadBots: async () => [{ ...bot, cwd: process.cwd() }],
       saveBots: async () => undefined,
@@ -270,7 +271,7 @@ describe('console terminal page', () => {
     });
     const { port } = server.address() as AddressInfo;
 
-    const page = await fetch(`http://127.0.0.1:${port}/runtime`);
+    const page = await fetch(`http://127.0.0.1:${port}/grafana`);
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('>Grafana<');
