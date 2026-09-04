@@ -1136,7 +1136,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
       color: var(--danger);
       box-shadow: none;
     }
-    #status { color: var(--text-soft); font-size: 13px; }
     .warn { display: flex; align-items: flex-start; gap: 8px; background: var(--warning-soft); color: var(--warning); border: 1px solid oklch(87% 0.075 78); border-radius: var(--radius); padding: 10px 12px; font-size: 13px; line-height: 1.5; }
     .warn .icon { margin-top: 2px; }
     .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--border); background: var(--surface-soft); }
@@ -1353,14 +1352,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .workspace-header h1 { font-size: 30px; letter-spacing: 0; }
     .workspace-copy { margin: 8px 0 0; color: var(--text-soft); line-height: 1.6; max-width: 760px; }
     .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .page-status {
-      min-width: 90px;
-      color: var(--text-muted);
-      font-size: 13px;
-      font-weight: 750;
-      text-align: right;
-    }
-    .page-status.error { color: var(--danger); }
     .page-overview #top-save,
     .page-runtime #top-save,
     .page-chats #top-save,
@@ -2193,7 +2184,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
           <p class="workspace-copy">${escapeHtml(pageMeta.copy)}</p>
         </div>
         <div class="header-actions">
-          <span id="page-status" class="page-status"></span>
           ${headerRefreshButton}
           ${headerGrafanaButton}
           <button id="top-save" type="submit" form="bot-form"><svg class="icon sm"><use href="#i-save"></use></svg>保存</button>
@@ -2478,7 +2468,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         <div class="warn"><svg class="icon sm"><use href="#i-clock"></use></svg><span>当前版本先做配置读写。涉及飞书连接身份的字段保存后，需要重启 daemon 才会重新连接。</span></div>
         <footer>
           <button id="save" type="submit"><svg class="icon sm"><use href="#i-save"></use></svg>保存设置</button>
-          <span id="status"></span>
         </footer>
       </form>
     </section>
@@ -2702,8 +2691,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   </main>
   <script>
     const form = document.querySelector('#bot-form');
-    const status = document.querySelector('#status');
-    const pageStatus = document.querySelector('#page-status');
     const save = document.querySelector('#save');
     const sessionsBody = document.querySelector('#sessions-body');
     const refreshSessions = document.querySelector('#refresh-sessions');
@@ -2802,16 +2789,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
       const isRuntimePage = document.querySelector('.page-runtime') !== null;
       const systemHistory = { cpu: [], memory: [] };
 
-    function setStatus(text, failed = false) {
-      if (status) {
-        status.textContent = text;
-        status.style.color = failed ? 'var(--danger)' : 'var(--text-soft)';
-      }
-      if (pageStatus) {
-        pageStatus.textContent = text;
-        pageStatus.classList.toggle('error', failed);
-      }
-    }
+    function setStatus() {}
 
     function buttonText(button) {
       return button?.dataset?.idleText || button?.textContent?.trim() || '';
