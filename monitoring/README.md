@@ -27,6 +27,8 @@ Grafana default login:
 
 - password: `admin`
 
+Anonymous viewer access is enabled by default, so the dashboard can be opened without logging in. Use `admin` / `admin` only when editing Grafana settings.
+
 The dashboard is provisioned as `Larkbot / Larkbot Runtime`.
 
 ## Notes
