@@ -1044,12 +1044,12 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   const grafanaUrl = normalizeOptionalUrl(opts.grafanaPublicUrl);
   const grafanaHref = grafanaUrl || '/grafana';
   const grafanaTarget = grafanaUrl ? ' target="_blank" rel="noreferrer"' : '';
-  const grafanaClass = grafanaUrl ? 'nav-item' : navClass('grafana');
   const grafanaStatusText = grafanaUrl ? '已配置' : '未配置';
   const grafanaTargetText = grafanaUrl || '未配置 GRAFANA_PUBLIC_URL';
   const grafanaAction = grafanaUrl
-    ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>打开 Grafana</a>`
+    ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>打开重型监控</a>`
     : `<a class="primary-button" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg>先看本地运行趋势</a>`;
+  const runtimeGrafanaButton = `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>打开重型监控</a>`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2142,7 +2142,6 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="${navClass('runtime')}" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
-        <a class="${grafanaClass}" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -2298,6 +2297,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
             <div class="sub">从指标 JSONL 读取历史采样点。点击任意图表位置可选择观测时间点。</div>
           </div>
           <div class="metrics-controls">
+            ${runtimeGrafanaButton}
             <label>时间范围
               <select id="metrics-range">
                 <option value="1h">近 1 小时</option>
@@ -2367,8 +2367,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
       </div>
       <div class="empty-state">
         <svg class="icon"><use href="#i-shield"></use></svg>
-        <strong>${grafanaUrl ? 'Grafana 已配置，可以从左侧入口打开。' : 'Grafana 服务还没有配置到控制台。'}</strong>
-        <span>${grafanaUrl ? '如果页面打不开，优先检查 Prometheus/Grafana 进程和端口映射。' : '开发机启动 Grafana 后，在 .env 中配置 GRAFANA_PUBLIC_URL，再重启 larkbot，左侧入口会直接跳转到 dashboard。'}</span>
+        <strong>${grafanaUrl ? 'Grafana 已配置，可以从运行趋势页打开。' : 'Grafana 服务还没有配置到控制台。'}</strong>
+        <span>${grafanaUrl ? '如果页面打不开，优先检查 Prometheus/Grafana 进程和端口映射。' : '开发机启动 Grafana 后，在 .env 中配置 GRAFANA_PUBLIC_URL，再重启 larkbot，运行趋势页按钮会直接跳转到 dashboard。'}</span>
       </div>
     </section>
     <section id="region-config" class="card">
