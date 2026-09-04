@@ -67,23 +67,27 @@ export interface ReadMetricSnapshotsOptions {
   limit?: number;
 }
 
-export function defaultMetricsDir(): string {
-  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
-  return join(stateDir, 'metrics');
-}
-
-export async function sampleAndStoreMetrics(opts: SampleMetricsOptions): Promise<MetricSnapshot> {
+export async function collectStoreMetrics(opts: SampleMetricsOptions): Promise<MetricSnapshot> {
   const [sessions, expiredSessions] = await Promise.all([
     opts.store.loadSessions(),
     opts.store.loadExpiredSessions?.() ?? Promise.resolve([]),
   ]);
-  const snapshot = await collectMetrics({
+  return collectMetrics({
     sessions,
     expiredSessions,
     projectDir: opts.projectDir,
     now: opts.now,
     recentWindowMs: opts.recentWindowMs,
   });
+}
+
+export function defaultMetricsDir(): string {
+  const stateDir = process.env.LARKBOT_STATE_DIR?.trim() || join(homedir(), '.larkbot');
+  return join(stateDir, 'metrics');
+}
+
+export async function sampleAndStoreMetrics(opts: SampleMetricsOptions): Promise<MetricSnapshot> {
+  const snapshot = await collectStoreMetrics(opts);
   await appendMetricSnapshot(opts.metricsDir ?? defaultMetricsDir(), snapshot);
   return snapshot;
 }
@@ -199,6 +203,58 @@ export async function cleanupMetricFiles(metricsDir = defaultMetricsDir(), older
   return { deleted };
 }
 
+export function renderPrometheusMetrics(snapshot: MetricSnapshot): string {
+  const lines: string[] = [
+    '# HELP larkbot_process_uptime_seconds Larkbot daemon process uptime in seconds.',
+    '# TYPE larkbot_process_uptime_seconds gauge',
+    metricLine('larkbot_process_uptime_seconds', snapshot.process.uptimeMs / 1000),
+    '# HELP larkbot_system_cpu_load_percent System 1-minute load divided by CPU count.',
+    '# TYPE larkbot_system_cpu_load_percent gauge',
+    metricLine('larkbot_system_cpu_load_percent', snapshot.system.loadPercent),
+    '# HELP larkbot_system_load_average System load average.',
+    '# TYPE larkbot_system_load_average gauge',
+    metricLine('larkbot_system_load_average', snapshot.system.load1, { window: '1m' }),
+    metricLine('larkbot_system_load_average', snapshot.system.load5, { window: '5m' }),
+    metricLine('larkbot_system_load_average', snapshot.system.load15, { window: '15m' }),
+    '# HELP larkbot_system_memory_bytes System memory by state.',
+    '# TYPE larkbot_system_memory_bytes gauge',
+    metricLine('larkbot_system_memory_bytes', snapshot.system.memoryTotalBytes, { state: 'total' }),
+    metricLine('larkbot_system_memory_bytes', snapshot.system.memoryUsedBytes, { state: 'used' }),
+    metricLine('larkbot_system_memory_bytes', snapshot.system.memoryFreeBytes, { state: 'free' }),
+    '# HELP larkbot_system_memory_used_percent System memory used percent.',
+    '# TYPE larkbot_system_memory_used_percent gauge',
+    metricLine('larkbot_system_memory_used_percent', snapshot.system.memoryUsedPercent),
+    '# HELP larkbot_disk_bytes Project filesystem disk bytes by state.',
+    '# TYPE larkbot_disk_bytes gauge',
+    metricLine('larkbot_disk_bytes', snapshot.disk.totalBytes, { state: 'total', path: snapshot.disk.path }),
+    metricLine('larkbot_disk_bytes', snapshot.disk.usedBytes, { state: 'used', path: snapshot.disk.path }),
+    metricLine('larkbot_disk_bytes', snapshot.disk.freeBytes, { state: 'free', path: snapshot.disk.path }),
+    '# HELP larkbot_disk_used_percent Project filesystem disk used percent.',
+    '# TYPE larkbot_disk_used_percent gauge',
+    metricLine('larkbot_disk_used_percent', snapshot.disk.usedPercent, { path: snapshot.disk.path }),
+    '# HELP larkbot_sessions_active Active Larkbot sessions.',
+    '# TYPE larkbot_sessions_active gauge',
+    metricLine('larkbot_sessions_active', snapshot.larkbot.activeSessions),
+    '# HELP larkbot_turns_running Running analysis turns.',
+    '# TYPE larkbot_turns_running gauge',
+    metricLine('larkbot_turns_running', snapshot.larkbot.runningTurns),
+    '# HELP larkbot_turns_recent Recent analysis turns by status in the scrape window.',
+    '# TYPE larkbot_turns_recent gauge',
+    metricLine('larkbot_turns_recent', snapshot.larkbot.completedTurns, { status: 'completed', window: `${snapshot.larkbot.recentWindowMs}ms` }),
+    metricLine('larkbot_turns_recent', snapshot.larkbot.failedTurns, { status: 'failed', window: `${snapshot.larkbot.recentWindowMs}ms` }),
+    metricLine('larkbot_turns_recent', snapshot.larkbot.stoppedTurns, { status: 'stopped', window: `${snapshot.larkbot.recentWindowMs}ms` }),
+    metricLine('larkbot_turns_recent', snapshot.larkbot.noReplyTurns, { status: 'no_reply', window: `${snapshot.larkbot.recentWindowMs}ms` }),
+    '# HELP larkbot_turn_duration_seconds Recent analysis turn duration in seconds.',
+    '# TYPE larkbot_turn_duration_seconds gauge',
+    metricLine('larkbot_turn_duration_seconds', snapshot.larkbot.avgDurationMs / 1000, { quantile: 'avg' }),
+    metricLine('larkbot_turn_duration_seconds', snapshot.larkbot.p95DurationMs / 1000, { quantile: 'p95' }),
+    '# HELP larkbot_metrics_sample_timestamp_seconds Last generated larkbot metrics sample timestamp.',
+    '# TYPE larkbot_metrics_sample_timestamp_seconds gauge',
+    metricLine('larkbot_metrics_sample_timestamp_seconds', Date.parse(snapshot.timestamp) / 1000),
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
 function metricFilePath(metricsDir: string, date: Date): string {
   const yyyy = date.getFullYear();
   const mm = pad2(date.getMonth() + 1);
@@ -258,6 +314,18 @@ function parseMetricSnapshot(line: string): MetricSnapshot | undefined {
 
 function compareSnapshotTime(a: MetricSnapshot, b: MetricSnapshot): number {
   return Date.parse(a.timestamp) - Date.parse(b.timestamp);
+}
+
+function metricLine(name: string, value: number, labels?: Record<string, string>): string {
+  const normalized = Number.isFinite(value) ? value : 0;
+  const labelText = labels && Object.keys(labels).length
+    ? `{${Object.entries(labels).map(([key, labelValue]) => `${key}="${escapeMetricLabel(labelValue)}"`).join(',')}}`
+    : '';
+  return `${name}${labelText} ${normalized}`;
+}
+
+function escapeMetricLabel(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"');
 }
 
 function sessionAnswer(session: Session | ExpiredSession): string {

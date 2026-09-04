@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupMetricFiles, collectMetrics, readMetricSnapshots, sampleAndStoreMetrics } from '../src/core/metrics.js';
+import { cleanupMetricFiles, collectMetrics, readMetricSnapshots, renderPrometheusMetrics, sampleAndStoreMetrics } from '../src/core/metrics.js';
 import type { Session } from '../src/core/types.js';
 import type { SessionStore } from '../src/core/store.js';
 
@@ -113,6 +113,20 @@ describe('metrics', () => {
     });
 
     expect(samples.map((sample) => sample.larkbot.activeSessions)).toEqual([2, 3]);
+  });
+
+  it('渲染 Prometheus text exposition', async () => {
+    const snapshot = minimalSnapshot('2026-09-04T10:00:00.000Z', 2);
+    snapshot.disk.path = '/tmp/larkbot"repo';
+    snapshot.system.loadPercent = 12.5;
+    snapshot.larkbot.runningTurns = 1;
+    const text = renderPrometheusMetrics(snapshot);
+
+    expect(text).toContain('# HELP larkbot_sessions_active Active Larkbot sessions.');
+    expect(text).toContain('larkbot_sessions_active 2');
+    expect(text).toContain('larkbot_turns_running 1');
+    expect(text).toContain('larkbot_system_cpu_load_percent 12.5');
+    expect(text).toContain('path="/tmp/larkbot\\"repo"');
   });
 });
 

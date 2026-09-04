@@ -51,7 +51,7 @@ describe('console terminal page', () => {
   it('提供只读 xterm 页面和 SSE 终端输出', async () => {
     const terminalStore = new TerminalStreamStore();
     const store: SessionStore = {
-      loadBots: async () => [bot],
+      loadBots: async () => [{ ...bot, cwd: process.cwd() }],
       saveBots: async () => undefined,
       loadSessions: async () => [session],
       saveSessions: async () => undefined,
@@ -180,7 +180,7 @@ describe('console terminal page', () => {
     }
   });
 
-  it('提供运行趋势页面和 metrics API', async () => {
+  it('提供 Prometheus metrics、运行趋势页面和 metrics API', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'larkbot-console-metrics-'));
     dirs.push(dir);
     await writeFile(join(dir, '2026-09-04.jsonl'), `${JSON.stringify({
@@ -217,7 +217,7 @@ describe('console terminal page', () => {
       },
     })}\n`, 'utf8');
     const store: SessionStore = {
-      loadBots: async () => [bot],
+      loadBots: async () => [{ ...bot, cwd: process.cwd() }],
       saveBots: async () => undefined,
       loadSessions: async () => [session],
       saveSessions: async () => undefined,
@@ -232,7 +232,14 @@ describe('console terminal page', () => {
     const { port } = server.address() as AddressInfo;
     const base = `http://127.0.0.1:${port}`;
 
-    const page = await fetch(`${base}/metrics`);
+    const prometheus = await fetch(`${base}/metrics`);
+    expect(prometheus.status).toBe(200);
+    expect(prometheus.headers.get('content-type')).toContain('text/plain');
+    const prometheusText = await prometheus.text();
+    expect(prometheusText).toContain('larkbot_sessions_active');
+    expect(prometheusText).toContain('larkbot_system_cpu_load_percent');
+
+    const page = await fetch(`${base}/runtime`);
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('运行趋势');

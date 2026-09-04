@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { CliAdapter, SessionRawLog, SessionRawLogSummary } from '../adapters/cli/types.js';
-import { readMetricSnapshots } from '../core/metrics.js';
+import { collectStoreMetrics, readMetricSnapshots, renderPrometheusMetrics } from '../core/metrics.js';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -30,7 +30,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'metrics' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
+type ConsolePage = 'overview' | 'runtime' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -43,7 +43,7 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     eyebrow: 'Configuration',
     copy: '管理 bot 身份、工作目录、模型、提示词和授权用户。保存后会影响后续新会话。',
   },
-  metrics: {
+  runtime: {
     title: '运行趋势',
     eyebrow: 'Runtime metrics',
     copy: '查看采样落盘后的历史趋势，用于回看故障时间点附近的系统负载和会话状态。',
@@ -275,6 +275,12 @@ export async function startConsoleServer(opts: ConsoleServerOpts): Promise<Serve
 async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
     const url = new URL(req.url || '/', 'http://larkbot.local');
+    if (req.method === 'GET' && url.pathname === '/metrics') {
+      const bot = await requireBot(opts);
+      const snapshot = await collectStoreMetrics({ store: opts.store, projectDir: bot.cwd });
+      sendText(res, renderPrometheusMetrics(snapshot), 'text/plain; version=0.0.4; charset=utf-8');
+      return;
+    }
     const consolePage = consolePageFromPath(url.pathname);
     if (req.method === 'GET' && consolePage) {
       sendHtml(res, renderConsoleHtml(consolePage));
@@ -976,6 +982,14 @@ function sendJson(res: ServerResponse, data: unknown, status = 200): void {
   res.end(JSON.stringify(data));
 }
 
+function sendText(res: ServerResponse, text: string, contentType = 'text/plain; charset=utf-8', status = 200): void {
+  res.writeHead(status, {
+    'content-type': contentType,
+    'cache-control': 'no-store',
+  });
+  res.end(text);
+}
+
 function sendHtml(res: ServerResponse, html: string): void {
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
@@ -987,7 +1001,7 @@ function sendHtml(res: ServerResponse, html: string): void {
 function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/') return 'overview';
   if (pathname === '/system') return 'overview';
-  if (pathname === '/metrics') return 'metrics';
+  if (pathname === '/runtime') return 'runtime';
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
@@ -1295,7 +1309,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     }
     .page-status.error { color: var(--danger); }
     .page-overview #top-save,
-    .page-metrics #top-save,
+    .page-runtime #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
     .page-sessions #top-save,
@@ -1312,7 +1326,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       gap: 20px;
     }
     .page-config .content-frame,
-    .page-metrics .content-frame,
+    .page-runtime .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
     .page-sessions .content-frame,
@@ -1320,35 +1334,35 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       grid-template-columns: minmax(0, 1fr);
     }
     .page-overview #region-config,
-    .page-overview #region-metrics,
+    .page-overview #region-runtime,
     .page-overview #region-chats,
     .page-overview #region-feedback,
     .page-overview #region-sessions,
     .page-overview #region-logs,
     .page-config #region-health,
     .page-config #region-system,
-    .page-config #region-metrics,
+    .page-config #region-runtime,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-sessions,
     .page-config #region-logs,
     .page-chats #region-health,
     .page-chats #region-system,
-    .page-chats #region-metrics,
+    .page-chats #region-runtime,
     .page-chats #region-config,
     .page-chats #region-feedback,
     .page-chats #region-sessions,
     .page-chats #region-logs,
     .page-feedback #region-health,
     .page-feedback #region-system,
-    .page-feedback #region-metrics,
+    .page-feedback #region-runtime,
     .page-feedback #region-config,
     .page-feedback #region-chats,
     .page-feedback #region-sessions,
     .page-feedback #region-logs,
     .page-sessions #region-health,
     .page-sessions #region-system,
-    .page-sessions #region-metrics,
+    .page-sessions #region-runtime,
     .page-sessions #region-config,
     .page-sessions #region-chats,
     .page-sessions #region-feedback,
@@ -1359,18 +1373,18 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-logs #region-chats,
     .page-logs #region-feedback,
     .page-logs #region-sessions,
-    .page-logs #region-metrics,
-    .page-metrics #region-health,
-    .page-metrics #region-system,
-    .page-metrics #region-config,
-    .page-metrics #region-chats,
-    .page-metrics #region-feedback,
-    .page-metrics #region-sessions,
-    .page-metrics #region-logs {
+    .page-logs #region-runtime,
+    .page-runtime #region-health,
+    .page-runtime #region-system,
+    .page-runtime #region-config,
+    .page-runtime #region-chats,
+    .page-runtime #region-feedback,
+    .page-runtime #region-sessions,
+    .page-runtime #region-logs {
       display: none;
     }
     .page-config .observer-column,
-    .page-metrics .observer-column,
+    .page-runtime .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
     .page-sessions .observer-column,
@@ -2088,7 +2102,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       <nav class="side-nav">
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
-        <a class="${navClass('metrics')}" href="/metrics"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
+        <a class="${navClass('runtime')}" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
+        <a class="nav-item" href="http://127.0.0.1:3000/d/larkbot-runtime/larkbot-runtime" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -2233,7 +2248,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         </div>
       </div>
     </section>
-    <section id="region-metrics" class="card">
+    <section id="region-runtime" class="card">
       <div class="metrics-shell">
         <div class="metrics-toolbar">
           <div>
@@ -2690,7 +2705,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let activePromptId = '';
       const isOverviewPage = document.querySelector('.page-overview') !== null;
       const isLogsPage = document.querySelector('.page-logs') !== null;
-      const isMetricsPage = document.querySelector('.page-metrics') !== null;
+      const isRuntimePage = document.querySelector('.page-runtime') !== null;
       const systemHistory = { cpu: [], memory: [] };
 
     function setStatus(text, failed = false) {
@@ -3590,7 +3605,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => {
         const tasks = [loadBot(), loadModels(), loadChats(), loadSessions(), loadFeedbacks(), loadSystemStatus()];
         if (isLogsPage) tasks.push(loadLogs());
-        if (isMetricsPage) tasks.push(loadMetrics());
+        if (isRuntimePage) tasks.push(loadMetrics());
         return Promise.all(tasks);
       }).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
@@ -3649,7 +3664,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         logsBody.innerHTML = '<tr><td colspan="6"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
       });
     }
-    if (isMetricsPage) {
+    if (isRuntimePage) {
       loadMetrics().catch((error) => setStatus('运行趋势加载失败：' + error.message, true));
     }
     loadChats().catch((error) => {
