@@ -1049,8 +1049,11 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
   const grafanaAction = grafanaUrl
     ? `<a class="primary-button" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`
     : `<a class="primary-button" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg>先看本地运行趋势</a>`;
+  const headerRefreshButton = page === 'runtime'
+    ? ''
+    : '<button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>';
   const headerGrafanaButton = page === 'runtime'
-    ? `<a class="ghost" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</a>`
+    ? `<a class="monitor-link" href="${escapeHtml(grafanaHref)}"${grafanaTarget}><span><svg class="icon sm"><use href="#i-activity"></use></svg>查看更多</span><svg class="icon sm"><use href="#i-external"></use></svg></a>`
     : '';
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1140,6 +1143,32 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     .toolbar h2 { margin: 0; font-size: 18px; line-height: 1.3; letter-spacing: 0; }
     .ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
     .ghost:hover:not(:disabled) { background: var(--surface-tint); box-shadow: 0 8px 18px oklch(24% 0.02 255 / .08); }
+    .monitor-link {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 0 14px;
+      border: 1px solid color-mix(in oklch, var(--primary) 34%, var(--border));
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, color-mix(in oklch, var(--primary-soft) 74%, white), var(--surface));
+      color: var(--primary-hover);
+      font-size: 14px;
+      font-weight: 850;
+      text-decoration: none;
+      box-shadow: 0 8px 20px oklch(55% 0.18 258 / .08);
+    }
+    .monitor-link span { display: inline-flex; align-items: center; gap: 7px; }
+    .monitor-link:hover {
+      border-color: color-mix(in oklch, var(--primary) 48%, var(--border));
+      background: color-mix(in oklch, var(--primary-soft) 86%, white);
+      box-shadow: 0 10px 24px oklch(55% 0.18 258 / .12);
+    }
+    .monitor-link:focus-visible {
+      outline: 3px solid color-mix(in oklch, var(--primary) 22%, transparent);
+      outline-offset: 2px;
+    }
     .danger { background: var(--danger); }
     .danger:hover:not(:disabled) { background: var(--danger-hover); box-shadow: 0 8px 18px oklch(56% 0.18 24 / .15); }
     .sessions { padding: 0 28px 24px; overflow-x: auto; scrollbar-color: #c9cdd4 transparent; }
@@ -2123,6 +2152,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
     <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
     <symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
   </svg>
   <main class="console-shell page-${page}">
     <aside class="console-sidebar" aria-label="控制台导航">
@@ -2164,7 +2194,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         </div>
         <div class="header-actions">
           <span id="page-status" class="page-status"></span>
-          <button id="refresh-all" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+          ${headerRefreshButton}
           ${headerGrafanaButton}
           <button id="top-save" type="submit" form="bot-form"><svg class="icon sm"><use href="#i-save"></use></svg>保存</button>
         </div>
@@ -3665,7 +3695,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
         .catch((error) => setStatus('刷新反馈失败：' + error.message, true));
     });
 
-    refreshAll.addEventListener('click', () => {
+    refreshAll?.addEventListener('click', () => {
       withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => {
         const tasks = [loadBot(), loadModels(), loadChats(), loadSessions(), loadFeedbacks(), loadSystemStatus()];
         if (isLogsPage) tasks.push(loadLogs());
