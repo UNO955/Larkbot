@@ -2172,8 +2172,8 @@ function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleSer
       </div>
       <nav class="side-nav">
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
-        <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="${navClass('runtime')}" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
+        <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -4180,6 +4180,7 @@ function renderOfficeHtml(): string {
       </div>
       <nav class="side-nav">
         <a class="nav-item" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
+        <a class="nav-item" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
         <a class="nav-item active" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="nav-item" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="nav-item" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>

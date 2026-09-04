@@ -247,6 +247,13 @@ describe('console terminal page', () => {
     expect(html).toContain('metrics-from');
     expect(html).toContain('查看更多');
     expect(html).toContain('href="/grafana"');
+    expect(html.indexOf('href="/runtime"')).toBeLessThan(html.indexOf('href="/office"'));
+
+    const officePage = await fetch(`${base}/office`);
+    expect(officePage.status).toBe(200);
+    const officeHtml = await officePage.text();
+    expect(officeHtml).toContain('href="/runtime"');
+    expect(officeHtml.indexOf('href="/runtime"')).toBeLessThan(officeHtml.indexOf('href="/office"'));
 
     const api = await fetch(`${base}/api/metrics?range=1h`);
     expect(api.status).toBe(200);
