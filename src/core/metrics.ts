@@ -1,11 +1,11 @@
-import { appendFile, mkdir, readdir, rm, statfs } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rm, statfs } from 'node:fs/promises';
 import { homedir, loadavg, cpus, freemem, totalmem } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { ExpiredSession, Session, SessionWorkLog } from './types.js';
 import type { SessionStore } from './store.js';
 
 export const METRIC_SAMPLE_INTERVAL_MS = 60_000;
-export const METRIC_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const METRIC_RETENTION_MS = 15 * 24 * 60 * 60 * 1000;
 
 export interface MetricSnapshot {
   timestamp: string;
@@ -58,6 +58,13 @@ export interface SampleMetricsOptions {
   metricsDir?: string;
   now?: Date;
   recentWindowMs?: number;
+}
+
+export interface ReadMetricSnapshotsOptions {
+  metricsDir?: string;
+  sinceMs: number;
+  untilMs?: number;
+  limit?: number;
 }
 
 export function defaultMetricsDir(): string {
@@ -136,6 +143,41 @@ export async function appendMetricSnapshot(metricsDir: string, snapshot: MetricS
   await appendFile(path, `${JSON.stringify(snapshot)}\n`, 'utf8');
 }
 
+export async function readMetricSnapshots(opts: ReadMetricSnapshotsOptions): Promise<MetricSnapshot[]> {
+  const metricsDir = opts.metricsDir ?? defaultMetricsDir();
+  const untilMs = opts.untilMs ?? Date.now();
+  const limit = Math.max(1, Math.min(5000, opts.limit ?? 1440));
+  let entries: string[];
+  try {
+    entries = await readdir(metricsDir);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const files = entries
+    .filter((entry) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(entry))
+    .sort()
+    .reverse();
+  const snapshots: MetricSnapshot[] = [];
+  for (const file of files) {
+    const content = await readFile(join(metricsDir, file), 'utf8');
+    const lines = content.split(/\r?\n/).filter(Boolean).reverse();
+    for (const line of lines) {
+      const snapshot = parseMetricSnapshot(line);
+      if (!snapshot) continue;
+      const time = Date.parse(snapshot.timestamp);
+      if (!Number.isFinite(time) || time > untilMs) continue;
+      if (time < opts.sinceMs) {
+        if (snapshots.length) return snapshots.sort(compareSnapshotTime);
+        continue;
+      }
+      snapshots.push(snapshot);
+      if (snapshots.length >= limit) return snapshots.sort(compareSnapshotTime);
+    }
+  }
+  return snapshots.sort(compareSnapshotTime);
+}
+
 export async function cleanupMetricFiles(metricsDir = defaultMetricsDir(), olderThanMs = METRIC_RETENTION_MS, now = new Date()): Promise<{ deleted: number }> {
   let entries: string[];
   try {
@@ -201,6 +243,21 @@ function countRunningTurns(sessions: Session[]): number {
     }
   }
   return count;
+}
+
+function parseMetricSnapshot(line: string): MetricSnapshot | undefined {
+  try {
+    const value = JSON.parse(line) as Partial<MetricSnapshot>;
+    if (!value || typeof value !== 'object' || typeof value.timestamp !== 'string') return undefined;
+    if (!value.process || !value.system || !value.disk || !value.larkbot) return undefined;
+    return value as MetricSnapshot;
+  } catch {
+    return undefined;
+  }
+}
+
+function compareSnapshotTime(a: MetricSnapshot, b: MetricSnapshot): number {
+  return Date.parse(a.timestamp) - Date.parse(b.timestamp);
 }
 
 function sessionAnswer(session: Session | ExpiredSession): string {

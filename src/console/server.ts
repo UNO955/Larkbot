@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { readFile, statfs } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, homedir, loadavg, platform, totalmem, uptime } from 'node:os';
 import type { CliAdapter, SessionRawLog, SessionRawLogSummary } from '../adapters/cli/types.js';
+import { readMetricSnapshots } from '../core/metrics.js';
 import type { SessionStore } from '../core/store.js';
 import type { Bot, FeedbackRecord, FeedbackStatus, KnownChat, Session, SystemPromptProfile } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -17,6 +18,7 @@ export interface ConsoleServerOpts {
   cli?: Pick<CliAdapter, 'getSessionRawLog' | 'listSessionRawLogs'>;
   traceStore?: TurnTraceStore;
   terminalStore?: TerminalStreamStore;
+  metricsDir?: string;
   sessionManager?: {
     listSessions(): PublicSession[];
     closeSession(sessionId: string): Promise<Session | undefined>;
@@ -28,7 +30,7 @@ export interface ConsoleServerOpts {
 
 type PublicBot = Omit<Bot, 'appSecret'> & { appSecretSet: boolean };
 export type TurnTraceStatus = 'working' | 'completed' | 'failed';
-type ConsolePage = 'overview' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
+type ConsolePage = 'overview' | 'metrics' | 'config' | 'chats' | 'feedback' | 'sessions' | 'logs';
 
 const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: string }> = {
   overview: {
@@ -40,6 +42,11 @@ const consolePages: Record<ConsolePage, { title: string; eyebrow: string; copy: 
     title: '配置',
     eyebrow: 'Configuration',
     copy: '管理 bot 身份、工作目录、模型、提示词和授权用户。保存后会影响后续新会话。',
+  },
+  metrics: {
+    title: '运行趋势',
+    eyebrow: 'Runtime metrics',
+    copy: '查看采样落盘后的历史趋势，用于回看故障时间点附近的系统负载和会话状态。',
   },
   chats: {
     title: '群聊',
@@ -357,6 +364,18 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
       sendJson(res, { status: await collectSystemStatus(opts) });
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/api/metrics') {
+      const now = Date.now();
+      const requested = parseMetricTimeRange(url.searchParams, now);
+      const samples = await readMetricSnapshots({
+        metricsDir: opts.metricsDir,
+        sinceMs: requested.sinceMs,
+        untilMs: requested.untilMs,
+        limit: 2500,
+      });
+      sendJson(res, { rangeMs: requested.untilMs - requested.sinceMs, since: new Date(requested.sinceMs).toISOString(), until: new Date(requested.untilMs).toISOString(), samples });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/api/sessions') {
       sendJson(res, { sessions: await listSessions(opts) });
       return;
@@ -629,6 +648,27 @@ async function listLogs(opts: ConsoleServerOpts): Promise<PublicLogEntry[]> {
       source: session ? 'session' : 'orphan',
     };
   });
+}
+
+function parseMetricTimeRange(params: URLSearchParams, nowMs: number): { sinceMs: number; untilMs: number } {
+  const fromMs = Date.parse(params.get('from') || '');
+  const toMs = Date.parse(params.get('to') || '');
+  const maxRangeMs = parseMetricRangeMs('15d');
+  if (Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs) {
+    const untilMs = Math.min(toMs, nowMs);
+    const sinceMs = Math.max(fromMs, untilMs - maxRangeMs);
+    return { sinceMs, untilMs };
+  }
+  const rangeMs = parseMetricRangeMs(params.get('range'));
+  return { sinceMs: nowMs - rangeMs, untilMs: nowMs };
+}
+
+function parseMetricRangeMs(value: string | null): number {
+  if (value === '6h') return 6 * 60 * 60 * 1000;
+  if (value === '24h') return 24 * 60 * 60 * 1000;
+  if (value === '7d') return 7 * 24 * 60 * 60 * 1000;
+  if (value === '15d') return 15 * 24 * 60 * 60 * 1000;
+  return 60 * 60 * 1000;
 }
 
 function rawLogSession(cliSessionId: string): Session {
@@ -947,6 +987,7 @@ function sendHtml(res: ServerResponse, html: string): void {
 function consolePageFromPath(pathname: string): ConsolePage | undefined {
   if (pathname === '/') return 'overview';
   if (pathname === '/system') return 'overview';
+  if (pathname === '/metrics') return 'metrics';
   if (pathname === '/config') return 'config';
   if (pathname === '/chats') return 'chats';
   if (pathname === '/feedback') return 'feedback';
@@ -1254,6 +1295,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     }
     .page-status.error { color: var(--danger); }
     .page-overview #top-save,
+    .page-metrics #top-save,
     .page-chats #top-save,
     .page-feedback #top-save,
     .page-sessions #top-save,
@@ -1270,6 +1312,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       gap: 20px;
     }
     .page-config .content-frame,
+    .page-metrics .content-frame,
     .page-chats .content-frame,
     .page-feedback .content-frame,
     .page-sessions .content-frame,
@@ -1277,30 +1320,35 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       grid-template-columns: minmax(0, 1fr);
     }
     .page-overview #region-config,
+    .page-overview #region-metrics,
     .page-overview #region-chats,
     .page-overview #region-feedback,
     .page-overview #region-sessions,
     .page-overview #region-logs,
     .page-config #region-health,
     .page-config #region-system,
+    .page-config #region-metrics,
     .page-config #region-chats,
     .page-config #region-feedback,
     .page-config #region-sessions,
     .page-config #region-logs,
     .page-chats #region-health,
     .page-chats #region-system,
+    .page-chats #region-metrics,
     .page-chats #region-config,
     .page-chats #region-feedback,
     .page-chats #region-sessions,
     .page-chats #region-logs,
     .page-feedback #region-health,
     .page-feedback #region-system,
+    .page-feedback #region-metrics,
     .page-feedback #region-config,
     .page-feedback #region-chats,
     .page-feedback #region-sessions,
     .page-feedback #region-logs,
     .page-sessions #region-health,
     .page-sessions #region-system,
+    .page-sessions #region-metrics,
     .page-sessions #region-config,
     .page-sessions #region-chats,
     .page-sessions #region-feedback,
@@ -1310,10 +1358,19 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     .page-logs #region-config,
     .page-logs #region-chats,
     .page-logs #region-feedback,
-    .page-logs #region-sessions {
+    .page-logs #region-sessions,
+    .page-logs #region-metrics,
+    .page-metrics #region-health,
+    .page-metrics #region-system,
+    .page-metrics #region-config,
+    .page-metrics #region-chats,
+    .page-metrics #region-feedback,
+    .page-metrics #region-sessions,
+    .page-metrics #region-logs {
       display: none;
     }
     .page-config .observer-column,
+    .page-metrics .observer-column,
     .page-chats .observer-column,
     .page-feedback .observer-column,
     .page-sessions .observer-column,
@@ -1866,6 +1923,83 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       color: var(--text-muted);
       text-align: center;
     }
+    .metrics-shell {
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+    .metrics-toolbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+    .metrics-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .metrics-controls select {
+      width: auto;
+      min-width: 132px;
+      height: 34px;
+    }
+    .trend-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .trend-card {
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+    .trend-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .trend-head strong { display: block; font-size: 15px; line-height: 1.35; }
+    .trend-head span { color: var(--text-muted); font-size: 12px; font-weight: 800; }
+    .trend-chart {
+      width: 100%;
+      height: 180px;
+      display: block;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, var(--surface-soft), var(--surface));
+      cursor: crosshair;
+    }
+    .trend-chart text {
+      fill: var(--text-muted);
+      font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .trend-chart .grid { stroke: var(--border); stroke-width: 1; }
+    .trend-chart .series-main { fill: none; stroke: var(--primary); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .trend-chart .series-alt { fill: none; stroke: var(--danger); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .trend-chart .series-ok { fill: none; stroke: var(--success); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .trend-chart .cursor { stroke: var(--text); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .6; }
+    .trend-chart .point { fill: var(--surface); stroke: var(--text); stroke-width: 2; }
+    .metrics-detail {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .metrics-detail .info-item { background: var(--surface); }
+    @media (max-width: 1180px) {
+      .trend-grid,
+      .metrics-detail { grid-template-columns: 1fr; }
+    }
     @media (max-width: 1180px) {
       .console-shell { grid-template-columns: 220px minmax(0, 1fr); }
       .content-frame { grid-template-columns: 1fr; }
@@ -1954,6 +2088,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       <nav class="side-nav">
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
+        <a class="${navClass('metrics')}" href="/metrics"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>
@@ -2095,6 +2230,67 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
               <li class="empty-log">等待日志采样</li>
             </ul>
           </section>
+        </div>
+      </div>
+    </section>
+    <section id="region-metrics" class="card">
+      <div class="metrics-shell">
+        <div class="metrics-toolbar">
+          <div>
+            <div class="section-title">
+              <span class="title-icon"><svg class="icon"><use href="#i-radio"></use></svg></span>
+              <h2>运行趋势</h2>
+            </div>
+            <div class="sub">从指标 JSONL 读取历史采样点。点击任意图表位置可选择观测时间点。</div>
+          </div>
+          <div class="metrics-controls">
+            <label>时间范围
+              <select id="metrics-range">
+                <option value="1h">近 1 小时</option>
+                <option value="6h">近 6 小时</option>
+                <option value="24h">近 24 小时</option>
+                <option value="7d">近 7 天</option>
+                <option value="15d">近 15 天</option>
+              </select>
+            </label>
+            <label>开始
+              <input id="metrics-from" type="datetime-local">
+            </label>
+            <label>结束
+              <input id="metrics-to" type="datetime-local">
+            </label>
+            <button id="refresh-metrics" type="button" class="ghost"><svg class="icon sm"><use href="#i-refresh"></use></svg>刷新</button>
+          </div>
+        </div>
+        <div class="summary-grid" aria-label="趋势摘要">
+          <div class="summary-item"><span class="summary-label">采样点</span><span id="metrics-samples" class="summary-value">-</span></div>
+          <div class="summary-item"><span class="summary-label">最后采样</span><span id="metrics-last" class="summary-value">-</span></div>
+          <div class="summary-item"><span class="summary-label">平均耗时</span><span id="metrics-avg" class="summary-value">-</span></div>
+          <div class="summary-item"><span class="summary-label">p95 耗时</span><span id="metrics-p95" class="summary-value">-</span></div>
+        </div>
+        <div class="trend-grid">
+          <article class="trend-card">
+            <div class="trend-head"><div><strong>CPU / 内存 / 磁盘</strong><span>百分比趋势</span></div><span id="metrics-resource-now">-</span></div>
+            <svg id="metrics-resource-chart" class="trend-chart" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+          <article class="trend-card">
+            <div class="trend-head"><div><strong>会话负载</strong><span>活跃会话与运行中 turn</span></div><span id="metrics-session-now">-</span></div>
+            <svg id="metrics-session-chart" class="trend-chart" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+          <article class="trend-card">
+            <div class="trend-head"><div><strong>结果分布</strong><span>最近采样窗口内完成 / 失败 / 停止</span></div><span id="metrics-result-now">-</span></div>
+            <svg id="metrics-result-chart" class="trend-chart" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+          <article class="trend-card">
+            <div class="trend-head"><div><strong>分析耗时</strong><span>平均耗时与 p95</span></div><span id="metrics-duration-now">-</span></div>
+            <svg id="metrics-duration-chart" class="trend-chart" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+        </div>
+        <div class="metrics-detail" aria-label="观测点详情">
+          <div class="info-item"><span>观测时间</span><strong id="metrics-selected-time">-</strong></div>
+          <div class="info-item"><span>资源</span><strong id="metrics-selected-resource">-</strong></div>
+          <div class="info-item"><span>会话</span><strong id="metrics-selected-session">-</strong></div>
+          <div class="info-item"><span>结果</span><strong id="metrics-selected-result">-</strong></div>
         </div>
       </div>
     </section>
@@ -2405,6 +2601,26 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
     const sessionFilter = document.querySelector('#session-filter');
     const logsBody = document.querySelector('#logs-body');
     const refreshLogs = document.querySelector('#refresh-logs');
+    const metricsRange = document.querySelector('#metrics-range');
+    const metricsFrom = document.querySelector('#metrics-from');
+    const metricsTo = document.querySelector('#metrics-to');
+    const refreshMetrics = document.querySelector('#refresh-metrics');
+    const metricsSamples = document.querySelector('#metrics-samples');
+    const metricsLast = document.querySelector('#metrics-last');
+    const metricsAvg = document.querySelector('#metrics-avg');
+    const metricsP95 = document.querySelector('#metrics-p95');
+    const metricsResourceNow = document.querySelector('#metrics-resource-now');
+    const metricsSessionNow = document.querySelector('#metrics-session-now');
+    const metricsResultNow = document.querySelector('#metrics-result-now');
+    const metricsDurationNow = document.querySelector('#metrics-duration-now');
+    const metricsResourceChart = document.querySelector('#metrics-resource-chart');
+    const metricsSessionChart = document.querySelector('#metrics-session-chart');
+    const metricsResultChart = document.querySelector('#metrics-result-chart');
+    const metricsDurationChart = document.querySelector('#metrics-duration-chart');
+    const metricsSelectedTime = document.querySelector('#metrics-selected-time');
+    const metricsSelectedResource = document.querySelector('#metrics-selected-resource');
+    const metricsSelectedSession = document.querySelector('#metrics-selected-session');
+    const metricsSelectedResult = document.querySelector('#metrics-selected-result');
     const chatsBody = document.querySelector('#chats-body');
     const refreshChats = document.querySelector('#refresh-chats');
     const feedbacksBody = document.querySelector('#feedbacks-body');
@@ -2467,11 +2683,14 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       let latestChats = [];
       let latestSessions = [];
       let latestLogs = [];
+      let latestMetrics = [];
+      let selectedMetricIndex = -1;
       let latestFeedbacks = [];
       let promptProfiles = [];
       let activePromptId = '';
       const isOverviewPage = document.querySelector('.page-overview') !== null;
       const isLogsPage = document.querySelector('.page-logs') !== null;
+      const isMetricsPage = document.querySelector('.page-metrics') !== null;
       const systemHistory = { cpu: [], memory: [] };
 
     function setStatus(text, failed = false) {
@@ -2691,6 +2910,28 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       const days = Math.floor(hours / 24);
       const restHours = hours % 24;
       return days + ' 天' + (restHours ? ' ' + restHours + ' 小时' : '');
+    }
+
+    function formatDurationCompact(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return '0s';
+      const seconds = Math.round(ms / 1000);
+      if (seconds < 60) return seconds + 's';
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 60) return minutes + 'm';
+      const hours = Math.round(minutes / 60);
+      return hours + 'h';
+    }
+
+    function shortTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '-';
+      return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function formatChartValue(value) {
+      if (!Number.isFinite(value)) return '-';
+      if (value >= 1000) return String(Math.round(value / 1000)) + 'k';
+      return String(Math.ceil(value));
     }
 
     function formatBytes(bytes) {
@@ -2993,6 +3234,127 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       renderLogs();
     }
 
+    async function loadMetrics() {
+      if (!metricsResourceChart) return;
+      const params = new URLSearchParams();
+      const from = metricsFrom?.value ? new Date(metricsFrom.value) : null;
+      const to = metricsTo?.value ? new Date(metricsTo.value) : null;
+      if (from && to && Number.isFinite(from.getTime()) && Number.isFinite(to.getTime()) && to > from) {
+        params.set('from', from.toISOString());
+        params.set('to', to.toISOString());
+      } else {
+        params.set('range', metricsRange?.value || '1h');
+      }
+      const res = await fetch('/api/metrics?' + params.toString());
+      if (!res.ok) throw new Error(await res.text());
+      const payload = await res.json();
+      latestMetrics = Array.isArray(payload.samples) ? payload.samples : [];
+      selectedMetricIndex = latestMetrics.length ? latestMetrics.length - 1 : -1;
+      renderMetrics();
+    }
+
+    function renderMetrics() {
+      if (!metricsResourceChart) return;
+      const samples = latestMetrics;
+      const selected = samples[selectedMetricIndex] || samples.at(-1);
+      metricsSamples.textContent = String(samples.length);
+      metricsLast.textContent = samples.length ? formatTime(samples.at(-1).timestamp) : '-';
+      metricsAvg.textContent = selected ? formatDurationCompact(selected.larkbot?.avgDurationMs) : '-';
+      metricsP95.textContent = selected ? formatDurationCompact(selected.larkbot?.p95DurationMs) : '-';
+      metricsResourceNow.textContent = selected
+        ? 'CPU ' + formatPercent(selected.system?.loadPercent) + ' · 内存 ' + formatPercent(selected.system?.memoryUsedPercent) + ' · 磁盘 ' + formatPercent(selected.disk?.usedPercent)
+        : '-';
+      metricsSessionNow.textContent = selected
+        ? '活跃 ' + (selected.larkbot?.activeSessions || 0) + ' · 运行 ' + (selected.larkbot?.runningTurns || 0)
+        : '-';
+      metricsResultNow.textContent = selected
+        ? '完成 ' + (selected.larkbot?.completedTurns || 0) + ' · 失败 ' + (selected.larkbot?.failedTurns || 0) + ' · 停止 ' + (selected.larkbot?.stoppedTurns || 0)
+        : '-';
+      metricsDurationNow.textContent = selected
+        ? 'avg ' + formatDurationCompact(selected.larkbot?.avgDurationMs) + ' · p95 ' + formatDurationCompact(selected.larkbot?.p95DurationMs)
+        : '-';
+      drawTrendChart(metricsResourceChart, samples, [
+        { label: 'CPU', className: 'series-main', value: (s) => s.system?.loadPercent },
+        { label: '内存', className: 'series-alt', value: (s) => s.system?.memoryUsedPercent },
+        { label: '磁盘', className: 'series-ok', value: (s) => s.disk?.usedPercent },
+      ], 100);
+      drawTrendChart(metricsSessionChart, samples, [
+        { label: '活跃', className: 'series-main', value: (s) => s.larkbot?.activeSessions },
+        { label: '运行中', className: 'series-alt', value: (s) => s.larkbot?.runningTurns },
+      ]);
+      drawTrendChart(metricsResultChart, samples, [
+        { label: '完成', className: 'series-ok', value: (s) => s.larkbot?.completedTurns },
+        { label: '失败', className: 'series-alt', value: (s) => s.larkbot?.failedTurns },
+        { label: '停止', className: 'series-main', value: (s) => s.larkbot?.stoppedTurns },
+      ]);
+      drawTrendChart(metricsDurationChart, samples, [
+        { label: '平均', className: 'series-main', value: (s) => Math.round((s.larkbot?.avgDurationMs || 0) / 1000) },
+        { label: 'p95', className: 'series-alt', value: (s) => Math.round((s.larkbot?.p95DurationMs || 0) / 1000) },
+      ]);
+      renderSelectedMetric(selected);
+    }
+
+    function drawTrendChart(svg, samples, series, fixedMax) {
+      if (!svg) return;
+      const width = 640;
+      const height = 180;
+      const pad = { left: 38, right: 12, top: 16, bottom: 28 };
+      const innerW = width - pad.left - pad.right;
+      const innerH = height - pad.top - pad.bottom;
+      if (!samples.length) {
+        svg.innerHTML = '<text x="320" y="92" text-anchor="middle">暂无指标采样，等待下一分钟写入</text>';
+        return;
+      }
+      const maxValue = Math.max(1, fixedMax || Math.max(...series.flatMap((line) => samples.map((s) => Number(line.value(s)) || 0))));
+      const xOf = (index) => pad.left + (samples.length <= 1 ? innerW : innerW * index / (samples.length - 1));
+      const yOf = (value) => pad.top + innerH - (Math.max(0, Number(value) || 0) / maxValue) * innerH;
+      const parts = [
+        '<line class="grid" x1="' + pad.left + '" y1="' + pad.top + '" x2="' + pad.left + '" y2="' + (pad.top + innerH) + '"></line>',
+        '<line class="grid" x1="' + pad.left + '" y1="' + (pad.top + innerH) + '" x2="' + (pad.left + innerW) + '" y2="' + (pad.top + innerH) + '"></line>',
+        '<line class="grid" x1="' + pad.left + '" y1="' + (pad.top + innerH / 2) + '" x2="' + (pad.left + innerW) + '" y2="' + (pad.top + innerH / 2) + '"></line>',
+        '<text x="8" y="' + (pad.top + 4) + '">' + esc(formatChartValue(maxValue)) + '</text>',
+        '<text x="8" y="' + (pad.top + innerH + 4) + '">0</text>',
+      ];
+      for (const line of series) {
+        const d = samples.map((sample, index) => {
+          const prefix = index ? 'L' : 'M';
+          return prefix + xOf(index).toFixed(1) + ' ' + yOf(line.value(sample)).toFixed(1);
+        }).join(' ');
+        parts.push('<path class="' + line.className + '" d="' + d + '"></path>');
+      }
+      if (selectedMetricIndex >= 0 && selectedMetricIndex < samples.length) {
+        const x = xOf(selectedMetricIndex);
+        parts.push('<line class="cursor" x1="' + x.toFixed(1) + '" y1="' + pad.top + '" x2="' + x.toFixed(1) + '" y2="' + (pad.top + innerH) + '"></line>');
+        parts.push('<circle class="point" cx="' + x.toFixed(1) + '" cy="' + yOf(series[0].value(samples[selectedMetricIndex])).toFixed(1) + '" r="4"></circle>');
+      }
+      const first = samples[0];
+      const last = samples.at(-1);
+      parts.push('<text x="' + pad.left + '" y="170">' + esc(shortTime(first.timestamp)) + '</text>');
+      parts.push('<text x="' + (pad.left + innerW) + '" y="170" text-anchor="end">' + esc(shortTime(last.timestamp)) + '</text>');
+      svg.innerHTML = parts.join('');
+      svg.onclick = (event) => {
+        const rect = svg.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        selectedMetricIndex = Math.round(ratio * (samples.length - 1));
+        renderMetrics();
+      };
+    }
+
+    function renderSelectedMetric(sample) {
+      if (!metricsSelectedTime) return;
+      if (!sample) {
+        metricsSelectedTime.textContent = '-';
+        metricsSelectedResource.textContent = '-';
+        metricsSelectedSession.textContent = '-';
+        metricsSelectedResult.textContent = '-';
+        return;
+      }
+      metricsSelectedTime.textContent = formatTime(sample.timestamp);
+      metricsSelectedResource.textContent = 'CPU ' + formatPercent(sample.system?.loadPercent) + ' / 内存 ' + formatPercent(sample.system?.memoryUsedPercent) + ' / 磁盘 ' + formatPercent(sample.disk?.usedPercent);
+      metricsSelectedSession.textContent = '活跃 ' + (sample.larkbot?.activeSessions || 0) + '，运行中 ' + (sample.larkbot?.runningTurns || 0);
+      metricsSelectedResult.textContent = '完成 ' + (sample.larkbot?.completedTurns || 0) + '，失败 ' + (sample.larkbot?.failedTurns || 0) + '，停止 ' + (sample.larkbot?.stoppedTurns || 0) + '，空回复 ' + (sample.larkbot?.noReplyTurns || 0);
+    }
+
     async function loadChats() {
       const res = await fetch('/api/chats');
       if (!res.ok) throw new Error(await res.text());
@@ -3113,6 +3475,18 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         .catch((error) => setStatus('刷新日志失败：' + error.message, true));
     });
 
+    refreshMetrics?.addEventListener('click', () => {
+      withButtonFeedback(refreshMetrics, { loading: '刷新中', success: '已刷新', failure: '失败' }, loadMetrics)
+        .then(() => setStatus('运行趋势已刷新'))
+        .catch((error) => setStatus('刷新运行趋势失败：' + error.message, true));
+    });
+
+    metricsRange?.addEventListener('change', () => {
+      if (metricsFrom) metricsFrom.value = '';
+      if (metricsTo) metricsTo.value = '';
+      loadMetrics().catch((error) => setStatus('刷新运行趋势失败：' + error.message, true));
+    });
+
     sessionFilter?.addEventListener('change', () => {
       renderSessions();
     });
@@ -3216,6 +3590,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       withButtonFeedback(refreshAll, { loading: '刷新中', success: '已刷新', failure: '失败' }, () => {
         const tasks = [loadBot(), loadModels(), loadChats(), loadSessions(), loadFeedbacks(), loadSystemStatus()];
         if (isLogsPage) tasks.push(loadLogs());
+        if (isMetricsPage) tasks.push(loadMetrics());
         return Promise.all(tasks);
       }).then(() => setStatus('页面已刷新')).catch((error) => setStatus('刷新失败：' + error.message, true));
     });
@@ -3273,6 +3648,9 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
       loadLogs().catch((error) => {
         logsBody.innerHTML = '<tr><td colspan="6"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';
       });
+    }
+    if (isMetricsPage) {
+      loadMetrics().catch((error) => setStatus('运行趋势加载失败：' + error.message, true));
     }
     loadChats().catch((error) => {
       chatsBody.innerHTML = '<tr><td colspan="5"><span class="empty-state"><svg class="icon sm"><use href="#i-x"></use></svg>加载失败：' + esc(error.message) + '</span></td></tr>';

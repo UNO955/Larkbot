@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startConsoleServer, TerminalStreamStore } from '../src/console/server.js';
 import type { SessionStore } from '../src/core/store.js';
 import type { Bot, FeedbackRecord, Session } from '../src/core/types.js';
@@ -34,12 +37,15 @@ const session: Session = {
 
 describe('console terminal page', () => {
   let server: Server | undefined;
+  const dirs: string[] = [];
 
   afterEach(async () => {
-    if (!server) return;
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => server!.close(() => resolve()));
-    server = undefined;
+    if (server) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
   it('提供只读 xterm 页面和 SSE 终端输出', async () => {
@@ -172,6 +178,72 @@ describe('console terminal page', () => {
     } finally {
       await reader.cancel();
     }
+  });
+
+  it('提供运行趋势页面和 metrics API', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-console-metrics-'));
+    dirs.push(dir);
+    await writeFile(join(dir, '2026-09-04.jsonl'), `${JSON.stringify({
+      timestamp: new Date(Date.now() - 30_000).toISOString(),
+      process: { pid: 1, uptimeMs: 1000 },
+      system: {
+        cpuCount: 1,
+        load1: 0,
+        load5: 0,
+        load15: 0,
+        loadPercent: 12,
+        memoryTotalBytes: 100,
+        memoryFreeBytes: 60,
+        memoryUsedBytes: 40,
+        memoryUsedPercent: 40,
+      },
+      disk: {
+        path: '/repo',
+        totalBytes: 100,
+        freeBytes: 80,
+        usedBytes: 20,
+        usedPercent: 20,
+      },
+      larkbot: {
+        activeSessions: 1,
+        runningTurns: 0,
+        recentWindowMs: 60_000,
+        completedTurns: 1,
+        failedTurns: 0,
+        stoppedTurns: 0,
+        noReplyTurns: 0,
+        avgDurationMs: 1200,
+        p95DurationMs: 1200,
+      },
+    })}\n`, 'utf8');
+    const store: SessionStore = {
+      loadBots: async () => [bot],
+      saveBots: async () => undefined,
+      loadSessions: async () => [session],
+      saveSessions: async () => undefined,
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+      metricsDir: dir,
+    });
+    const { port } = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+
+    const page = await fetch(`${base}/metrics`);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('运行趋势');
+    expect(html).toContain('/api/metrics?');
+    expect(html).toContain('metrics-from');
+
+    const api = await fetch(`${base}/api/metrics?range=1h`);
+    expect(api.status).toBe(200);
+    const payload = await api.json();
+    expect(payload.samples).toHaveLength(1);
+    expect(payload.samples[0].larkbot.activeSessions).toBe(1);
   });
 
   it('保存并返回系统提示词 profiles', async () => {

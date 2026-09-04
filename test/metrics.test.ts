@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanupMetricFiles, collectMetrics, sampleAndStoreMetrics } from '../src/core/metrics.js';
+import { cleanupMetricFiles, collectMetrics, readMetricSnapshots, sampleAndStoreMetrics } from '../src/core/metrics.js';
 import type { Session } from '../src/core/types.js';
 import type { SessionStore } from '../src/core/store.js';
 
@@ -92,6 +92,28 @@ describe('metrics', () => {
     expect(await readFile(join(dir, '2026-09-03.jsonl'), 'utf8')).toBe('{}\n');
     expect(await readFile(join(dir, 'note.txt'), 'utf8')).toBe('keep\n');
   });
+
+  it('按时间范围读取 metrics JSONL', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'larkbot-metrics-read-'));
+    dirs.push(dir);
+    await writeFile(join(dir, '2026-09-03.jsonl'), [
+      JSON.stringify(minimalSnapshot('2026-09-03T23:59:00.000Z', 1)),
+      JSON.stringify(minimalSnapshot('2026-09-04T00:00:00.000Z', 2)),
+    ].join('\n') + '\n', 'utf8');
+    await writeFile(join(dir, '2026-09-04.jsonl'), [
+      JSON.stringify(minimalSnapshot('2026-09-04T10:00:00.000Z', 3)),
+      'not-json',
+      JSON.stringify(minimalSnapshot('2026-09-04T10:01:00.000Z', 4)),
+    ].join('\n') + '\n', 'utf8');
+
+    const samples = await readMetricSnapshots({
+      metricsDir: dir,
+      sinceMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      untilMs: Date.parse('2026-09-04T10:00:30.000Z'),
+    });
+
+    expect(samples.map((sample) => sample.larkbot.activeSessions)).toEqual([2, 3]);
+  });
 });
 
 function session(overrides: Partial<Session> = {}): Session {
@@ -109,5 +131,41 @@ function session(overrides: Partial<Session> = {}): Session {
     lastMessageAt: '2026-09-04T10:00:00.000Z',
     createdAt: '2026-09-04T09:00:00.000Z',
     ...overrides,
+  };
+}
+
+function minimalSnapshot(timestamp: string, activeSessions: number) {
+  return {
+    timestamp,
+    process: { pid: 1, uptimeMs: 1000 },
+    system: {
+      cpuCount: 1,
+      load1: 0,
+      load5: 0,
+      load15: 0,
+      loadPercent: 0,
+      memoryTotalBytes: 1,
+      memoryFreeBytes: 1,
+      memoryUsedBytes: 0,
+      memoryUsedPercent: 0,
+    },
+    disk: {
+      path: '/repo',
+      totalBytes: 1,
+      freeBytes: 1,
+      usedBytes: 0,
+      usedPercent: 0,
+    },
+    larkbot: {
+      activeSessions,
+      runningTurns: 0,
+      recentWindowMs: 60_000,
+      completedTurns: 0,
+      failedTurns: 0,
+      stoppedTurns: 0,
+      noReplyTurns: 0,
+      avgDurationMs: 0,
+      p95DurationMs: 0,
+    },
   };
 }
