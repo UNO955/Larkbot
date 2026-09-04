@@ -245,12 +245,36 @@ describe('console terminal page', () => {
     expect(html).toContain('运行趋势');
     expect(html).toContain('/api/metrics?');
     expect(html).toContain('metrics-from');
+    expect(html).not.toContain('>Grafana<');
 
     const api = await fetch(`${base}/api/metrics?range=1h`);
     expect(api.status).toBe(200);
     const payload = await api.json();
     expect(payload.samples).toHaveLength(1);
     expect(payload.samples[0].larkbot.activeSessions).toBe(1);
+  });
+
+  it('配置 Grafana 地址后才展示 Grafana 入口', async () => {
+    const store: SessionStore = {
+      loadBots: async () => [{ ...bot, cwd: process.cwd() }],
+      saveBots: async () => undefined,
+      loadSessions: async () => [],
+      saveSessions: async () => undefined,
+    };
+    server = await startConsoleServer({
+      host: '127.0.0.1',
+      port: 0,
+      store,
+      botId: 'bot-1',
+      grafanaPublicUrl: 'http://grafana.example/d/larkbot-runtime/larkbot-runtime',
+    });
+    const { port } = server.address() as AddressInfo;
+
+    const page = await fetch(`http://127.0.0.1:${port}/runtime`);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain('>Grafana<');
+    expect(html).toContain('http://grafana.example/d/larkbot-runtime/larkbot-runtime');
   });
 
   it('保存并返回系统提示词 profiles', async () => {

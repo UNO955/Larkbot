@@ -19,6 +19,7 @@ export interface ConsoleServerOpts {
   traceStore?: TurnTraceStore;
   terminalStore?: TerminalStreamStore;
   metricsDir?: string;
+  grafanaPublicUrl?: string;
   sessionManager?: {
     listSessions(): PublicSession[];
     closeSession(sessionId: string): Promise<Session | undefined>;
@@ -283,7 +284,7 @@ async function handleRequest(opts: ConsoleServerOpts, req: IncomingMessage, res:
     }
     const consolePage = consolePageFromPath(url.pathname);
     if (req.method === 'GET' && consolePage) {
-      sendHtml(res, renderConsoleHtml(consolePage));
+      sendHtml(res, renderConsoleHtml(consolePage, opts));
       return;
     }
     if (req.method === 'GET' && url.pathname === '/office') {
@@ -1025,9 +1026,19 @@ function writeSse(res: ServerResponse, event: string, data: unknown): void {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function renderConsoleHtml(page: ConsolePage = 'overview'): string {
+function normalizeOptionalUrl(value: string | undefined): string {
+  const url = value?.trim();
+  if (!url) return '';
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
+function renderConsoleHtml(page: ConsolePage = 'overview', opts: Pick<ConsoleServerOpts, 'grafanaPublicUrl'> = {}): string {
   const pageMeta = consolePages[page];
   const navClass = (item: ConsolePage) => item === page ? 'nav-item active' : 'nav-item';
+  const grafanaUrl = normalizeOptionalUrl(opts.grafanaPublicUrl);
+  const grafanaNav = grafanaUrl
+    ? `<a class="nav-item" href="${escapeHtml(grafanaUrl)}" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>`
+    : '';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2103,7 +2114,7 @@ function renderConsoleHtml(page: ConsolePage = 'overview'): string {
         <a class="${navClass('overview')}" href="/"><svg class="icon sm"><use href="#i-activity"></use></svg><span>总览</span></a>
         <a class="nav-item" href="/office"><svg class="icon sm"><use href="#i-terminal"></use></svg><span>办公室</span></a>
         <a class="${navClass('runtime')}" href="/runtime"><svg class="icon sm"><use href="#i-radio"></use></svg><span>运行趋势</span></a>
-        <a class="nav-item" href="http://127.0.0.1:3000/d/larkbot-runtime/larkbot-runtime" target="_blank" rel="noreferrer"><svg class="icon sm"><use href="#i-activity"></use></svg><span>Grafana</span></a>
+        ${grafanaNav}
         <a class="${navClass('config')}" href="/config"><svg class="icon sm"><use href="#i-settings"></use></svg><span>配置</span></a>
         <a class="${navClass('chats')}" href="/chats"><svg class="icon sm"><use href="#i-users"></use></svg><span>群聊</span></a>
         <a class="${navClass('feedback')}" href="/feedback"><svg class="icon sm"><use href="#i-thumbs"></use></svg><span>反馈</span></a>

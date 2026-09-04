@@ -99,6 +99,7 @@ async function main(): Promise<void> {
     botId: activeBot.id,
     cli,
     terminalStore,
+    grafanaPublicUrl: cfg.grafanaPublicUrl,
     sessionManager: sessions,
     onBotUpdated(bot) {
       activeBot = bot;
