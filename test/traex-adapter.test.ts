@@ -22,7 +22,7 @@ describe('traex adapter spawnSpec', () => {
     expect(i).toBeGreaterThanOrEqual(0);
     expect(spec.args[i + 1]).toBe(`projects.${JSON.stringify(real)}.trust_level="trusted"`);
     expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(spec.args).toContain('--dangerously-bypass-hook-trust');
+    expect(spec.args).not.toContain('--dangerously-bypass-hook-trust');
     expect(spec.args).toContain('--no-alt-screen');
   });
 
@@ -52,6 +52,12 @@ describe('traex adapter spawnSpec', () => {
     expect(spec.args).toContain('--model');
     expect(spec.args[spec.args.indexOf('--model') + 1]).toBe('gpt-5.5');
     expect(spec.args.indexOf('--model')).toBeLessThan(spec.args.indexOf('--no-alt-screen') + 3);
+  });
+
+  it('仅在模型完成加载后确认启动就绪', () => {
+    const pattern = createTraexAdapter().startupReadyPattern!;
+    expect(pattern.test('model: loading\ndirectory: /repo\npermissions: YOLO mode\n❯')).toBe(false);
+    expect(pattern.test('Good afternoon, user\nmodel: GPT-5.5 (MAX) xhigh\ndirectory: /repo\npermissions: YOLO mode\n❯')).toBe(true);
   });
 
   it('从 traex rollout token_count 读取会话累计 token', () => {

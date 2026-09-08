@@ -85,6 +85,9 @@ export interface CliAdapter {
   /** 清理过期 CLI 原生底层日志。仅供后台维护使用，不进入会话主流程。 */
   cleanupSessionRawLogs?(opts: { olderThanMs: number; now?: number }): SessionRawLogCleanupResult;
 
+  /** CLI 首次启动完成的额外特征，避免初始化中的临时 composer 被误判为可输入。 */
+  startupReadyPattern?: RegExp;
+
   /**
    * 输入提示符（composer）渲染出来的特征。IdleDetector 用它做 gate：
    * 设了该正则时，提示符出现前不判 idle（每轮 reset 后重新等待），

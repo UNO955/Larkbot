@@ -57,7 +57,6 @@ export function createTraexAdapter(): CliAdapter {
               '-c',
               `projects.${JSON.stringify(trustPath)}.trust_level="trusted"`,
               '--dangerously-bypass-approvals-and-sandbox',
-              '--dangerously-bypass-hook-trust',
             ]
           : []),
         // 关掉备用屏，避免全屏 TUI 的光标/清屏转义污染回贴文本。
@@ -142,6 +141,10 @@ export function createTraexAdapter(): CliAdapter {
     cleanupSessionRawLogs(opts: { olderThanMs: number; now?: number }): SessionRawLogCleanupResult {
       return cleanupTraexRawLogs(opts);
     },
+
+    // 新版 traex 在 model/directory 仍 loading 时就会提前渲染 composer。
+    // 等 permissions 行出现后才算启动完成，避免首条输入的 Enter 被初始化重绘吞掉。
+    startupReadyPattern: /Good (?:morning|afternoon|evening)[\s\S]*model:\s*(?!loading\b)[\s\S]*permissions:/i,
 
     // traex 的 ❯ 提示符嵌在状态栏中间（`──────❯ 你好呀──────`），不在行首。
     // 只匹配 ❯/› 本身，用负向前瞻排除 trust 菜单的 `❯ 1.` 行。

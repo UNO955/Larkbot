@@ -589,6 +589,65 @@ describe('ConversationManager', () => {
     manager.shutdownAll();
   });
 
+  it('输入尚未确认提交时 screen idle 不会完成本轮', async () => {
+    vi.useFakeTimers();
+    try {
+      const session = route({ hasHistory: false, cliSessionId: undefined });
+      let resolveWrite: ((value: { submitted: boolean; cliSessionId?: string }) => void) | undefined;
+      const store: SessionStore = {
+        loadBots: async () => [],
+        saveBots: async () => undefined,
+        loadSessions: async () => [],
+        saveSessions: async () => undefined,
+      };
+      const cli: CliAdapter = {
+        id: 'traex',
+        spawnSpec: () => ({ command: 'traex', args: [], cwd: '/repo' }),
+        writeInput: vi.fn(() => new Promise((resolve) => { resolveWrite = resolve; })),
+        findSessionId: () => undefined,
+        readyPattern: /❯/,
+      };
+      const child = fakePty();
+      const postTrace = vi.fn(async () => 'trace-card-1');
+      const patchTrace = vi.fn(async () => undefined);
+      const notify = vi.fn(async () => undefined);
+      const manager = new ConversationManager({
+        cli,
+        store,
+        spawnPty: () => child,
+        post: async () => 'card-1',
+        patch: async () => undefined,
+        postTrace,
+        patchTrace,
+        notify,
+        addReaction: async () => 'reaction-1',
+        removeReaction: async () => undefined,
+        createTrace: () => undefined,
+        updateTrace: () => undefined,
+        traceUrl: (id) => `http://console/trace/${id}`,
+        isStreamingCardDisabled: () => false,
+      });
+
+      await manager.add(session);
+      await manager.submit(session, 'OPENING', 'FOLLOW_UP', 'om-current-user');
+      child.emitData('❯ ');
+      await vi.waitFor(() => expect(cli.writeInput).toHaveBeenCalled());
+
+      child.emitData('❯ ');
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(postTrace.mock.calls.some(call => call[3] === 'completed')).toBe(false);
+      expect(patchTrace.mock.calls.some(call => call[3] === 'completed')).toBe(false);
+      expect(notify).not.toHaveBeenCalled();
+
+      resolveWrite?.({ submitted: false });
+      await vi.runAllTimersAsync();
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledWith('omt-1', '消息投递失败：traex 未确认接收输入', 'om-current-user'));
+      manager.shutdownAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('分析卡 footer 展示当前 traex 会话累计 token，完成回复卡使用自定义落款', async () => {
     const session = route({ hasHistory: false, cliSessionId: undefined });
     const store: SessionStore = {

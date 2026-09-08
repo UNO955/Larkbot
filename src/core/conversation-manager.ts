@@ -50,6 +50,8 @@ interface Runtime {
   // ready=false 表示 PTY 已拉起但还没看到可输入提示符；此时消息先进队列。
   status: 'idle' | 'busy';
   ready: boolean;
+  inputSubmitted: boolean;
+  startupOutputTail: string;
   resumeAttempt: boolean;
   draining: boolean;
   intentionalClose: boolean;
@@ -372,6 +374,8 @@ export class ConversationManager {
       queue: [],
       status: 'idle',
       ready: false,
+      inputSubmitted: false,
+      startupOutputTail: '',
       resumeAttempt: !!resumeSessionId,
       draining: false,
       intentionalClose: false,
@@ -385,8 +389,9 @@ export class ConversationManager {
     this.runtimes.set(session.sessionId, runtime);
 
     runtime.detector.onIdle((source) => {
-      if (runtime.status !== 'busy') return;
+      if (runtime.status !== 'busy' || !runtime.inputSubmitted) return;
       runtime.status = 'idle';
+      runtime.inputSubmitted = false;
       logger.info(`一轮结束（${source}）session=${session.sessionId.slice(0, 8)}`);
       void this.finishTurn(runtime);
     });
@@ -402,9 +407,16 @@ export class ConversationManager {
     if (!runtime.ready) {
       // 启动阶段先只喂 IdleDetector 找 readyPattern。ready 前不写用户输入，
       // 否则可能落进 folder trust / 欢迎页之类的非 composer 界面。
+      runtime.startupOutputTail = (
+        runtime.startupOutputTail
+        + chunk.replace(/\x1b\[(\d*)C/g, ' ').replace(/\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]/g, '')
+      ).slice(-4_000);
       runtime.detector.feed(chunk);
-      if (runtime.detector.ready) {
+      const startupReady = !this.deps.cli.startupReadyPattern
+        || this.deps.cli.startupReadyPattern.test(runtime.startupOutputTail);
+      if (runtime.detector.ready && startupReady) {
         runtime.ready = true;
+        runtime.startupOutputTail = '';
         this.clearFirstPromptFallback(runtime);
         runtime.detector.reset();
         logger.info(`traex 已就绪 session=${runtime.route.sessionId.slice(0, 8)}`);
@@ -442,6 +454,7 @@ export class ConversationManager {
     runtime.receivedReactionId = turn.receivedReactionId;
     runtime.doneReactionSent = false;
     runtime.turnStopped = false;
+    runtime.inputSubmitted = false;
     runtime.turnStartedAtMs = Date.now();
     runtime.turnWorkLogId = this.beginWorkLog(runtime.route, runtime.turnStartedAtMs);
     runtime.turnChangedFilesBaseline = gitChangedFiles(runtime.route.workingDir);
@@ -462,6 +475,7 @@ export class ConversationManager {
       runtime.route.latestQuestionMessageId = turn.questionMessageId;
       const result = await this.deps.cli.writeInput(runtime.pty, turn.content);
       if (!result.submitted) throw new Error('traex 未确认接收输入');
+      runtime.inputSubmitted = true;
       runtime.route.hasHistory = true;
       if (result.cliSessionId) runtime.route.cliSessionId = result.cliSessionId;
       await this.persist();
@@ -469,6 +483,7 @@ export class ConversationManager {
     } catch (error: any) {
       this.endWorkLog(runtime, 'failed');
       runtime.status = 'idle';
+      runtime.inputSubmitted = false;
       await this.removeReceivedReaction(runtime);
       if (runtime.route.threadId) {
         await this.deps.notify(
@@ -556,6 +571,19 @@ export class ConversationManager {
     runtime.firstPromptTimer = setTimeout(() => {
       runtime.firstPromptTimer = null;
       if (runtime.ready || runtime.status !== 'idle' || runtime.queue.length === 0) return;
+      if (this.deps.cli.startupReadyPattern) {
+        const turn = runtime.queue.shift();
+        runtime.intentionalClose = true;
+        runtime.pty.kill();
+        if (runtime.route.threadId) {
+          void this.deps.notify(
+            runtime.route.threadId,
+            'traex 启动未达到可投递状态，可能存在 CLI 版本兼容问题。',
+            turn?.replyAnchorMessageId,
+          );
+        }
+        return;
+      }
       runtime.ready = true;
       runtime.detector.reset();
       logger.warn(`traex readyPattern 超时，强制投递首条消息 session=${runtime.route.sessionId.slice(0, 8)}`);
