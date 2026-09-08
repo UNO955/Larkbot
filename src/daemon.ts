@@ -123,7 +123,7 @@ async function main(): Promise<void> {
       });
       if (result.closed || result.deleted) {
         logger.info(`会话清理完成 closed=${result.closed} deleted=${result.deleted}`);
-        await notifyCleanupResult(im, activeBot, result);
+        await notifyCleanupResult(im, activeBot, cfg.consolePublicUrl, result);
       }
     } catch (error: any) {
       logger.warn(`会话清理失败: ${error?.message ?? error}`);
@@ -573,25 +573,30 @@ function reportStatusText(status: DailyReportTurn['status']): string {
 async function notifyCleanupResult(
   im: ImAdapter,
   bot: Bot,
+  dashboardUrl: string,
   result: { closedSessions: Session[]; deletedSessions: ExpiredSession[] },
 ): Promise<void> {
   if (!result.closedSessions.length && !result.deletedSessions.length) return;
-  const lines = [
-    'larkbot 会话清理完成',
-    '',
+  const details = [
     `关闭会话：${result.closedSessions.length} 个`,
     ...result.closedSessions.slice(0, 20).map((session) => `- ${sessionSummary(session)}`),
-    '',
     `删除路由：${result.deletedSessions.length} 个`,
     ...result.deletedSessions.slice(0, 20).map((session) => `- ${expiredSessionSummary(session)}`),
   ];
   if (result.closedSessions.length > 20 || result.deletedSessions.length > 20) {
-    lines.push('', '仅展示前 20 条，完整记录可查看状态文件。');
+    details.push('仅展示前 20 条，完整记录可查看状态文件。');
   }
+  const card = buildMaintenanceCard({
+    status: '🧹 larkbot 会话清理完成',
+    version: `v${process.env.npm_package_version || '0.1.0'}`,
+    unfinishedSessions: 0,
+    dashboardUrl,
+    details,
+  });
   try {
-    await im.sendDirect(bot.ownerOpenId, lines.join('\n'));
+    await im.sendDirectCard(bot.ownerOpenId, card);
   } catch (error: any) {
-    logger.warn(`发送会话清理私聊失败 owner=${bot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
+    logger.warn(`发送会话清理卡片失败 owner=${bot.ownerOpenId.slice(0, 10)}: ${error?.message ?? error}`);
   }
 }
 
