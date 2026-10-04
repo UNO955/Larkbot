@@ -91,17 +91,6 @@ npm start                  # 运行已编译的 dist/daemon.js
 
 Git 忽略规则已经覆盖 `.env*`、本地状态目录、日志、临时文件和常见私钥格式。需要新增真实凭证文件时，先补 `.gitignore`，再放文件。
 
-### 环境说明：node-pty 原生依赖
-
-node-pty 通过 prebuild 分发（`prebuilds/<platform-arch>/`），无需本地 `node-gyp` 编译。
-但在开启了 npm `allow-scripts` 安全策略的环境里，node-pty 的 postinstall 会被拦，导致 macOS 上的
-`spawn-helper` 缺少执行位、运行期报 `posix_spawnp failed`。本项目用 `scripts/fix-pty-helper.mjs`
-在自身 postinstall 里幂等修复该权限；若仍遇到，可手动：
-
-```bash
-chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper
-```
-
 ## 文档
 
 - [docs/architecture.md](docs/architecture.md) — 架构设计与模块拆分
@@ -110,11 +99,6 @@ chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper
 - [docs/roadmap.md](docs/roadmap.md) — 当前状态与后续路线图
 - [docs/scope.md](docs/scope.md) — 明确做什么 / 不做什么
 - [docs/qa-log-troubleshooting-prompt.md](docs/qa-log-troubleshooting-prompt.md) — QA 日志排查 Bot prompt
-
-## 技术栈
-
-TypeScript · Node >=20 · @larksuiteoapi/node-sdk（长连接 + API）· node-pty（PTY）·
-@xterm/headless（终端渲染）· 原生 HTTP 控制台 · JSON 文件持久化
 
 ## License
 
